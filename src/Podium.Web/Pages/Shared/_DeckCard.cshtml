@@ -1,0 +1,55 @@
+@model Podium.Web.Pages.DeckRow
+@{
+    var d = Model.Deck;
+    var kind = d.Kind.ToString().ToLowerInvariant();
+    var vis = d.Visibility.ToString().ToLowerInvariant();
+    var status = d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running ? "building" : d.LatestBuildStatus == BuildStatus.Failed ? "failed" : "ok";
+    var visTitle = d.Visibility switch
+    {
+        Visibility.Public => "Anyone can view",
+        Visibility.Link => "Anyone with a share link",
+        Visibility.Shared => "Specific people",
+        _ => "Only you",
+    };
+}
+<article class="card @(d.Pinned ? "pinned" : "") @(d.Archived ? "archived" : "")"
+         data-slug="@d.Slug" data-search="@Model.SearchText" data-kind="@kind" data-vis="@vis" data-status="@status">
+    <div class="card-title"><a href="/decks/@d.Slug">@d.Title</a></div>
+    <div class="card-sub" title="@Model.RepoLabel/@d.Path">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+        <span class="path">@Model.RepoLabel@(string.IsNullOrEmpty(d.Path) ? "" : "/" + d.Path)</span>
+    </div>
+    <div class="card-meta">
+        <span class="badge badge-kind-@kind">@Model.KindLabel</span>
+        <span class="badge badge-vis-@vis" title="@visTitle">
+            @switch (d.Visibility)
+            {
+                case Visibility.Public: <text>Public</text> break;
+                case Visibility.Link: <text>Link</text> break;
+                case Visibility.Shared: <text>Shared</text> break;
+                default: <text>Private</text> break;
+            }
+        </span>
+        <span><span class="dot @Model.StatusClass"></span> <span data-status-label>@Model.StatusLabel</span></span>
+        @if (d.LastCommitAt is { } at)
+        {
+            <span class="faint">· updated <time datetime="@at.UtcDateTime.ToString("o")">@at.ToString("yyyy-MM-dd")</time></span>
+        }
+    </div>
+    <div class="card-actions">
+        @if (d.Kind == DeckKind.GitPitch)
+        {
+            <span class="faint" style="font-size:.85rem">GitPitch decks are indexed but not rendered.</span>
+        }
+        else
+        {
+            <a class="btn btn-primary btn-sm" href="/d/@d.Slug/" target="_blank" rel="noopener" data-present aria-disabled="@(Model.Servable ? null : "true")">Present</a>
+            @if (Model.IsSlidev)
+            {
+                <a class="btn btn-sm" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" title="Presenter view (notes, timer, next slide)">Presenter</a>
+            }
+            <span class="spacer"></span>
+            <a class="btn btn-ghost btn-sm" href="/decks/@d.Slug" title="Sharing, builds, exports">Manage</a>
+        }
+    </div>
+</article>

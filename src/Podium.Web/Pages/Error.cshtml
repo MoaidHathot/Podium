@@ -1,0 +1,11 @@
+@page "/error"
+@{
+    ViewData["Title"] = "Error";
+    var id = System.Diagnostics.Activity.Current?.Id ?? HttpContext.TraceIdentifier;
+}
+<div class="hero">
+    <h1>Something went wrong</h1>
+    <p>The request could not be completed. If this keeps happening, check the service logs.</p>
+    <p class="faint mono" style="font-size:.8rem">@id</p>
+    <a class="btn" href="/">Back to library</a>
+</div>

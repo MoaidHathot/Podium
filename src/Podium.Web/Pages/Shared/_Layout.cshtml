@@ -1,0 +1,59 @@
+@using System.Security.Claims
+@using Podium.Web.Security
+@inject Podium.Web.Security.CallerResolver Callers
+@{
+    var caller = Callers.Resolve(User);
+    var avatar = User.FindFirst(PodiumClaims.Avatar)?.Value;
+    var path = Context.Request.Path.Value ?? "/";
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>@(ViewData["Title"] is string t && t.Length > 0 ? t + " · Podium" : "Podium")</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/css/podium.css" asp-append-version="true" />
+</head>
+<body>
+    <header class="topbar">
+        <a class="brand" href="/" aria-label="Podium home">
+            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-5v2h3a1 1 0 1 1 0 2h-9a1 1 0 1 1 0-2h3v-2h-5A1.5 1.5 0 0 1 4 14.5v-9Z" fill="currentColor"/></svg>
+            <span>Podium</span>
+        </a>
+        @if (caller.IsOwner)
+        {
+            <nav class="topnav" aria-label="Primary">
+                <a href="/" class="@(path == "/" ? "active" : null)">Library</a>
+                <a href="/sources" class="@(path.StartsWith("/sources") ? "active" : null)">Sources</a>
+            </nav>
+        }
+        <div class="topbar-spacer"></div>
+        @if (caller.IsAuthenticated)
+        {
+            <div class="user">
+                @if (!string.IsNullOrEmpty(avatar))
+                {
+                    <img class="avatar" src="@avatar" alt="" width="28" height="28" referrerpolicy="no-referrer" />
+                }
+                <span class="user-name" title="@caller.Principal">@caller.DisplayName</span>
+                <form method="post" action="/logout" class="inline">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="btn btn-ghost btn-sm">Sign out</button>
+                </form>
+            </div>
+        }
+    </header>
+    <main class="page">
+        @RenderBody()
+    </main>
+    <footer class="footer">
+        <span>Podium · slides served from GitHub</span>
+        <a href="https://github.com/MoaidHathot/Podium" rel="noreferrer">Source</a>
+    </footer>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/js/podium.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

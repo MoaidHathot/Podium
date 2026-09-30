@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Podium.Core/Podium.Core.csproj" />
+    <Project Path="src/Podium.Web/Podium.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Podium.Tests/Podium.Tests.csproj" />
+  </Folder>
+</Solution>

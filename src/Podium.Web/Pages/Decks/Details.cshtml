@@ -1,0 +1,300 @@
+@page "/decks/{slug}"
+@model Podium.Web.Pages.Decks.DetailsModel
+@{
+    var d = Model.Deck;
+    ViewData["Title"] = d.Title;
+    var kind = d.Kind.ToString().ToLowerInvariant();
+    var servable = d.CurrentBuildId is not null && d.Kind != DeckKind.GitPitch;
+    var building = d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running;
+    string VisName(Visibility v) => v switch { Visibility.Public => "Public", Visibility.Link => "Link", Visibility.Shared => "Shared", _ => "Private" };
+}
+
+<p><a href="/" class="muted">← Library</a></p>
+
+<div class="row-between" style="margin-bottom:1.25rem; align-items:flex-start">
+    <div style="min-width:0">
+        <h1 id="title">@d.Title</h1>
+        <div class="row" style="margin-top:.35rem; gap:.5rem">
+            <span class="badge badge-kind-@kind">@(d.Kind == DeckKind.Static ? "HTML" : d.Kind.ToString())</span>
+            <span class="muted mono" style="font-size:.85rem">@(Model.Source?.FullName ?? d.SourceId)@(string.IsNullOrEmpty(d.Path) ? "" : "/" + d.Path)/@d.Entry</span>
+            @if (Model.Source is { Trusted: false })
+            {
+                <span class="badge" title="From a repository you do not control. Served in a sandboxed origin.">External</span>
+            }
+        </div>
+        @if (d.Author is not null || d.Description is not null)
+        {
+            <p class="muted" style="margin-top:.5rem">@d.Author@(d.Author is not null && d.Description is not null ? " · " : "")@d.Description</p>
+        }
+    </div>
+    <div class="row">
+        <button class="btn" id="pin" aria-pressed="@(d.Pinned ? "true" : "false")">@(d.Pinned ? "Unpin" : "Pin")</button>
+        <button class="btn" id="rebuild" @(building ? "disabled" : "")>@(building ? "Building…" : "Rebuild")</button>
+    </div>
+</div>
+
+@if (Model.NotBuilt && !servable)
+{
+    <div class="alert alert-warn">This deck has no successful build yet, so it cannot be presented. @(building ? "A build is in progress." : "Check the latest build below or trigger a rebuild.")</div>
+}
+@if (d.LatestBuildStatus == BuildStatus.Failed && Model.Builds.FirstOrDefault() is { Error: { } err })
+{
+    <div class="alert alert-bad"><strong>Last build failed:</strong> @err</div>
+}
+@if (Model.CurrentBuild?.Warnings.Count > 0)
+{
+    <div class="alert alert-info"><strong>Remote limitations:</strong>
+        <ul style="margin:.3rem 0 0 1rem">@foreach (var w in Model.CurrentBuild.Warnings) { <li>@w</li> }</ul>
+    </div>
+}
+
+<div class="two-col">
+    <section class="panel">
+        <h3>Present</h3>
+        <p class="hint">Open the deck on the presenting machine, and the presenter view on your own device.</p>
+        <div class="row">
+            <a class="btn btn-primary" href="/d/@d.Slug/" target="_blank" rel="noopener" aria-disabled="@(servable ? null : "true")">Open deck</a>
+            @if (d.Kind == DeckKind.Slidev)
+            {
+                <a class="btn" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" aria-disabled="@(servable ? null : "true")">Presenter view</a>
+                <a class="btn" href="/d/@d.Slug/overview/" target="_blank" rel="noopener" aria-disabled="@(servable ? null : "true")">Overview</a>
+            }
+        </div>
+        <div style="margin-top:1rem" class="field">
+            <label>Deck URL</label>
+            <div class="url-box"><code>@Model.Origin/d/@d.Slug/</code><button class="btn btn-sm" data-copy="@Model.Origin/d/@d.Slug/">Copy</button></div>
+        </div>
+        <div style="margin-top:.75rem" class="row">
+            @if (Model.CurrentBuild?.HasPdf == true)
+            {
+                <a class="btn btn-sm" href="/d/@(d.Slug).pdf" target="_blank" rel="noopener">Open PDF</a>
+                <a class="btn btn-sm" href="/d/@(d.Slug).pdf?download=1">Download PDF</a>
+            }
+            @if (Model.CurrentBuild?.HasPptx == true)
+            {
+                <a class="btn btn-sm" href="/d/@(d.Slug).pptx">Download PPTX</a>
+            }
+            @if (Model.CurrentBuild is { HasPdf: false, HasPptx: false })
+            {
+                <span class="faint" style="font-size:.85rem">No exports in the current build.</span>
+            }
+        </div>
+    </section>
+
+    <section class="panel">
+        <h3>Exports</h3>
+        <p class="hint">Generated on every build by the Slidev exporter (headless Chromium).</p>
+        <label class="row" style="gap:.5rem"><input type="checkbox" id="exportPdf" @(d.ExportPdf ? "checked" : "") /> Export PDF</label>
+        <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="exportPptx" @(d.ExportPptx ? "checked" : "") /> Export PowerPoint (PPTX)</label>
+        <p class="faint" style="margin-top:.6rem; font-size:.85rem">Changes apply to the next build.</p>
+    </section>
+</div>
+
+<section class="panel" style="margin-top:1rem">
+    <h3>Who can see this</h3>
+    <p class="hint"><strong>Private</strong>: only you. <strong>Link</strong>: anyone holding a share link you create below. <strong>Shared</strong>: the GitHub users you list. <strong>Public</strong>: anyone, no sign-in. Each artifact is controlled separately.</p>
+    <table class="table">
+        <thead><tr><th>Artifact</th><th>Visibility</th></tr></thead>
+        <tbody>
+            @foreach (var (label, field, value) in new[] { ("Deck (site)", "visibility", d.Visibility), ("PDF", "pdfVisibility", d.PdfVisibility), ("PPTX", "pptxVisibility", d.PptxVisibility) })
+            {
+                <tr>
+                    <td style="width:9rem">@label</td>
+                    <td>
+                        <div class="seg" role="radiogroup" aria-label="@label visibility">
+                            @foreach (var v in new[] { Visibility.Private, Visibility.Link, Visibility.Shared, Visibility.Public })
+                            {
+                                var id = $"{field}-{v}";
+                                <input type="radio" name="@field" id="@id" value="@v" @(value == v ? "checked" : "") data-vis-field="@field" />
+                                <label for="@id">@VisName(v)</label>
+                            }
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+<div class="two-col" style="margin-top:1rem">
+    <section class="panel">
+        <h3>People with access</h3>
+        <p class="hint">Applies when an artifact is set to <strong>Shared</strong>. People sign in with GitHub.</p>
+        <table class="table" id="grants">
+            <thead><tr><th>GitHub user</th><th>Deck</th><th>PDF</th><th>PPTX</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var g in Model.Grants)
+                {
+                    <tr data-principal="@g.Principal">
+                        <td>@(g.DisplayName ?? g.Principal)</td>
+                        <td>@(g.Site ? "✓" : "–")</td><td>@(g.Pdf ? "✓" : "–")</td><td>@(g.Pptx ? "✓" : "–")</td>
+                        <td><button class="btn btn-ghost btn-sm" data-revoke-grant="@g.Principal">Remove</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <form id="grant-form" class="row" style="margin-top:.75rem">
+            <input class="input" id="grant-login" placeholder="github-login" style="max-width:14rem" required />
+            <label class="row" style="gap:.3rem"><input type="checkbox" id="grant-site" checked /> Deck</label>
+            <label class="row" style="gap:.3rem"><input type="checkbox" id="grant-pdf" /> PDF</label>
+            <label class="row" style="gap:.3rem"><input type="checkbox" id="grant-pptx" /> PPTX</label>
+            <button class="btn btn-sm" type="submit">Add</button>
+        </form>
+    </section>
+
+    <section class="panel">
+        <h3>Share links</h3>
+        <p class="hint">Unguessable URLs that work for anyone holding them, even when the artifact is Private. Revocable at any time.</p>
+        <table class="table" id="links">
+            <thead><tr><th>Label</th><th>For</th><th>Expires</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var l in Model.Links.Where(l => !l.Revoked))
+                {
+                    var path = l.Artifact == ArtifactKind.Site ? $"/d/{d.Slug}/" : $"/d/{d.Slug}.{l.Artifact.ToString().ToLowerInvariant()}";
+                    var url = $"{Model.Origin}{path}?share={l.Id}";
+                    <tr data-link="@l.Id">
+                        <td>@(l.Label ?? "—")</td>
+                        <td>@l.Artifact</td>
+                        <td>@(l.ExpiresAt is { } e ? e.ToString("yyyy-MM-dd") : "never")</td>
+                        <td class="row" style="gap:.3rem">
+                            <button class="btn btn-sm" data-copy="@url">Copy</button>
+                            <button class="btn btn-ghost btn-sm" data-revoke-link="@l.Id">Revoke</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <form id="link-form" class="row" style="margin-top:.75rem">
+            <input class="input" id="link-label" placeholder="Label (optional)" style="max-width:12rem" />
+            <select class="input" id="link-artifact" style="max-width:8rem">
+                <option value="Site">Deck</option>
+                <option value="Pdf">PDF</option>
+                <option value="Pptx">PPTX</option>
+            </select>
+            <select class="input" id="link-expiry" style="max-width:9rem">
+                <option value="">Never expires</option>
+                <option value="1">1 day</option>
+                <option value="7" selected>7 days</option>
+                <option value="30">30 days</option>
+                <option value="365">1 year</option>
+            </select>
+            <button class="btn btn-sm" type="submit">Create link</button>
+        </form>
+        <div id="new-link" class="url-box hidden" style="margin-top:.6rem"></div>
+    </section>
+</div>
+
+<section class="panel" style="margin-top:1rem">
+    <h3>Builds</h3>
+    <table class="table">
+        <thead><tr><th>Build</th><th>Commit</th><th>Status</th><th>Started</th><th>Duration</th><th>Artifacts</th><th>Trigger</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var b in Model.Builds)
+        {
+            var dur = b.StartedAt is { } s && b.FinishedAt is { } f ? (f - s) : (TimeSpan?)null;
+            <tr>
+                <td class="mono">@b.Id.Substring(0, Math.Min(14, b.Id.Length))@(b.Id == d.CurrentBuildId ? " ★" : "")</td>
+                <td class="mono">@if (Model.Source is not null) { <a href="https://github.com/@Model.Source.FullName/commit/@b.Sha" rel="noreferrer" target="_blank">@b.Sha[..7]</a> } else { @b.Sha[..7] }</td>
+                <td>
+                    <span class="dot @(b.Status switch { BuildStatus.Succeeded => "dot-ok", BuildStatus.Failed => "dot-bad", BuildStatus.Running or BuildStatus.Queued => "dot-busy", _ => "" })"></span>
+                    @b.Status
+                    @if (b.Error is not null) { <div class="faint" style="font-size:.8rem">@b.Error</div> }
+                </td>
+                <td>@if (b.StartedAt is { } st) { <time datetime="@st.UtcDateTime.ToString("o")">@st.ToString("g")</time> } else { <span class="faint">—</span> }</td>
+                <td>@(dur is { } dd ? $"{(int)dd.TotalMinutes}m {dd.Seconds:00}s" : "—")</td>
+                <td>@(string.Join(" ", new[] { b.HasSite ? "site" : null, b.HasPdf ? "pdf" : null, b.HasPptx ? "pptx" : null }.Where(x => x is not null)))</td>
+                <td class="muted">@b.TriggeredBy</td>
+                <td><button class="btn btn-ghost btn-sm" data-log="@b.Id">Log</button></td>
+            </tr>
+            <tr class="hidden" data-log-row="@b.Id"><td colspan="8"><pre class="log">Loading…</pre></td></tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@section Scripts {
+<script>
+(function () {
+  const slug = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(d.Slug));
+  const { api, toast } = Podium;
+
+  async function patch(body, okMsg) {
+    try { await api('PATCH', `/api/decks/${slug}`, body); toast(okMsg || 'Saved', 'ok'); }
+    catch (e) { toast(e.message, 'error'); }
+  }
+
+  document.querySelectorAll('[data-vis-field]').forEach((r) => r.addEventListener('change', () => {
+    const body = {}; body[r.dataset.visField] = r.value; patch(body, `Set to ${r.value}`);
+  }));
+  document.getElementById('exportPdf').addEventListener('change', (e) => patch({ exportPdf: e.target.checked }));
+  document.getElementById('exportPptx').addEventListener('change', (e) => patch({ exportPptx: e.target.checked }));
+
+  const pin = document.getElementById('pin');
+  pin.addEventListener('click', async () => {
+    const next = pin.getAttribute('aria-pressed') !== 'true';
+    await patch({ pinned: next }, next ? 'Pinned' : 'Unpinned');
+    pin.setAttribute('aria-pressed', String(next)); pin.textContent = next ? 'Unpin' : 'Pin';
+  });
+
+  document.getElementById('rebuild').addEventListener('click', async (e) => {
+    e.target.disabled = true; e.target.textContent = 'Queuing…';
+    try { await api('POST', `/api/decks/${slug}/rebuild`); toast('Build queued', 'ok'); setTimeout(() => location.reload(), 1200); }
+    catch (err) { toast(err.message, 'error'); e.target.disabled = false; e.target.textContent = 'Rebuild'; }
+  });
+
+  document.getElementById('grant-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const login = document.getElementById('grant-login').value.trim();
+    try {
+      await api('POST', `/api/decks/${slug}/grants`, { login, site: grantSite.checked, pdf: grantPdf.checked, pptx: grantPptx.checked });
+      toast(`Added ${login}`, 'ok'); location.reload();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  const grantSite = document.getElementById('grant-site'), grantPdf = document.getElementById('grant-pdf'), grantPptx = document.getElementById('grant-pptx');
+
+  document.addEventListener('click', async (e) => {
+    const g = e.target.closest('[data-revoke-grant]');
+    if (g) { try { await api('DELETE', `/api/decks/${slug}/grants/${encodeURIComponent(g.dataset.revokeGrant)}`); g.closest('tr').remove(); toast('Removed', 'ok'); } catch (err) { toast(err.message, 'error'); } }
+    const l = e.target.closest('[data-revoke-link]');
+    if (l) { try { await api('POST', `/api/decks/${slug}/links/${l.dataset.revokeLink}/revoke`); l.closest('tr').remove(); toast('Link revoked', 'ok'); } catch (err) { toast(err.message, 'error'); } }
+    const lg = e.target.closest('[data-log]');
+    if (lg) {
+      const row = document.querySelector(`[data-log-row="${lg.dataset.log}"]`);
+      row.classList.toggle('hidden');
+      if (!row.classList.contains('hidden') && !row.dataset.loaded) {
+        row.dataset.loaded = '1';
+        try {
+          const res = await fetch(`/api/decks/${slug}/builds/${lg.dataset.log}/log`, { headers: { 'X-Podium-Request': '1' } });
+          row.querySelector('pre').textContent = res.ok ? await res.text() : `No log available (HTTP ${res.status})`;
+        } catch { row.querySelector('pre').textContent = 'Failed to load log'; }
+      }
+    }
+  });
+
+  document.getElementById('link-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const expiry = document.getElementById('link-expiry').value;
+    try {
+      const r = await api('POST', `/api/decks/${slug}/links`, { artifact: document.getElementById('link-artifact').value, expiresInDays: expiry ? Number(expiry) : null, label: document.getElementById('link-label').value || null });
+      const box = document.getElementById('new-link');
+      box.classList.remove('hidden');
+      box.innerHTML = '';
+      const code = document.createElement('code'); code.textContent = r.url;
+      const btn = document.createElement('button'); btn.className = 'btn btn-sm'; btn.textContent = 'Copy'; btn.setAttribute('data-copy', r.url);
+      box.append(code, btn);
+      toast('Link created — copy it now', 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  @if (building)
+  {
+    <text>
+    (async function watch() {
+      try { const r = await api('GET', `/api/decks/${slug}`); const s = r.deck.latestBuildStatus; if (s === 'Queued' || s === 'Running') setTimeout(watch, 5000); else location.reload(); }
+      catch { setTimeout(watch, 10000); }
+    })();
+    </text>
+  }
+})();
+</script>
+}

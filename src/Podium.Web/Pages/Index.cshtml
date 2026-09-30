@@ -1,0 +1,160 @@
+@page
+@model Podium.Web.Pages.IndexModel
+@{
+    ViewData["Title"] = "Library";
+}
+
+<div class="row-between" style="margin-bottom: 1.25rem">
+    <div>
+        <h1>Library</h1>
+        <p class="muted" style="margin:0">@Model.Decks.Count deck@(Model.Decks.Count == 1 ? "" : "s") across @Model.Sources.Count repositor@(Model.Sources.Count == 1 ? "y" : "ies")</p>
+    </div>
+    <div class="row">
+        <div class="search-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="search" class="input" type="search" placeholder="Search title, repo, path, tag…" autocomplete="off" aria-label="Search decks" />
+            <kbd>/</kbd>
+        </div>
+        <a class="btn" href="/sources">Manage sources</a>
+    </div>
+</div>
+
+<div class="chips" id="filters" role="group" aria-label="Filters">
+    <button class="chip" data-filter="kind" data-value="slidev" aria-pressed="false">Slidev</button>
+    <button class="chip" data-filter="kind" data-value="presenterm" aria-pressed="false">presenterm</button>
+    <button class="chip" data-filter="kind" data-value="static" aria-pressed="false">HTML</button>
+    <button class="chip" data-filter="vis" data-value="public" aria-pressed="false">Public</button>
+    <button class="chip" data-filter="vis" data-value="private" aria-pressed="false">Private</button>
+    <button class="chip" data-filter="status" data-value="failed" aria-pressed="false">Build failed</button>
+    <button class="chip" data-filter="status" data-value="building" aria-pressed="false">Building</button>
+</div>
+
+@if (!Model.HasSources)
+{
+    <div class="empty section">
+        <h3>No repositories connected yet</h3>
+        <p>Install the Podium GitHub App on the repositories that hold your slides, or add a public repository.</p>
+        <a class="btn btn-primary" href="/sources">Connect a repository</a>
+    </div>
+}
+else if (Model.Decks.Count == 0)
+{
+    <div class="empty section">
+        <h3>No decks found yet</h3>
+        <p>Repositories are scanned for <code>slides.md</code> (Slidev), presenterm decks, and committed HTML exports. If you just connected a repo, the first scan may still be running.</p>
+        <a class="btn" href="/sources">View sources</a>
+    </div>
+}
+else
+{
+    @if (Model.Pinned.Count > 0)
+    {
+        <section class="section" data-section="pinned">
+            <div class="section-head"><h2>Pinned</h2></div>
+            <div class="grid">
+                @foreach (var r in Model.Pinned) { <partial name="_DeckCard" model="r" /> }
+            </div>
+        </section>
+    }
+    @if (Model.RecentlyViewed.Count > 0)
+    {
+        <section class="section" data-section="recent-viewed">
+            <div class="section-head"><h2>Recently presented</h2></div>
+            <div class="grid">
+                @foreach (var r in Model.RecentlyViewed) { <partial name="_DeckCard" model="r" /> }
+            </div>
+        </section>
+    }
+    @if (Model.RecentlyUpdated.Count > 0)
+    {
+        <section class="section" data-section="recent-updated">
+            <div class="section-head"><h2>Recently updated</h2></div>
+            <div class="grid">
+                @foreach (var r in Model.RecentlyUpdated) { <partial name="_DeckCard" model="r" /> }
+            </div>
+        </section>
+    }
+    <section class="section" data-section="all">
+        <div class="section-head"><h2>All decks</h2><span class="faint" id="count"></span></div>
+        <div class="grid" id="all-grid">
+            @foreach (var r in Model.Decks) { <partial name="_DeckCard" model="r" /> }
+        </div>
+        <div class="empty hidden" id="no-results" style="margin-top:1rem">
+            <h3>No matches</h3>
+            <p>Try a different search or clear the filters.</p>
+        </div>
+    </section>
+}
+
+@section Scripts {
+<script>
+(function () {
+  const search = document.getElementById('search');
+  const chips = [...document.querySelectorAll('#filters .chip')];
+  const cards = [...document.querySelectorAll('.card[data-search]')];
+  const sections = [...document.querySelectorAll('section[data-section]')];
+  const noResults = document.getElementById('no-results');
+  const count = document.getElementById('count');
+  const active = { kind: null, vis: null, status: null };
+
+  function apply() {
+    const q = (search?.value || '').trim().toLowerCase();
+    const filtering = q.length > 0 || Object.values(active).some(Boolean);
+    let visibleAll = 0;
+    for (const c of cards) {
+      const ok = (!q || c.dataset.search.includes(q))
+        && (!active.kind || c.dataset.kind === active.kind)
+        && (!active.vis || c.dataset.vis === active.vis)
+        && (!active.status || c.dataset.status === active.status);
+      c.classList.toggle('hidden', !ok);
+      if (ok && c.closest('[data-section="all"]')) visibleAll++;
+    }
+    // While filtering, collapse the curated sections so results are not duplicated.
+    for (const s of sections) {
+      if (s.dataset.section === 'all') continue;
+      s.classList.toggle('hidden', filtering);
+    }
+    if (noResults) noResults.classList.toggle('hidden', visibleAll > 0);
+    if (count) count.textContent = filtering ? `${visibleAll} match${visibleAll === 1 ? '' : 'es'}` : '';
+  }
+
+  search?.addEventListener('input', apply);
+  chips.forEach((chip) => chip.addEventListener('click', () => {
+    const f = chip.dataset.filter, v = chip.dataset.value;
+    active[f] = active[f] === v ? null : v;
+    chips.forEach((c) => { if (c.dataset.filter === f) c.setAttribute('aria-pressed', String(active[f] === c.dataset.value)); });
+    apply();
+  }));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== search && !/input|textarea|select/i.test(document.activeElement?.tagName || '')) { e.preventDefault(); search?.focus(); search?.select(); }
+    if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; apply(); search.blur(); }
+  });
+
+  // Keep build status fresh while anything is building.
+  let polling = @(Model.AnyBuilding ? "true" : "false");
+  async function poll() {
+    try {
+      const decks = await Podium.api('GET', '/api/decks');
+      let busy = false;
+      for (const d of decks) {
+        const els = document.querySelectorAll(`.card[data-slug="${d.slug}"]`);
+        const status = d.latestBuildStatus;
+        const isBusy = status === 'Queued' || status === 'Running';
+        busy = busy || isBusy;
+        els.forEach((el) => {
+          const dot = el.querySelector('.dot');
+          if (dot) dot.className = 'dot ' + (status === 'Succeeded' ? 'dot-ok' : status === 'Failed' ? 'dot-bad' : isBusy ? 'dot-busy' : '');
+          const label = el.querySelector('[data-status-label]');
+          if (label) label.textContent = isBusy ? (status === 'Queued' ? 'Queued' : 'Building') : status === 'Succeeded' ? 'Built' : status === 'Failed' ? (d.currentBuildId ? 'Last build failed (serving previous)' : 'Build failed') : 'Not built';
+          el.dataset.status = isBusy ? 'building' : status === 'Failed' ? 'failed' : 'ok';
+          const present = el.querySelector('[data-present]');
+          if (present && d.currentBuildId) present.removeAttribute('aria-disabled');
+        });
+      }
+      if (busy) setTimeout(poll, 5000); else if (polling) { polling = false; location.reload(); }
+    } catch { setTimeout(poll, 15000); }
+  }
+  if (polling) setTimeout(poll, 4000);
+})();
+</script>
+}

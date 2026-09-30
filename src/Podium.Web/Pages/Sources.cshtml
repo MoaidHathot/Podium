@@ -1,0 +1,102 @@
+@page "/sources"
+@model Podium.Web.Pages.SourcesModel
+@{
+    ViewData["Title"] = "Sources";
+}
+
+<p><a href="/" class="muted">← Library</a></p>
+<div class="row-between" style="margin-bottom:1.25rem">
+    <div>
+        <h1>Sources</h1>
+        <p class="muted" style="margin:0">Repositories Podium scans for decks. Pushes trigger rebuilds through the GitHub App webhook; external repos are polled.</p>
+    </div>
+    <div class="row">
+        @if (Model.AppConfigured && !string.IsNullOrEmpty(Model.AppSlug))
+        {
+            <a class="btn btn-primary" href="https://github.com/apps/@Model.AppSlug/installations/new" target="_blank" rel="noopener">Install GitHub App on a repo</a>
+        }
+        <button class="btn" id="refresh">Refresh installations</button>
+    </div>
+</div>
+
+@if (!Model.AppConfigured && !Model.DevToken)
+{
+    <div class="alert alert-warn">The GitHub App is not configured. Private repositories and webhooks are unavailable until <code>GitHub:AppId</code>, <code>GitHub:PrivateKeyPem</code>, <code>GitHub:ClientId/ClientSecret</code> and <code>GitHub:WebhookSecret</code> are set.</div>
+}
+
+<section class="panel">
+    <table class="table">
+        <thead><tr><th>Repository</th><th>Type</th><th>Branch</th><th>Decks</th><th>Last scanned</th><th></th></tr></thead>
+        <tbody>
+        @if (Model.Sources.Count == 0)
+        {
+            <tr><td colspan="6" class="muted">No sources yet.</td></tr>
+        }
+        @foreach (var (s, count, archived) in Model.Sources)
+        {
+            <tr data-source="@s.Id">
+                <td><a href="https://github.com/@s.FullName" target="_blank" rel="noreferrer" class="mono">@s.FullName</a> @if (s.IsPrivateRepo) { <span class="badge">private</span> }</td>
+                <td>@if (s.InstallationId is not null) { <span class="badge badge-vis-public">GitHub App</span> } else if (s.Trusted) { <span class="badge badge-vis-link">Owned (token)</span> } else { <span class="badge badge-vis-shared" title="Not controlled by you; decks are sandboxed and private by default">External</span> }</td>
+                <td class="mono">@(s.Ref ?? "default")</td>
+                <td>@count @if (archived > 0) { <span class="faint">(+@archived archived)</span> }</td>
+                <td>@if (s.LastScannedAt is { } at) { <time datetime="@at.UtcDateTime.ToString("o")">@at.ToString("g")</time> } else { <span class="faint">never</span> }
+                    @if (s.LastSeenSha is not null) { <span class="faint mono" style="font-size:.8rem"> @s.LastSeenSha[..7]</span> }</td>
+                <td class="row" style="gap:.3rem; justify-content:flex-end">
+                    <button class="btn btn-sm" data-sync="@s.Id">Sync</button>
+                    <button class="btn btn-ghost btn-sm" data-sync="@s.Id" data-force="1" title="Rebuild every deck in this repository">Rebuild all</button>
+                    <button class="btn btn-danger btn-sm" data-remove="@s.Id" title="Remove this source and archive its decks">Remove</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@if (Model.AllowExternal)
+{
+    <section class="panel" style="margin-top:1rem">
+        <h3>Add a public repository</h3>
+        <p class="hint">For Slidev decks in repositories you do not control. They are built in the same sandbox, served in an isolated origin, and stay private unless you change their visibility. Private repositories must be added by installing the GitHub App.</p>
+        <form id="add-form" class="row">
+            <input class="input" id="add-owner" placeholder="owner" style="max-width:12rem" required pattern="[A-Za-z0-9_.-]+" />
+            <span class="muted">/</span>
+            <input class="input" id="add-repo" placeholder="repository" style="max-width:16rem" required pattern="[A-Za-z0-9_.-]+" />
+            <input class="input" id="add-ref" placeholder="branch (default)" style="max-width:12rem" />
+            <button class="btn btn-primary" type="submit">Add</button>
+        </form>
+    </section>
+}
+
+@section Scripts {
+<script>
+(function () {
+  const { api, toast } = Podium;
+  document.getElementById('refresh').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try { const r = await api('POST', '/api/installations/refresh'); toast(`Installations refreshed (${r.added} new)`, 'ok'); setTimeout(() => location.reload(), 800); }
+    catch (err) { toast(err.message, 'error'); e.target.disabled = false; }
+  });
+  document.addEventListener('click', async (e) => {
+    const s = e.target.closest('[data-sync]');
+    if (s) {
+      s.disabled = true;
+      try { await api('POST', `/api/sources/${encodeURIComponent(s.dataset.sync)}/sync?force=${s.dataset.force ? 'true' : 'false'}`); toast(s.dataset.force ? 'Rebuilding all decks' : 'Sync queued', 'ok'); }
+      catch (err) { toast(err.message, 'error'); }
+      finally { s.disabled = false; }
+    }
+    const r = e.target.closest('[data-remove]');
+    if (r && confirm(`Remove ${r.dataset.remove} and archive its decks?`)) {
+      try { await api('DELETE', `/api/sources/${encodeURIComponent(r.dataset.remove)}`); r.closest('tr').remove(); toast('Removed', 'ok'); }
+      catch (err) { toast(err.message, 'error'); }
+    }
+  });
+  document.getElementById('add-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('POST', '/api/sources', { owner: document.getElementById('add-owner').value, repo: document.getElementById('add-repo').value, ref: document.getElementById('add-ref').value || null });
+      toast('Repository added; scanning…', 'ok'); setTimeout(() => location.reload(), 800);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+})();
+</script>
+}

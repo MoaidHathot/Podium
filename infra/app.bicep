@@ -1,0 +1,95 @@
+// Podium web app. Requires foundation.bicep to be deployed and the Key Vault secrets to exist:
+//   podium-signing-key, github-private-key, github-client-id, github-client-secret, github-webhook-secret
+targetScope = 'resourceGroup'
+
+param location string = resourceGroup().location
+param baseName string = 'podium'
+param webImage string = 'ghcr.io/moaidhathot/podium-web:latest'
+
+@description('Public origin, e.g. https://slides.moaid.codes')
+param publicBaseUrl string
+
+@description('Numeric GitHub user id of the owner.')
+param ownerGitHubId int
+
+param gitHubAppId string
+param gitHubAppSlug string
+
+param environmentId string
+param builderJobId string
+param storageAccountName string
+param keyVaultName string
+param webIdentityId string
+param webIdentityClientId string
+
+@description('Optional custom hostnames already verified in DNS; bound with managed certificates via deploy.ps1.')
+param customDomains array = []
+
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = { name: keyVaultName }
+
+var secretNames = [ 'podium-signing-key', 'github-private-key', 'github-client-id', 'github-client-secret', 'github-webhook-secret' ]
+
+resource web 'Microsoft.App/containerApps@2024-03-01' = {
+  name: '${baseName}-web'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${webIdentityId}': {} }
+  }
+  properties: {
+    environmentId: environmentId
+    workloadProfileName: 'Consumption'
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        external: true
+        targetPort: 8080
+        transport: 'http'
+        allowInsecure: false
+        customDomains: [for d in customDomains: { name: d.name, certificateId: d.certificateId, bindingType: 'SniEnabled' }]
+      }
+      secrets: [for s in secretNames: {
+        name: s
+        keyVaultUrl: '${keyVault.properties.vaultUri}secrets/${s}'
+        identity: webIdentityId
+      }]
+    }
+    template: {
+      scale: {
+        minReplicas: 0
+        maxReplicas: 1
+        rules: [ { name: 'http', http: { metadata: { concurrentRequests: '100' } } } ]
+      }
+      containers: [
+        {
+          name: 'web'
+          image: webImage
+          resources: { cpu: json('0.5'), memory: '1Gi' }
+          env: [
+            { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
+            { name: 'AZURE_CLIENT_ID', value: webIdentityClientId }
+            { name: 'Podium__PublicBaseUrl', value: publicBaseUrl }
+            { name: 'Podium__OwnerGitHubId', value: string(ownerGitHubId) }
+            { name: 'Podium__SigningKey', secretRef: 'podium-signing-key' }
+            { name: 'Storage__AccountName', value: storageAccountName }
+            { name: 'Builder__Mode', value: 'ContainerAppsJob' }
+            { name: 'Builder__JobResourceId', value: builderJobId }
+            { name: 'GitHub__AppId', value: gitHubAppId }
+            { name: 'GitHub__AppSlug', value: gitHubAppSlug }
+            { name: 'GitHub__PrivateKeyPem', secretRef: 'github-private-key' }
+            { name: 'GitHub__ClientId', secretRef: 'github-client-id' }
+            { name: 'GitHub__ClientSecret', secretRef: 'github-client-secret' }
+            { name: 'GitHub__WebhookSecret', secretRef: 'github-webhook-secret' }
+          ]
+          probes: [
+            { type: 'Liveness', httpGet: { path: '/healthz', port: 8080 }, initialDelaySeconds: 10, periodSeconds: 30 }
+            { type: 'Readiness', httpGet: { path: '/healthz', port: 8080 }, initialDelaySeconds: 3, periodSeconds: 10 }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+output fqdn string = web.properties.configuration.ingress.fqdn
+output customDomainVerificationId string = web.properties.customDomainVerificationId

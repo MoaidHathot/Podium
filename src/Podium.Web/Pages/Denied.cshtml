@@ -1,0 +1,19 @@
+@page "/denied"
+@inject Podium.Web.Security.CallerResolver Callers
+@{
+    ViewData["Title"] = "Access denied";
+    var caller = Callers.Resolve(User);
+}
+<div class="hero">
+    <h1>Not for you, sorry</h1>
+    @if (caller.IsAuthenticated)
+    {
+        <p>You are signed in as <strong>@caller.DisplayName</strong>. This page belongs to the Podium owner. If a deck was shared with you, find it under <a href="/shared">Decks shared with me</a>.</p>
+        <form method="post" action="/logout" class="inline">@Html.AntiForgeryToken()<button class="btn btn-ghost" type="submit">Sign out</button></form>
+    }
+    else
+    {
+        <p>You need to sign in first.</p>
+        <a class="btn btn-primary" href="/login">Sign in</a>
+    }
+</div>

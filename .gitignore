@@ -427,3 +427,9 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Podium
+builder/node_modules/
+**/appsettings.Local.json
+.podium-local/
+

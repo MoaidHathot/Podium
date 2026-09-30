@@ -1,0 +1,35 @@
+@page "/shared"
+@model Podium.Web.Pages.SharedModel
+@{
+    ViewData["Title"] = "Shared with me";
+}
+<h1>Decks shared with you</h1>
+<p class="muted">Signed in as <strong>@Model.Caller.DisplayName</strong>.</p>
+
+@if (Model.Decks.Count == 0)
+{
+    <div class="empty section">
+        <h3>Nothing here yet</h3>
+        <p>When the owner shares a deck with your GitHub account, it shows up here.</p>
+    </div>
+}
+else
+{
+    <div class="grid section">
+    @foreach (var (d, g) in Model.Decks)
+    {
+        var canSite = d.Visibility == Visibility.Public || (d.Visibility == Visibility.Shared && g?.Site == true);
+        var canPdf = d.PdfVisibility == Visibility.Public || (d.PdfVisibility == Visibility.Shared && g?.Pdf == true);
+        var canPptx = d.PptxVisibility == Visibility.Public || (d.PptxVisibility == Visibility.Shared && g?.Pptx == true);
+        <article class="card">
+            <div class="card-title">@d.Title</div>
+            @if (d.Author is not null) { <div class="card-sub">@d.Author</div> }
+            <div class="card-actions">
+                @if (canSite && d.CurrentBuildId is not null) { <a class="btn btn-primary btn-sm" href="/d/@d.Slug/" target="_blank" rel="noopener">Open</a> }
+                @if (canPdf) { <a class="btn btn-sm" href="/d/@(d.Slug).pdf" target="_blank" rel="noopener">PDF</a> }
+                @if (canPptx) { <a class="btn btn-sm" href="/d/@(d.Slug).pptx">PPTX</a> }
+            </div>
+        </article>
+    }
+    </div>
+}
