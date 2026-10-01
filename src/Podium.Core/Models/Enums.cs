@@ -10,6 +10,10 @@ public enum DeckKind
     Static = 3,
     /// <summary>Legacy GitPitch deck; indexed but not renderable.</summary>
     GitPitch = 4,
+    /// <summary>A committed .pptx; converted to PDF for in-browser viewing, original offered for download.</summary>
+    PowerPoint = 5,
+    /// <summary>A committed standalone .pdf.</summary>
+    Pdf = 6,
 }
 
 /// <summary>Who may access a deck or artifact.</summary>
@@ -42,4 +46,6 @@ public enum ArtifactKind
     Pdf = 1,
     Pptx = 2,
     Log = 3,
+    /// <summary>First-slide preview image; follows the site's visibility.</summary>
+    Thumbnail = 4,
 }

@@ -22,12 +22,18 @@ else
         var canPdf = d.PdfVisibility == Visibility.Public || (d.PdfVisibility == Visibility.Shared && g?.Pdf == true);
         var canPptx = d.PptxVisibility == Visibility.Public || (d.PptxVisibility == Visibility.Shared && g?.Pptx == true);
         <article class="card">
-            <div class="card-title">@d.Title</div>
-            @if (d.Author is not null) { <div class="card-sub">@d.Author</div> }
-            <div class="card-actions">
-                @if (canSite && d.CurrentBuildId is not null) { <a class="btn btn-primary btn-sm" href="/d/@d.Slug/" target="_blank" rel="noopener">Open</a> }
-                @if (canPdf) { <a class="btn btn-sm" href="/d/@(d.Slug).pdf" target="_blank" rel="noopener">PDF</a> }
-                @if (canPptx) { <a class="btn btn-sm" href="/d/@(d.Slug).pptx">PPTX</a> }
+            @if (canSite && d.CurrentHasThumbnail && d.CurrentBuildId is not null)
+            {
+                <a class="card-thumb" href="/d/@d.Slug/" target="_blank" rel="noopener" tabindex="-1"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId" alt="" loading="lazy" /></a>
+            }
+            <div class="card-body">
+                <div class="card-title">@d.Title</div>
+                @if (d.Author is not null) { <div class="card-sub">@d.Author</div> }
+                <div class="card-actions">
+                    @if (canSite && d.CurrentBuildId is not null) { <a class="btn btn-primary btn-sm" href="/d/@d.Slug/" target="_blank" rel="noopener">Open</a> }
+                    @if (canPdf && d.CurrentHasPdf) { <a class="btn btn-sm" href="/d/@(d.Slug).pdf" target="_blank" rel="noopener">PDF</a> }
+                    @if (canPptx && d.CurrentHasPptx) { <a class="btn btn-sm" href="/d/@(d.Slug).pptx">PPTX</a> }
+                </div>
             </div>
         </article>
     }

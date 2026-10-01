@@ -3,18 +3,23 @@ using Podium.Core.Models;
 namespace Podium.Core.Discovery;
 
 /// <summary>A deck candidate found by scanning a repository tree.</summary>
-public sealed record DeckCandidate(string Path, string Entry, DeckKind Kind);
+public sealed record DeckCandidate(string Path, string Entry, DeckKind Kind)
+{
+    public string EntryPath => string.IsNullOrEmpty(Path) ? Entry : $"{Path}/{Entry}";
+}
 
 /// <summary>
-/// Pure function over a list of repository file paths: finds directories that look like decks.
-/// Slidev: directory containing slides.md (and usually package.json).
-/// presenterm: directory with config.yaml referencing the presenterm schema, or a *.md next to config.yaml.
-/// GitPitch: directory with PITCHME.md.
-/// Static: a committed .html export when no source deck exists in the same directory.
+/// Pure function over a list of repository file paths: finds decks.
+/// Slidev: directory containing slides.md.
+/// presenterm: directory with config.yaml and a markdown file (prefers main.md).
+/// PowerPoint: every .pptx file in a directory that is not a Slidev/presenterm deck.
+/// Pdf: every standalone .pdf (no .pptx or .html with the same base name) in such a directory.
+/// Static: a committed .html export in a directory with no source deck (one per directory).
+/// GitPitch (PITCHME.md) directories are skipped.
 /// </summary>
 public static class DeckDetector
 {
-    private static readonly string[] IgnoredSegments = ["node_modules", ".git", "dist", ".slidev", "bin", "obj", ".vscode", ".idea"];
+    private static readonly string[] IgnoredSegments = ["node_modules", ".git", "dist", ".slidev", "bin", "obj", ".vscode", ".idea", ".github", ".podium-addon"];
 
     public static IReadOnlyList<DeckCandidate> Detect(IEnumerable<string> paths)
     {
@@ -54,19 +59,33 @@ public static class DeckDetector
                 }
             }
 
-            // A committed HTML export with no source deck and no Node project in the same directory is served as-is.
-            var html = names
-                .Where(n => n.EndsWith(".html", StringComparison.OrdinalIgnoreCase) && !n.Equals("index.html", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
-            if (html is not null && !names.Contains("package.json"))
+            var pptx = names.Where(n => n.EndsWith(".pptx", StringComparison.OrdinalIgnoreCase) && !n.StartsWith("~$", StringComparison.Ordinal))
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var p in pptx)
+                result.Add(new DeckCandidate(dir, p, DeckKind.PowerPoint));
+
+            var taken = pptx.Select(BaseName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var htmls = names.Where(n => n.EndsWith(".html", StringComparison.OrdinalIgnoreCase) && !n.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var h in htmls) taken.Add(BaseName(h));
+
+            foreach (var pdf in names.Where(n => n.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
             {
-                result.Add(new DeckCandidate(dir, html, DeckKind.Static));
+                // A PDF next to a .pptx/.html of the same name is that deck's export, not a deck of its own.
+                if (taken.Contains(BaseName(pdf))) continue;
+                result.Add(new DeckCandidate(dir, pdf, DeckKind.Pdf));
             }
+
+            // A committed HTML export with no source deck and no Node project in the same directory is served as-is.
+            if (htmls.Count > 0 && !names.Contains("package.json"))
+                result.Add(new DeckCandidate(dir, htmls[0], DeckKind.Static));
         }
 
-        return result.OrderBy(c => c.Path, StringComparer.Ordinal).ToList();
+        return result.OrderBy(c => c.Path, StringComparer.Ordinal).ThenBy(c => c.Entry, StringComparer.Ordinal).ToList();
     }
+
+    /// <summary>True for kinds whose identity is a single file, so several can live in one directory.</summary>
+    public static bool IsFileBased(DeckKind kind) => kind is DeckKind.PowerPoint or DeckKind.Pdf;
 
     private static string? PickPresentermEntry(HashSet<string> names)
     {
@@ -86,5 +105,11 @@ public static class DeckDetector
     {
         var i = path.LastIndexOf('/');
         return i < 0 ? path : path[(i + 1)..];
+    }
+
+    private static string BaseName(string fileName)
+    {
+        var i = fileName.LastIndexOf('.');
+        return i <= 0 ? fileName : fileName[..i];
     }
 }

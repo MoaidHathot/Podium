@@ -21,7 +21,8 @@ public sealed class DeckSyncService(
         var (sha, committedAt) = await repos.GetHeadAsync(source, ct);
         var tree = await repos.ListTreeAsync(source, sha, ct);
         var candidates = DeckDetector.Detect(tree);
-        var existing = (await decks.ListBySourceAsync(source.Id, ct)).ToDictionary(d => d.Path, StringComparer.Ordinal);
+        // Directory-based decks are keyed by their directory; file-based ones (PowerPoint, PDF) by their full entry path.
+        var existing = (await decks.ListBySourceAsync(source.Id, ct)).ToDictionary(d => DeckKey(d.Kind, d.Path, d.Entry), StringComparer.Ordinal);
         var allDecks = await decks.ListAsync(includeArchived: true, ct);
         var takenSlugs = allDecks.Select(d => d.Slug).ToHashSet(StringComparer.Ordinal);
 
@@ -47,20 +48,23 @@ public sealed class DeckSyncService(
         }
 
         var result = new SyncResult();
-        var seenPaths = new HashSet<string>(StringComparer.Ordinal);
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var c in candidates)
         {
-            seenPaths.Add(c.Path);
-            existing.TryGetValue(c.Path, out var prev);
+            var key = DeckKey(c.Kind, c.Path, c.Entry);
+            seenKeys.Add(key);
+            existing.TryGetValue(key, out var prev);
+            var fileBased = DeckDetector.IsFileBased(c.Kind);
 
-            var touched = prev is null || forceRebuild || effectiveChanged is null || effectiveChanged.Any(p => PathTouchesDeck(p, c.Path));
+            var touched = prev is null || forceRebuild || effectiveChanged is null
+                || effectiveChanged.Any(p => fileBased ? PathIsFile(p, c.EntryPath) : PathTouchesDeck(p, c.Path));
             var metadata = touched ? await ReadMetadataAsync(source, sha, c, ct) : null;
 
-            var slug = prev?.Slug ?? UniqueSlug(Slug.ForDeck(source.Repo, c.Path), takenSlugs);
+            var slug = prev?.Slug ?? UniqueSlug(fileBased ? Slug.ForFile(source.Repo, c.Entry) : Slug.ForDeck(source.Repo, c.Path), takenSlugs);
             takenSlugs.Add(slug);
 
-            var last = touched ? await repos.LastCommitForPathAsync(source, sha, c.Path, ct) : null;
+            var last = touched ? await repos.LastCommitForPathAsync(source, sha, fileBased ? c.EntryPath : c.Path, ct) : null;
 
             var deck = (prev ?? new Deck
             {
@@ -70,13 +74,13 @@ public sealed class DeckSyncService(
                 Entry = c.Entry,
                 Kind = c.Kind,
                 Visibility = Visibility.Private,
-                ExportPdf = c.Kind is DeckKind.Slidev or DeckKind.Presenterm,
+                ExportPdf = c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf,
             }) with
             {
                 Entry = c.Entry,
                 Kind = c.Kind,
                 Archived = false,
-                Title = metadata?.Title ?? prev?.Title ?? Humanize(c.Path, source.Repo),
+                Title = metadata?.Title ?? prev?.Title ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
                 Author = metadata?.Author ?? prev?.Author,
                 Description = metadata?.Description ?? prev?.Description,
                 Tags = metadata?.Tags ?? prev?.Tags ?? [],
@@ -88,7 +92,7 @@ public sealed class DeckSyncService(
             await decks.UpsertAsync(deck, ct);
             if (prev is null) result.Added.Add(deck.Slug);
 
-            var buildable = c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static;
+            var buildable = c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static or DeckKind.PowerPoint or DeckKind.Pdf;
             // Rebuild when content changed, or when the deck has never been attempted. Failed builds are not
             // retried automatically (use the Rebuild action) to avoid looping on permanently broken decks.
             var needsBuild = buildable && (forceRebuild || touched || deck.LatestBuildId is null);
@@ -99,9 +103,9 @@ public sealed class DeckSyncService(
             }
         }
 
-        foreach (var (path, deck) in existing)
+        foreach (var (key, deck) in existing)
         {
-            if (!seenPaths.Contains(path) && !deck.Archived)
+            if (!seenKeys.Contains(key) && !deck.Archived)
             {
                 await decks.UpsertAsync(deck with { Archived = true, UpdatedAt = DateTimeOffset.UtcNow }, ct);
                 result.Archived.Add(deck.Slug);
@@ -131,6 +135,25 @@ public sealed class DeckSyncService(
             log.LogWarning(ex, "Failed reading metadata for {Path}", c.Path);
             return null;
         }
+    }
+
+    private static string DeckKey(DeckKind kind, string path, string entry)
+        => DeckDetector.IsFileBased(kind) ? $"file:{(string.IsNullOrEmpty(path) ? entry : $"{path}/{entry}")}" : $"dir:{path}";
+
+    private static bool PathIsFile(string changed, string entryPath)
+    {
+        changed = changed.Replace('\\', '/');
+        if (string.Equals(changed, entryPath, StringComparison.Ordinal)) return true;
+        // A PowerPoint deck also changes when its sibling export (same name, .pdf) changes.
+        var dot = entryPath.LastIndexOf('.');
+        return dot > 0 && string.Equals(changed, entryPath[..dot] + ".pdf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string HumanizeFile(string entry)
+    {
+        var dot = entry.LastIndexOf('.');
+        var stem = dot > 0 ? entry[..dot] : entry;
+        return stem.Replace('-', ' ').Replace('_', ' ');
     }
 
     private static bool PathTouchesDeck(string changed, string deckPath)

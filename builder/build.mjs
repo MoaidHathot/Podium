@@ -19,6 +19,8 @@ const env = {};
 for (const [k, v] of Object.entries(process.env)) {
   if (k.startsWith('PODIUM_')) { env[k] = v; delete process.env[k]; }
 }
+// A production NODE_ENV makes npm skip devDependencies and breaks Slidev's exporter; builds always run in dev mode.
+delete process.env.NODE_ENV;
 const need = (k) => { if (!env[k]) throw new Error(`Missing ${k}`); return env[k]; };
 
 const buildId = need('PODIUM_BUILD_ID');
@@ -344,6 +346,128 @@ async function buildStatic(deckDir, outDir, result) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// PowerPoint / PDF decks
+// ---------------------------------------------------------------------------------------------------------------
+function which(cmd) {
+  const dirs = (process.env.PATH || '').split(process.platform === 'win32' ? ';' : ':');
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  for (const d of dirs) for (const e of exts) { const p = join(d, cmd + e); if (d && existsSync(p)) return p; }
+  return null;
+}
+
+async function buildPowerPoint(deckDir, outDir, result) {
+  const src = join(deckDir, entry);
+  if (!existsSync(src)) throw new Error(`Entry ${entry} not found`);
+  copyFileSync(src, join(outDir, 'deck.pptx'));
+  result.hasPptx = true;
+
+  // Prefer an export the author committed next to the file (PowerPoint's own PDF beats a LibreOffice conversion).
+  const stem = entry.replace(/\.[^.]+$/, '');
+  const committedPdf = join(deckDir, stem + '.pdf');
+  if (existsSync(committedPdf)) {
+    copyFileSync(committedPdf, join(outDir, 'deck.pdf'));
+    result.hasPdf = true;
+    log('Using the committed PDF next to the presentation');
+  } else {
+    const soffice = which('soffice') || which('libreoffice');
+    if (!soffice) result.warnings.push('LibreOffice not available: the deck can be downloaded but not viewed in the browser');
+    else {
+      const tmp = join(workRoot, 'soffice-out');
+      rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp, { recursive: true });
+      const r = await run(soffice, ['--headless', '--norestore', '--nologo', `-env:UserInstallation=file://${join(workRoot, 'soffice-profile').replace(/\\/g, '/')}`, '--convert-to', 'pdf', '--outdir', tmp, src],
+        { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 6 * 60 * 1000), envExtra: { HOME: workRoot } });
+      const produced = existsSync(tmp) ? readdirSync(tmp).find((f) => f.toLowerCase().endsWith('.pdf')) : null;
+      if (r.code === 0 && produced) { copyFileSync(join(tmp, produced), join(outDir, 'deck.pdf')); result.hasPdf = true; }
+      else result.warnings.push('PDF conversion failed (see build log); the PowerPoint file can still be downloaded');
+    }
+  }
+  writeViewerSite(outDir, result, basename(entry));
+}
+
+async function buildPdfDeck(deckDir, outDir, result) {
+  const src = join(deckDir, entry);
+  if (!existsSync(src)) throw new Error(`Entry ${entry} not found`);
+  copyFileSync(src, join(outDir, 'deck.pdf'));
+  result.hasPdf = true;
+  writeViewerSite(outDir, result, basename(entry));
+}
+
+/** A minimal site that shows the PDF with the browser's viewer; falls back to a download link. */
+function writeViewerSite(outDir, result, fileName) {
+  const site = join(outDir, 'site');
+  mkdirSync(site, { recursive: true });
+  const hasPdf = existsSync(join(outDir, 'deck.pdf'));
+  if (hasPdf) copyFileSync(join(outDir, 'deck.pdf'), join(site, 'deck.pdf'));
+  const title = escapeHtml(env.PODIUM_DECK_TITLE || fileName);
+  const body = hasPdf
+    ? `<iframe src="deck.pdf#view=Fit&amp;pagemode=none" title="${title}" allowfullscreen></iframe>`
+    : `<main><h1>${title}</h1><p>This presentation could not be rendered in the browser.</p><p><a href="/d/${slug}.pptx">Download the PowerPoint file</a></p></main>`;
+  writeFileSync(join(site, 'index.html'), `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="podium-build" content="${buildId}"><meta name="podium-slug" content="${slug}">
+<title>${title}</title>
+<style>html,body{margin:0;height:100%;background:#0b0d12;color:#e6e9f0;font-family:system-ui,sans-serif}iframe{border:0;width:100%;height:100%;display:block}main{max-width:40rem;margin:15vh auto;padding:0 1.5rem}a{color:#7c9cff}</style>
+</head><body>${body}</body></html>
+`);
+  result.hasSite = true;
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Thumbnails
+// ---------------------------------------------------------------------------------------------------------------
+async function makeThumbnail(outDir, result) {
+  const target = join(outDir, 'thumbnail.jpg');
+  try {
+    if (kind === 'powerpoint' || kind === 'pdf') {
+      if (!existsSync(join(outDir, 'deck.pdf'))) return; // nothing worth previewing (download-only fallback page)
+      const pdftoppm = which('pdftoppm');
+      if (!pdftoppm) { log('pdftoppm not available; no thumbnail'); return; }
+      const prefix = join(workRoot, 'thumb');
+      const r = await run(pdftoppm, ['-jpeg', '-jpegopt', 'quality=80', '-f', '1', '-l', '1', '-scale-to-x', '1280', '-scale-to-y', '-1', join(outDir, 'deck.pdf'), prefix], { allowFail: true, timeoutMs: 60000 });
+      const produced = readdirSync(workRoot).find((f) => f.startsWith('thumb') && f.endsWith('.jpg'));
+      if (r.code === 0 && produced) { copyFileSync(join(workRoot, produced), target); result.hasThumbnail = true; }
+      return;
+    }
+    await screenshotSite(outDir, target);
+    result.hasThumbnail = existsSync(target);
+  } catch (e) {
+    log(`Thumbnail skipped: ${e.message}`);
+  }
+}
+
+/** Serves out/site at the deck's base path on a loopback port and screenshots the first slide. */
+async function screenshotSite(outDir, target) {
+  const site = join(outDir, 'site');
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    let p = decodeURIComponent((req.url || '/').split('?')[0]);
+    if (p.startsWith(basePath)) p = p.slice(basePath.length); else p = p.replace(/^\/+/, '');
+    let file = join(site, p);
+    if (!file.startsWith(site) || !existsSync(file) || statSync(file).isDirectory()) file = join(site, 'index.html'); // SPA fallback
+    if (!existsSync(file)) { res.statusCode = 404; res.end(); return; }
+    res.setHeader('content-type', contentTypes[extname(file).toLowerCase()] || 'application/octet-stream');
+    res.end(readFileSync(file));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const { chromium } = require('playwright-chromium');
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, colorScheme: 'dark' });
+      const url = `http://127.0.0.1:${port}${basePath}${kind === 'slidev' ? '1' : ''}`;
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
+      if (kind === 'slidev') await page.waitForSelector('[data-slidev-no="1"]', { timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(1200); // fonts, transitions
+      await page.screenshot({ path: target, type: 'jpeg', quality: 80 });
+      log('Thumbnail captured');
+    } finally { await browser.close(); }
+  } finally { server.close(); }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------------------------------------------
 const contentTypes = {
@@ -416,7 +540,7 @@ async function report(body) {
 // Main
 // ---------------------------------------------------------------------------------------------------------------
 async function main() {
-  const result = { success: false, hasSite: false, hasPdf: false, hasPptx: false, error: null, warnings: [] };
+  const result = { success: false, hasSite: false, hasPdf: false, hasPptx: false, hasThumbnail: false, error: null, warnings: [] };
   const repoDir = join(workRoot, 'repo');
   const outDir = join(workRoot, 'out');
   rmSync(repoDir, { recursive: true, force: true });
@@ -441,9 +565,12 @@ async function main() {
       case 'slidev': await buildSlidev(deckDir, outDir, result); break;
       case 'presenterm': await buildPresenterm(deckDir, outDir, result); break;
       case 'static': await buildStatic(deckDir, outDir, result); break;
+      case 'powerpoint': await buildPowerPoint(deckDir, outDir, result); break;
+      case 'pdf': await buildPdfDeck(deckDir, outDir, result); break;
       default: throw new Error(`Unsupported deck kind ${kind}`);
     }
     result.success = result.hasSite;
+    if (result.hasSite) await makeThumbnail(outDir, result);
   } catch (e) {
     result.error = scrub(e && e.message ? e.message : String(e));
     log(`FAILED: ${result.error}`);

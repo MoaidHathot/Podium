@@ -5,17 +5,21 @@
     ViewData["Title"] = d.Title;
     var kind = d.Kind.ToString().ToLowerInvariant();
     var servable = d.CurrentBuildId is not null && d.Kind != DeckKind.GitPitch;
+    var isDoc = d.Kind is DeckKind.PowerPoint or DeckKind.Pdf;
+    var kindLabel = d.Kind switch { DeckKind.Static => "HTML", DeckKind.PowerPoint => "PowerPoint", DeckKind.Pdf => "PDF", _ => d.Kind.ToString() };
     var building = d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running;
     string VisName(Visibility v) => v switch { Visibility.Public => "Public", Visibility.Link => "Link", Visibility.Shared => "Shared", _ => "Private" };
 }
 
 <p><a href="/" class="muted">← Library</a></p>
 
-<div class="row-between" style="margin-bottom:1.25rem; align-items:flex-start">
+<div class="deck-hero" style="margin-bottom:1.25rem">
+<div>
+<div class="row-between" style="align-items:flex-start">
     <div style="min-width:0">
         <h1 id="title">@d.Title</h1>
         <div class="row" style="margin-top:.35rem; gap:.5rem">
-            <span class="badge badge-kind-@kind">@(d.Kind == DeckKind.Static ? "HTML" : d.Kind.ToString())</span>
+            <span class="badge badge-kind-@kind">@kindLabel</span>
             <span class="muted mono" style="font-size:.85rem">@(Model.Source?.FullName ?? d.SourceId)@(string.IsNullOrEmpty(d.Path) ? "" : "/" + d.Path)/@d.Entry</span>
             @if (Model.Source is { Trusted: false })
             {
@@ -31,6 +35,12 @@
         <button class="btn" id="pin" aria-pressed="@(d.Pinned ? "true" : "false")">@(d.Pinned ? "Unpin" : "Pin")</button>
         <button class="btn" id="rebuild" @(building ? "disabled" : "")>@(building ? "Building…" : "Rebuild")</button>
     </div>
+</div>
+</div>
+@if (d.CurrentHasThumbnail && d.CurrentBuildId is not null)
+{
+    <a href="/d/@d.Slug/" target="_blank" rel="noopener" title="Open"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId" alt="First slide of @d.Title" /></a>
+}
 </div>
 
 @if (Model.NotBuilt && !servable)
@@ -50,10 +60,10 @@
 
 <div class="two-col">
     <section class="panel">
-        <h3>Present</h3>
-        <p class="hint">Open the deck on the presenting machine, and the presenter view on your own device.</p>
+        <h3>@(isDoc ? "View" : "Present")</h3>
+        <p class="hint">@(isDoc ? "Opens the PDF rendition in the browser; the original file is available below." : "Open the deck on the presenting machine, and the presenter view on your own device. The presenter view drives all other open instances of this deck.")</p>
         <div class="row">
-            <a class="btn btn-primary" href="/d/@d.Slug/" target="_blank" rel="noopener" aria-disabled="@(servable ? null : "true")">Open deck</a>
+            <a class="btn btn-primary" href="/d/@d.Slug/" target="_blank" rel="noopener" aria-disabled="@(servable ? null : "true")">@(isDoc ? "Open" : "Open deck")</a>
             @if (d.Kind == DeckKind.Slidev)
             {
                 <a class="btn" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" aria-disabled="@(servable ? null : "true")">Presenter view</a>
@@ -81,7 +91,7 @@
         </div>
     </section>
 
-    <section class="panel">
+    <section class="panel" @(isDoc || d.Kind == DeckKind.Static ? "hidden" : "")>
         <h3>Exports</h3>
         <p class="hint">Generated on every build by the Slidev exporter (headless Chromium).</p>
         <label class="row" style="gap:.5rem"><input type="checkbox" id="exportPdf" @(d.ExportPdf ? "checked" : "") /> Export PDF</label>

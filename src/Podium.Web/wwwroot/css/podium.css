@@ -144,6 +144,11 @@ label { font-size: .9rem; color: var(--text-muted); }
 .badge-kind-presenterm { color: #7fd8c4; border-color: color-mix(in srgb, #7fd8c4 35%, transparent); }
 .badge-kind-static { color: #ffc98a; border-color: color-mix(in srgb, #ffc98a 35%, transparent); }
 .badge-kind-gitpitch { color: var(--text-faint); }
+.badge-kind-powerpoint { color: #ff9f7a; border-color: color-mix(in srgb, #ff9f7a 35%, transparent); }
+.badge-kind-pdf { color: #ff8585; border-color: color-mix(in srgb, #ff8585 35%, transparent); }
+.deck-hero { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1.25rem; align-items: start; }
+.deck-hero img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--border); box-shadow: var(--shadow); }
+@media (max-width: 860px) { .deck-hero { grid-template-columns: 1fr; } .deck-hero img { max-width: 420px; } }
 .badge-vis-public { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 .badge-vis-link { color: var(--info); border-color: color-mix(in srgb, var(--info) 35%, transparent); }
 .badge-vis-shared { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
@@ -161,20 +166,43 @@ label { font-size: .9rem; color: var(--text-muted); }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .75rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .9rem; }
 .card {
-  position: relative; display: flex; flex-direction: column; gap: .55rem;
-  padding: 1rem 1rem .85rem; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+  position: relative; display: flex; flex-direction: column;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
   box-shadow: var(--shadow); transition: border-color .12s, transform .12s;
 }
 .card:hover { border-color: var(--border-strong); }
+.card-body { display: flex; flex-direction: column; gap: .55rem; padding: .85rem 1rem .85rem; }
+.card-thumb {
+  position: relative; display: block; aspect-ratio: 16 / 9; background: var(--bg-elev-2); overflow: hidden;
+  border-bottom: 1px solid var(--border);
+}
+.card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s ease; }
+.card:hover .card-thumb img { transform: scale(1.02); }
+.thumb-placeholder {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font: 700 1.6rem var(--mono); letter-spacing: .04em; color: color-mix(in srgb, var(--text) 55%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, var(--bg-elev-2)), var(--bg-elev-2) 60%);
+}
+.card-thumb.kind-presenterm .thumb-placeholder { background: linear-gradient(135deg, color-mix(in srgb, #7fd8c4 22%, var(--bg-elev-2)), var(--bg-elev-2) 60%); }
+.card-thumb.kind-powerpoint .thumb-placeholder { background: linear-gradient(135deg, color-mix(in srgb, #ff8a65 26%, var(--bg-elev-2)), var(--bg-elev-2) 60%); }
+.card-thumb.kind-pdf .thumb-placeholder { background: linear-gradient(135deg, color-mix(in srgb, #ff6b6b 22%, var(--bg-elev-2)), var(--bg-elev-2) 60%); }
+.card-thumb.kind-static .thumb-placeholder { background: linear-gradient(135deg, color-mix(in srgb, #ffc98a 22%, var(--bg-elev-2)), var(--bg-elev-2) 60%); }
+.thumb-badge {
+  position: absolute; left: .6rem; bottom: .6rem; display: inline-flex; align-items: center; gap: .35rem;
+  padding: .15rem .55rem; border-radius: 999px; font-size: .75rem; font-weight: 600;
+  background: color-mix(in srgb, var(--bg) 80%, transparent); color: var(--text); backdrop-filter: blur(6px);
+}
 .card-title { font-size: 1.05rem; font-weight: 650; letter-spacing: -.01em; }
 .card-title a { color: var(--text); }
 .card-title a:hover { color: var(--accent); text-decoration: none; }
 .card-sub { color: var(--text-muted); font-size: .85rem; display: flex; gap: .35rem; align-items: center; min-width: 0; }
 .card-sub .path { font-family: var(--mono); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; font-size: .82rem; color: var(--text-muted); }
-.card-actions { display: flex; gap: .4rem; margin-top: .25rem; align-items: center; }
+.card-actions { display: flex; gap: .35rem; margin-top: .25rem; align-items: center; flex-wrap: wrap; }
 .card-actions .spacer { flex: 1; }
-.card.pinned::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; border-radius: var(--radius) 0 0 var(--radius); background: var(--accent); }
+.card-actions .btn-icon { padding: .3rem .5rem; gap: .3rem; }
+.card-actions .btn-icon span { font-size: .78rem; }
+.card.pinned::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; z-index: 1; background: var(--accent); }
 .card.archived { opacity: .6; }
 .hidden { display: none !important; }
 .empty { padding: 3rem 1rem; text-align: center; color: var(--text-muted); border: 1px dashed var(--border-strong); border-radius: var(--radius); }

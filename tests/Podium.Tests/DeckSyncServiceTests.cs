@@ -181,6 +181,35 @@ public class DeckSyncServiceTests
     }
 
     [Fact]
+    public async Task Two_powerpoint_files_in_one_folder_are_separate_decks_and_only_the_changed_one_rebuilds()
+    {
+        _repo.Tree.AddRange(["Decks/keynote.pptx", "Decks/keynote.pdf", "Decks/workshop.pptx"]);
+        await _sync.SyncAsync(_source);
+        var decks = await _decks.ListAsync();
+        var keynote = Assert.Single(decks, d => d.Slug == "slides-keynote");
+        var workshop = Assert.Single(decks, d => d.Slug == "slides-workshop");
+        Assert.Equal(DeckKind.PowerPoint, keynote.Kind);
+        Assert.Equal("keynote.pptx", keynote.Entry);
+        Assert.Equal("Decks", keynote.Path);
+        Assert.Equal("workshop", workshop.Title);
+        Assert.True(keynote.ExportPdf);
+
+        // Finish both builds, then change only the keynote's committed PDF export.
+        foreach (var slug in new[] { "slides-keynote", "slides-workshop" })
+        {
+            var req = _runner.Started.Single(s => s.Deck.Slug == slug);
+            Assert.True(await _buildService.CompleteAsync(slug, req.Build.Id, req.CallbackToken, new BuildReport(true, true, true, true, null, null, HasThumbnail: true)));
+        }
+        Assert.True((await _decks.GetAsync("slides-keynote"))!.CurrentHasThumbnail);
+        Assert.True((await _decks.GetAsync("slides-keynote"))!.CurrentHasPptx);
+
+        _repo.Sha = "abcabca0000000000000000000000000000000009";
+        _repo.Changed.Add("Decks/keynote.pdf");
+        var r = await _sync.SyncAsync(await _sources.GetAsync(_source.Id) ?? _source);
+        Assert.Equal(["slides-keynote"], r.Queued);
+    }
+
+    [Fact]
     public async Task Failed_build_is_not_retried_on_unchanged_resync_but_is_on_force()
     {
         _runner.Fail = true;

@@ -24,6 +24,19 @@ public static class DeckServingEndpoints
             => ServeArtifact(slug, ArtifactKind.Pdf, http, access, artifacts, callers, views, cache, ct));
         app.MapGet("/d/{slug}.pptx", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, CancellationToken ct)
             => ServeArtifact(slug, ArtifactKind.Pptx, http, access, artifacts, callers, views, cache, ct));
+        app.MapGet("/d/{slug}.jpg", async (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct) =>
+        {
+            var caller = callers.Resolve(http.User);
+            var result = await access.EvaluateAsync(http, slug, ArtifactKind.Thumbnail, caller, ct);
+            if (result.Deck is null || result.Decision != AccessDecision.Allow || result.Deck.CurrentBuildId is null) return Results.NotFound();
+            var file = await artifacts.OpenArtifactAsync(slug, result.Deck.CurrentBuildId, ArtifactKind.Thumbnail, ct);
+            if (file is null) return Results.NotFound();
+            // The UI appends ?v=<buildId>, so long-lived caching is safe.
+            http.Response.Headers[HeaderNames.CacheControl] = "private, max-age=86400";
+            http.Response.Headers[HeaderNames.XContentTypeOptions] = "nosniff";
+            return Results.Stream(file.Content, "image/jpeg", lastModified: file.LastModified,
+                entityTag: file.ETag is null ? null : new Microsoft.Net.Http.Headers.EntityTagHeaderValue(QuoteEtag(file.ETag)));
+        });
         // Note: routing ignores trailing slashes, so "/d/{slug}" and "/d/{slug}/" both land here with an empty path.
         app.MapMethods("/d/{slug}/{**path}", ["GET", "HEAD"], ServeSite);
         return app;

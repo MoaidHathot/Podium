@@ -50,7 +50,9 @@ public sealed class DeckAccessService(IDeckStore decks, ISourceStore sources, IG
             if (!string.IsNullOrEmpty(linkId) && linkId.Length <= 64)
             {
                 var link = await links.GetAsync(linkId, ct);
-                viaLink = link is not null && !link.Revoked && link.DeckSlug == slug && link.Artifact == artifact
+                // A link for the deck itself also covers its thumbnail.
+                var linkArtifact = artifact == ArtifactKind.Thumbnail ? ArtifactKind.Site : artifact;
+                viaLink = link is not null && !link.Revoked && link.DeckSlug == slug && link.Artifact == linkArtifact
                           && (link.ExpiresAt is null || link.ExpiresAt > DateTimeOffset.UtcNow);
                 if (viaLink && http.Request.Query.ContainsKey("share"))
                 {
@@ -59,7 +61,7 @@ public sealed class DeckAccessService(IDeckStore decks, ISourceStore sources, IG
                         HttpOnly = true,
                         Secure = http.Request.IsHttps,
                         SameSite = SameSiteMode.Lax,
-                        Path = artifact == ArtifactKind.Site ? $"/d/{slug}/" : $"/d/{slug}.{artifact.ToString().ToLowerInvariant()}",
+                        Path = linkArtifact == ArtifactKind.Site ? $"/d/{slug}/" : $"/d/{slug}.{linkArtifact.ToString().ToLowerInvariant()}",
                         MaxAge = link!.ExpiresAt is { } exp ? exp - DateTimeOffset.UtcNow : TimeSpan.FromDays(7),
                     });
                 }

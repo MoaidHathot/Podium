@@ -49,8 +49,13 @@ public sealed record DeckRow(Deck Deck, Source? Source)
         DeckKind.Presenterm => "presenterm",
         DeckKind.Static => "HTML",
         DeckKind.GitPitch => "GitPitch",
+        DeckKind.PowerPoint => "PowerPoint",
+        DeckKind.Pdf => "PDF",
         _ => "Unknown",
     };
+    public string KindCss => Deck.Kind.ToString().ToLowerInvariant();
+    public bool HasThumbnail => Deck.CurrentHasThumbnail && Deck.CurrentBuildId is not null;
+    public string ThumbnailUrl => $"/d/{Deck.Slug}.jpg?v={Deck.CurrentBuildId}";
     public bool Servable => Deck.CurrentBuildId is not null;
     public bool IsSlidev => Deck.Kind == DeckKind.Slidev;
     public string StatusClass => Deck.LatestBuildStatus switch

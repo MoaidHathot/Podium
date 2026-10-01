@@ -22,6 +22,8 @@
 <div class="chips" id="filters" role="group" aria-label="Filters">
     <button class="chip" data-filter="kind" data-value="slidev" aria-pressed="false">Slidev</button>
     <button class="chip" data-filter="kind" data-value="presenterm" aria-pressed="false">presenterm</button>
+    <button class="chip" data-filter="kind" data-value="powerpoint" aria-pressed="false">PowerPoint</button>
+    <button class="chip" data-filter="kind" data-value="pdf" aria-pressed="false">PDF</button>
     <button class="chip" data-filter="kind" data-value="static" aria-pressed="false">HTML</button>
     <button class="chip" data-filter="vis" data-value="public" aria-pressed="false">Public</button>
     <button class="chip" data-filter="vis" data-value="private" aria-pressed="false">Private</button>
@@ -41,7 +43,7 @@ else if (Model.Decks.Count == 0)
 {
     <div class="empty section">
         <h3>No decks found yet</h3>
-        <p>Repositories are scanned for <code>slides.md</code> (Slidev), presenterm decks, and committed HTML exports. If you just connected a repo, the first scan may still be running.</p>
+        <p>Repositories are scanned for <code>slides.md</code> (Slidev), presenterm decks, <code>.pptx</code> and <code>.pdf</code> files, and committed HTML exports. If you just connected a repo, the first scan may still be running.</p>
         <a class="btn" href="/sources">View sources</a>
     </div>
 }

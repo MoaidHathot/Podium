@@ -19,7 +19,7 @@ public sealed class BuildOptions
 }
 
 /// <summary>Report posted by the builder when it finishes.</summary>
-public sealed record BuildReport(bool Success, bool HasSite, bool HasPdf, bool HasPptx, string? Error, IReadOnlyList<string>? Warnings);
+public sealed record BuildReport(bool Success, bool HasSite, bool HasPdf, bool HasPptx, string? Error, IReadOnlyList<string>? Warnings, bool HasThumbnail = false);
 
 public sealed class BuildService(
     IBuildStore builds,
@@ -104,6 +104,7 @@ public sealed class BuildService(
             HasSite = report.HasSite,
             HasPdf = report.HasPdf,
             HasPptx = report.HasPptx,
+            HasThumbnail = report.HasThumbnail,
             Error = report.Success && report.HasSite ? null : (report.Error ?? "Builder reported failure"),
             Warnings = warnings,
         };
@@ -113,10 +114,14 @@ public sealed class BuildService(
         if (deck is not null)
         {
             var previous = deck.CurrentBuildId;
+            var succeeded = build.Status == BuildStatus.Succeeded;
             deck = deck with
             {
                 LatestBuildStatus = build.Status,
-                CurrentBuildId = build.Status == BuildStatus.Succeeded ? build.Id : deck.CurrentBuildId,
+                CurrentBuildId = succeeded ? build.Id : deck.CurrentBuildId,
+                CurrentHasPdf = succeeded ? build.HasPdf : deck.CurrentHasPdf,
+                CurrentHasPptx = succeeded ? build.HasPptx : deck.CurrentHasPptx,
+                CurrentHasThumbnail = succeeded ? build.HasThumbnail : deck.CurrentHasThumbnail,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await decks.UpsertAsync(deck, ct);
@@ -157,7 +162,7 @@ public sealed class BuildService(
         if (current is null) return 0;
         var active = (await builds.ListActiveAsync(ct)).Select(b => b.DeckSlug).ToHashSet(StringComparer.Ordinal);
         var queued = 0;
-        foreach (var deck in allDecks.Where(d => !d.Archived && d.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static))
+        foreach (var deck in allDecks.Where(d => !d.Archived && d.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static or DeckKind.PowerPoint or DeckKind.Pdf))
         {
             if (active.Contains(deck.Slug)) continue;
             var referenceId = deck.CurrentBuildId ?? deck.LatestBuildId;

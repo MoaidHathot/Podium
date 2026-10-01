@@ -34,9 +34,21 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 |---|---|---|
 | Slidev | `slides.md` in a directory | `npm ci` (if `package.json`) + `slidev build --base /d/<slug>/` + `slidev export` |
 | presenterm | `config.yaml` + a `.md` (prefers `main.md`) | `presenterm --export-html`; PDF served if one is committed next to the deck |
+| PowerPoint | any `.pptx` file (one deck per file) | converted to PDF with LibreOffice for in-browser viewing; original offered for download. A committed `.pdf` with the same name is used instead of converting |
+| PDF | any standalone `.pdf` | served in the browser's PDF viewer |
 | Static HTML | committed `.html` with no source deck | copied as-is |
 
-`node_modules`, `dist`, `.slidev`, `bin`, `obj` are ignored. Legacy GitPitch decks are skipped.
+Every build also captures a first-slide thumbnail for the library. `node_modules`, `dist`, `.slidev`, `bin`, `obj` are ignored. Legacy GitPitch decks are skipped.
+
+### Adding a deck
+
+Create a folder anywhere in a connected repository and push:
+
+- **Slidev**: `my-talk/slides.md` (plus `package.json`/`package-lock.json` if you need specific versions, themes or addons; without one Podium builds with its bundled Slidev). `npm create slidev@latest` produces a suitable folder. Set `title:` in the headmatter; the URL becomes `/d/<repo>-<folder>/`.
+- **presenterm**: `my-talk/main.md` + `config.yaml`.
+- **PowerPoint / PDF**: just commit the file; the URL becomes `/d/<repo>-<file-name>/`.
+
+New decks appear in the library within a couple of minutes (webhook) as **Private**; open *Manage* to change visibility or share.
 
 Optional per-deck `.podium.yml` (trusted repositories only): `npmScripts: true` allows lifecycle scripts during install.
 

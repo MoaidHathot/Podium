@@ -27,8 +27,8 @@ public static class AccessPolicy
         if (deck.Archived && !caller.IsOwner) return AccessDecision.Deny;
         if (caller.IsOwner) return AccessDecision.Allow;
 
-        // Only the three deliverables can ever be exposed; logs and anything else are owner-only.
-        if (artifact is not (ArtifactKind.Site or ArtifactKind.Pdf or ArtifactKind.Pptx)) return AccessDecision.Deny;
+        // Only the deliverables can ever be exposed; logs and anything else are owner-only. Thumbnails follow the site.
+        if (artifact is not (ArtifactKind.Site or ArtifactKind.Pdf or ArtifactKind.Pptx or ArtifactKind.Thumbnail)) return AccessDecision.Deny;
 
         var visibility = artifact switch
         {

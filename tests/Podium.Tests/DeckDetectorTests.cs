@@ -60,4 +60,29 @@ public class DeckDetectorTests
         var d = Assert.Single(decks);
         Assert.Equal("a/b", d.Path);
     }
+
+    [Fact]
+    public void PowerPoint_and_pdf_files_are_decks_of_their_own()
+    {
+        var decks = DeckDetector.Detect([
+            "Talks/2024/intro.pptx", "Talks/2024/intro.pdf",          // pptx + its export => one PowerPoint deck
+            "Talks/2024/advanced.pptx",                               // second pptx in the same directory
+            "Talks/2024/handout.pdf",                                 // standalone pdf
+            "Talks/2024/~$intro.pptx",                                // Office lock file
+            "Talks/2024/notes.md",
+            "Microsoft/casual/ai/How-I-ended-up-with-over-75-AI-agents/slides.md",
+            "Microsoft/casual/ai/How-I-ended-up-with-over-75-AI-agents/slides-export.pdf", // export inside a Slidev deck: ignored
+        ]);
+
+        Assert.Equal(4, decks.Count);
+        Assert.Equal(2, decks.Count(d => d.Kind == DeckKind.PowerPoint));
+        Assert.Contains(decks, d => d.Kind == DeckKind.PowerPoint && d.Entry == "intro.pptx" && d.Path == "Talks/2024");
+        Assert.Contains(decks, d => d.Kind == DeckKind.PowerPoint && d.Entry == "advanced.pptx");
+        Assert.Contains(decks, d => d.Kind == DeckKind.Pdf && d.Entry == "handout.pdf");
+        Assert.DoesNotContain(decks, d => d.Entry == "intro.pdf");
+        Assert.DoesNotContain(decks, d => d.Entry == "~$intro.pptx");
+        Assert.Contains(decks, d => d.Kind == DeckKind.Slidev);
+        Assert.True(DeckDetector.IsFileBased(DeckKind.PowerPoint));
+        Assert.False(DeckDetector.IsFileBased(DeckKind.Slidev));
+    }
 }

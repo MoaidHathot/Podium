@@ -14,6 +14,14 @@ public static partial class Slug
         return Normalize(raw);
     }
 
+    /// <summary>Slug for a file-based deck (PowerPoint, PDF): "{repo}-{file-name-without-extension}".</summary>
+    public static string ForFile(string repo, string fileName)
+    {
+        var dot = fileName.LastIndexOf('.');
+        var stem = dot > 0 ? fileName[..dot] : fileName;
+        return Normalize($"{repo}-{stem}");
+    }
+
     public static string Normalize(string input)
     {
         var s = input.Normalize(NormalizationForm.FormD);

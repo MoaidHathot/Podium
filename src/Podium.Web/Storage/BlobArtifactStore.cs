@@ -35,6 +35,7 @@ public sealed class BlobArtifactStore(BlobServiceClient service, ILogger<BlobArt
             ArtifactKind.Pdf => "deck.pdf",
             ArtifactKind.Pptx => "deck.pptx",
             ArtifactKind.Log => "build.log",
+            ArtifactKind.Thumbnail => "thumbnail.jpg",
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
         return await OpenAsync(deckSlug, buildId, name, ct);

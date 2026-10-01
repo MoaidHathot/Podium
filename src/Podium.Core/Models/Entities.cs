@@ -53,6 +53,10 @@ public sealed record Deck
     public DateTimeOffset? LastCommitAt { get; init; }
     /// <summary>Id of the most recent successful build, if any.</summary>
     public string? CurrentBuildId { get; init; }
+    /// <summary>Artifacts available in the current build (denormalised for the library view).</summary>
+    public bool CurrentHasPdf { get; init; }
+    public bool CurrentHasPptx { get; init; }
+    public bool CurrentHasThumbnail { get; init; }
     public string? LatestBuildId { get; init; }
     public BuildStatus? LatestBuildStatus { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -78,6 +82,7 @@ public sealed record Build
     public bool HasSite { get; init; }
     public bool HasPdf { get; init; }
     public bool HasPptx { get; init; }
+    public bool HasThumbnail { get; init; }
     /// <summary>Features the deck uses that are not supported remotely (reported by the builder).</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public string? TriggeredBy { get; init; }

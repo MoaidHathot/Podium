@@ -24,7 +24,7 @@ public sealed class LocalArtifactStore(IConfiguration config, IHostEnvironment e
 
     public Task<ArtifactObject?> OpenArtifactAsync(string deckSlug, string buildId, ArtifactKind kind, CancellationToken ct = default)
     {
-        var name = kind switch { ArtifactKind.Pdf => "deck.pdf", ArtifactKind.Pptx => "deck.pptx", ArtifactKind.Log => "build.log", _ => throw new ArgumentOutOfRangeException(nameof(kind)) };
+        var name = kind switch { ArtifactKind.Pdf => "deck.pdf", ArtifactKind.Pptx => "deck.pptx", ArtifactKind.Log => "build.log", ArtifactKind.Thumbnail => "thumbnail.jpg", _ => throw new ArgumentOutOfRangeException(nameof(kind)) };
         return Open(Path.Combine(BuildDir(deckSlug, buildId), name), BuildDir(deckSlug, buildId));
     }
 
