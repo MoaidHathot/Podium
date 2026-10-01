@@ -12,7 +12,9 @@ public sealed class ExternalHostMiddleware(RequestDelegate next, ViewTokenServic
 {
     public const string CookieName = "podium_view";
     public const string QueryParam = "podium_vt";
-    private static readonly PathString[] AllowedPrefixes = ["/d", "/_podium", "/ws/sync", "/healthz", "/css", "/js", "/favicon.svg"];
+    // /api/builds: builder callbacks are bearer-token authenticated and session-free, and the callback base URL is
+    // typically this very host (platform FQDN).
+    private static readonly PathString[] AllowedPrefixes = ["/d", "/_podium", "/ws/sync", "/api/builds", "/healthz", "/css", "/js", "/favicon.svg"];
     private static readonly System.Text.RegularExpressions.Regex VersionApi = new("^/api/decks/[a-z0-9][a-z0-9-]*/version$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     public async Task InvokeAsync(HttpContext http)
