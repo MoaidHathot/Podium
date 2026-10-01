@@ -194,9 +194,18 @@ async function buildSlidev(deckDir, outDir, result) {
     const browserOk = await ensurePlaywrightBrowser(deckDir);
     if (!browserOk) result.warnings.push('Chromium unavailable; PDF/PPTX export skipped');
     else {
+      // Slidev's exporter boots a Vite dev server; the first run pays for dependency optimisation and can miss
+      // Playwright's fixed 30s element timeout on small machines. A second attempt reuses the warm cache.
+      const exportWithRetry = async (args, outFile) => {
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const r = await run(process.execPath, [slidevBin, 'export', entry, ...args, '--output', outFile, '--timeout', '120000'], { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 8 * 60 * 1000) });
+          if (r.code === 0 && existsSync(outFile)) return true;
+          if (attempt === 1) log('Export failed on first attempt; retrying once with a warm cache');
+        }
+        return false;
+      };
       if (exportPdf) {
-        const r = await run(process.execPath, [slidevBin, 'export', entry, '--output', join(outDir, 'deck.pdf'), '--timeout', '90000'], { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 8 * 60 * 1000) });
-        if (r.code === 0 && existsSync(join(outDir, 'deck.pdf'))) {
+        if (await exportWithRetry([], join(outDir, 'deck.pdf'))) {
           result.hasPdf = true;
           // Make Slidev's own "download PDF" button (headmatter download: true) work inside the served site.
           const name = typeof fm.exportFilename === 'string' && fm.exportFilename ? `${fm.exportFilename}.pdf` : 'slidev-exported.pdf';
@@ -204,8 +213,7 @@ async function buildSlidev(deckDir, outDir, result) {
         } else result.warnings.push('PDF export failed (see build log)');
       }
       if (exportPptx) {
-        const r = await run(process.execPath, [slidevBin, 'export', entry, '--format', 'pptx', '--output', join(outDir, 'deck.pptx'), '--timeout', '90000'], { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 8 * 60 * 1000) });
-        if (r.code === 0 && existsSync(join(outDir, 'deck.pptx'))) result.hasPptx = true;
+        if (await exportWithRetry(['--format', 'pptx'], join(outDir, 'deck.pptx'))) result.hasPptx = true;
         else result.warnings.push('PPTX export failed (see build log)');
       }
     }
@@ -233,7 +241,12 @@ async function buildPresenterm(deckDir, outDir, result) {
   const site = join(outDir, 'site');
   mkdirSync(site, { recursive: true });
   const html = join(site, 'index.html');
-  const r = await run('presenterm', ['--export-html', entry, '--output', html], { cwd: deckDir, allowFail: true });
+  // presenterm probes the terminal even when exporting; without a TTY it fails with "Inappropriate ioctl for device".
+  // On Linux, util-linux's `script` lends it a pseudo-terminal.
+  const usePty = process.platform !== 'win32' && existsSync('/usr/bin/script');
+  const r = usePty
+    ? await run('/usr/bin/script', ['-qec', `presenterm --export-html ${shellQuote(entry)} --output ${shellQuote(html)}`, '/dev/null'], { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color', COLUMNS: '120', LINES: '30' } })
+    : await run('presenterm', ['--export-html', entry, '--output', html], { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color' } });
   const base = entry.replace(/\.md$/i, '');
   if (r.code === 0 && existsSync(html)) result.hasSite = true;
   else {
@@ -248,6 +261,8 @@ async function buildPresenterm(deckDir, outDir, result) {
     else result.warnings.push('No PDF: presenterm PDF export needs weasyprint; commit an exported PDF next to the deck to serve one');
   }
 }
+
+function shellQuote(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 
 function findSibling(dir, base, ext) {
   const exact = join(dir, base + ext);
@@ -316,12 +331,30 @@ async function upload(outDir) {
 }
 
 async function report(body) {
-  const res = await fetch(callbackUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${callbackToken}` },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`Report rejected: HTTP ${res.status}`);
+  // The web app may be scaling up from zero, or an ingress binding may still be propagating: retry with backoff.
+  const delays = [0, 5000, 10000, 20000, 40000, 60000, 60000];
+  let lastError;
+  for (const delay of delays) {
+    if (delay) await new Promise((r) => setTimeout(r, delay));
+    try {
+      const res = await fetch(callbackUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${callbackToken}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (res.ok) return;
+      // 401 means the token is invalid/expired; retrying cannot help.
+      if (res.status === 401) throw new Error(`Report rejected: HTTP ${res.status}`);
+      lastError = new Error(`Report rejected: HTTP ${res.status}`);
+    } catch (e) {
+      if (String(e.message).startsWith('Report rejected: HTTP 401')) throw e;
+      lastError = e;
+      const cause = e && e.cause ? ` (${e.cause.code || ''} ${e.cause.message || ''})` : '';
+      process.stdout.write(`Report attempt failed: ${scrub(e.message)}${scrub(cause)}; retrying\n`);
+    }
+  }
+  throw lastError || new Error('Report failed');
 }
 
 // ---------------------------------------------------------------------------------------------------------------

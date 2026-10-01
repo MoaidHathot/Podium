@@ -17,7 +17,9 @@ param(
     [string] $PublicHostname = 'slides.moaid.codes',
     [string] $AppName = 'Podium Slides',
     [int] $Port = 8123,
-    [string] $DevCallback = 'http://localhost:5187/signin-github'
+    [string] $DevCallback = 'http://localhost:5187/signin-github',
+    [string] $Browser,
+    [int] $TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
 
@@ -32,7 +34,7 @@ $manifest = @{
     setup_on_update = $false
     hook_attributes = @{ url = "https://$PublicHostname/api/github/webhook"; active = $true }
     default_permissions = @{ contents = 'read'; metadata = 'read' }
-    default_events = @('push', 'installation_repositories', 'repository')
+    default_events = @('push', 'repository')   # installation* events are always delivered and must not be listed
 } | ConvertTo-Json -Depth 5 -Compress
 
 $state = [Guid]::NewGuid().ToString('N')
@@ -53,10 +55,10 @@ $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
 Write-Host "Listening on http://localhost:$Port/ ... opening browser"
-Start-Process "http://localhost:$Port/"
+if ($Browser) { Start-Process -FilePath $Browser -ArgumentList "http://localhost:$Port/" } else { Start-Process "http://localhost:$Port/" }
 
 $code = $null
-$deadline = (Get-Date).AddMinutes(10)
+$deadline = (Get-Date).AddMinutes($TimeoutMinutes)
 try {
     while (-not $code -and (Get-Date) -lt $deadline) {
         $task = $listener.GetContextAsync()

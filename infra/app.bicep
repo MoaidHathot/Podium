@@ -16,6 +16,9 @@ param gitHubAppId string
 param gitHubAppSlug string
 
 param environmentId string
+
+@description('Default domain of the Container Apps environment, e.g. thankfulforest-8ac5ebef.westeurope.azurecontainerapps.io')
+param environmentDefaultDomain string
 param builderJobId string
 param storageAccountName string
 param keyVaultName string
@@ -70,10 +73,14 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_CLIENT_ID', value: webIdentityClientId }
             { name: 'Podium__PublicBaseUrl', value: publicBaseUrl }
             { name: 'Podium__OwnerGitHubId', value: string(ownerGitHubId) }
+            // Builder callbacks use the platform FQDN so they never depend on custom-domain/certificate state.
+            { name: 'Podium__CallbackBaseUrl', value: 'https://${baseName}-web.${environmentDefaultDomain}' }
             { name: 'Podium__SigningKey', secretRef: 'podium-signing-key' }
             { name: 'Storage__AccountName', value: storageAccountName }
             { name: 'Builder__Mode', value: 'ContainerAppsJob' }
             { name: 'Builder__JobResourceId', value: builderJobId }
+            { name: 'Builder__Cpu', value: '2' }
+            { name: 'Builder__Memory', value: '4Gi' }
             { name: 'GitHub__AppId', value: gitHubAppId }
             { name: 'GitHub__AppSlug', value: gitHubAppSlug }
             { name: 'GitHub__PrivateKeyPem', secretRef: 'github-private-key' }

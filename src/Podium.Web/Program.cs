@@ -28,7 +28,7 @@ builder.Services.AddOptions<PodiumOptions>().Bind(config.GetSection(PodiumOption
 builder.Services.AddOptions<GitHubOptions>().Bind(config.GetSection(GitHubOptions.Section));
 builder.Services.AddOptions<StorageOptions>().Bind(config.GetSection(StorageOptions.Section));
 builder.Services.AddOptions<BuilderOptions>().Bind(config.GetSection(BuilderOptions.Section));
-builder.Services.AddOptions<BuildOptions>().Configure<IOptions<PodiumOptions>>((o, p) => o.PublicBaseUrl = p.Value.PublicBaseUrl);
+builder.Services.AddOptions<BuildOptions>().Configure<IOptions<PodiumOptions>>((o, p) => { o.PublicBaseUrl = p.Value.PublicBaseUrl; o.CallbackBaseUrl = p.Value.CallbackBaseUrl; });
 
 // ----- Storage -----
 var storage = config.GetSection(StorageOptions.Section).Get<StorageOptions>() ?? new StorageOptions();

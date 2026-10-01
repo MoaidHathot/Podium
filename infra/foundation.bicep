@@ -16,6 +16,9 @@ param githubRepository string
 @description('Branch allowed to deploy.')
 param githubBranch string = 'main'
 
+@description('Exact OIDC subjects GitHub presents (GitHub may embed owner/repo ids). Branch and environment subjects are always added.')
+param githubExtraSubjects array = []
+
 @description('Builder container image.')
 param builderImage string = 'ghcr.io/moaidhathot/podium/builder:latest'
 
@@ -46,16 +49,21 @@ resource deployIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
 }
 
 // GitHub Actions authenticates as this identity through workload identity federation: no client secret anywhere.
-resource deployFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' = {
+var githubSubjects = union([
+  'repo:${githubRepository}:ref:refs/heads/${githubBranch}'
+  'repo:${githubRepository}:environment:production'
+], githubExtraSubjects)
+
+@batchSize(1) // federated credentials on one identity cannot be written concurrently
+resource deployFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-07-31-preview' = [for (subject, i) in githubSubjects: {
   parent: deployIdentity
-  name: 'github-${replace(githubBranch, '/', '-')}'
+  name: 'github-${i}'
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${githubRepository}:ref:refs/heads/${githubBranch}'
+    subject: subject
     audiences: [ 'api://AzureADTokenExchange' ]
   }
-}
-
+}]
 // ---------------------------------------------------------------------------------------------------------------
 // Observability
 // ---------------------------------------------------------------------------------------------------------------
@@ -149,7 +157,7 @@ resource builderJob 'Microsoft.App/jobs@2024-03-01' = {
         {
           name: 'builder'
           image: builderImage
-          resources: { cpu: json('1.0'), memory: '2Gi' }
+          resources: { cpu: json('2.0'), memory: '4Gi' }
           env: [ { name: 'PODIUM_WORKDIR', value: '/work' } ]
         }
       ]

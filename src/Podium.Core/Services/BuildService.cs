@@ -8,8 +8,10 @@ namespace Podium.Core.Services;
 
 public sealed class BuildOptions
 {
-    /// <summary>Public base URL of the service, used for builder callbacks.</summary>
+    /// <summary>Public base URL of the service.</summary>
     public required Uri PublicBaseUrl { get; set; }
+    /// <summary>Base URL the builder uses to report back; defaults to <see cref="PublicBaseUrl"/>. Point it at the platform FQDN so callbacks never depend on custom-domain state.</summary>
+    public Uri? CallbackBaseUrl { get; set; }
     public TimeSpan TrustedTimeout { get; set; } = TimeSpan.FromMinutes(15);
     public TimeSpan UntrustedTimeout { get; set; } = TimeSpan.FromMinutes(8);
     /// <summary>Builds older than this that still report Running are marked failed.</summary>
@@ -54,7 +56,7 @@ public sealed class BuildService(
             var cloneUrl = await repos.GetAuthenticatedCloneUrlAsync(source, ct);
             var upload = await artifacts.CreateUploadUriAsync(deck.Slug, build.Id, timeout + TimeSpan.FromMinutes(5), ct);
             var callbackToken = tokens.Issue(deck.Slug, build.Id, timeout + TimeSpan.FromMinutes(10));
-            var callback = new Uri(options.Value.PublicBaseUrl, $"/api/builds/{Uri.EscapeDataString(deck.Slug)}/{build.Id}/report");
+            var callback = new Uri(options.Value.CallbackBaseUrl ?? options.Value.PublicBaseUrl, $"/api/builds/{Uri.EscapeDataString(deck.Slug)}/{build.Id}/report");
 
             var execId = await runner.StartAsync(new BuildRequest(build, deck, source, cloneUrl, upload, callback, callbackToken, timeout), ct);
 

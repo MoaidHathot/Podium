@@ -9,6 +9,9 @@ public sealed class PodiumOptions
     /// <summary>Public origin, e.g. https://slides.moaid.codes</summary>
     [Required] public required Uri PublicBaseUrl { get; set; }
 
+    /// <summary>Optional base URL for builder callbacks (e.g. the platform FQDN); defaults to PublicBaseUrl.</summary>
+    public Uri? CallbackBaseUrl { get; set; }
+
     /// <summary>Numeric GitHub user id of the single owner. Logins can change; ids cannot.</summary>
     [Range(1, long.MaxValue)] public required long OwnerGitHubId { get; set; }
 
