@@ -27,7 +27,7 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Self-updating builds**: when the builder image changes, decks built by the previous builder are rebuilt automatically (failed ones are retried).
 - **External decks**: public repositories you do not own can be added. They build in the same isolated job and are served from a *separate origin* (`Podium:ExternalBaseUrl`, by default the platform FQDN) with a short-lived view token instead of your session, so their code can never read your session or private decks.
 - **PowerPoint decks** can be viewed as a PDF rendition (default, nothing leaves Podium) or through Microsoft's Office Online viewer (faithful rendering; Microsoft's service fetches the file via a 20-minute signed link). Per-deck setting under *Manage*.
-- **Library**: group by repository/type/visibility/year, sort, grid or compact list, filters, pinned and recently-presented shelves; preferences are remembered per browser.
+- **Library**: group by repository/type/visibility/year, sort, grid or an aligned compact list, filters, collapsible Pinned and Recently-presented shelves (decks can be removed from recents until presented again); preferences are remembered per browser.
 - **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; secrets in Key Vault.
 
 ## Deck detection

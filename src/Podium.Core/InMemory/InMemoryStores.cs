@@ -57,6 +57,16 @@ public sealed class InMemoryShareLinkStore : IShareLinkStore
 public sealed class InMemoryViewHistoryStore : IViewHistoryStore
 {
     private readonly ConcurrentQueue<ViewEvent> _items = new();
+    private readonly ConcurrentDictionary<(string Principal, string Slug), DateTimeOffset> _dismissals = new();
+
+    public Task DismissRecentAsync(string principal, string deckSlug, DateTimeOffset at, CancellationToken ct = default)
+    {
+        _dismissals[(principal, deckSlug)] = at;
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyDictionary<string, DateTimeOffset>> GetRecentDismissalsAsync(string principal, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyDictionary<string, DateTimeOffset>>(_dismissals.Where(kv => kv.Key.Principal == principal).ToDictionary(kv => kv.Key.Slug, kv => kv.Value, StringComparer.Ordinal));
     public Task RecordAsync(ViewEvent e, CancellationToken ct = default)
     {
         _items.Enqueue(e);

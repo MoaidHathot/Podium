@@ -22,6 +22,7 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
         var sourceMap = Sources.ToDictionary(s => s.Id, StringComparer.Ordinal);
 
         var lastViewed = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        IReadOnlyDictionary<string, DateTimeOffset> dismissed = new Dictionary<string, DateTimeOffset>();
         if (caller.Principal is not null)
         {
             foreach (var v in await views.RecentForPrincipalAsync(caller.Principal, 200, ct))
@@ -29,19 +30,27 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
                 if (v.Artifact != ArtifactKind.Site) continue;
                 if (!lastViewed.TryGetValue(v.DeckSlug, out var at) || v.At > at) lastViewed[v.DeckSlug] = v.At;
             }
+            dismissed = await views.GetRecentDismissalsAsync(caller.Principal, ct);
         }
 
         var all = await decks.ListAsync(includeArchived: false, ct);
         var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null)).ToList();
         Decks = rows.OrderByDescending(r => r.Deck.LastCommitAt ?? r.Deck.UpdatedAt).ToList();
         Pinned = Decks.Where(r => r.Deck.Pinned).ToList();
-        RecentlyViewed = rows.Where(r => r.LastViewed is not null).OrderByDescending(r => r.LastViewed).Take(6).ToList();
+        // A dismissed deck stays hidden from the shelf until it is presented again (a view newer than the dismissal).
+        RecentlyViewed = rows
+            .Where(r => r.LastViewed is { } seen && (!dismissed.TryGetValue(r.Deck.Slug, out var gone) || seen > gone))
+            .OrderByDescending(r => r.LastViewed).Take(6)
+            .Select(r => r with { InRecentShelf = true })
+            .ToList();
         AnyBuilding = all.Any(d => d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running);
     }
 }
 
 public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastViewed)
 {
+    /// <summary>True when rendered inside the "Recently presented" shelf (enables the dismiss action).</summary>
+    public bool InRecentShelf { get; init; }
     public string RepoLabel => Source?.FullName ?? Deck.SourceId;
     public string KindLabel => Deck.Kind switch
     {

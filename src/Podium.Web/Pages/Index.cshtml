@@ -83,27 +83,36 @@ else
 
     @if (Model.Pinned.Count > 0)
     {
-        <section class="section shelf" data-section="pinned">
-            <div class="section-head"><h2>Pinned</h2></div>
-            <div class="grid grid-shelf">
+        <section class="section group shelf" data-section="pinned" data-group-key="shelf:pinned">
+            <div class="section-head">
+                <button class="group-toggle" type="button" aria-expanded="true">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                    <h2>Pinned</h2>
+                </button>
+                <span class="faint count">@Model.Pinned.Count deck@(Model.Pinned.Count == 1 ? "" : "s")</span>
+            </div>
+            <div class="grid cards-grid">
                 @foreach (var r in Model.Pinned) { <partial name="_DeckCard" model="r" /> }
             </div>
         </section>
     }
-    @if (Model.RecentlyViewed.Count > 0)
-    {
-        <section class="section shelf" data-section="recent-viewed">
-            <div class="section-head"><h2>Recently presented</h2></div>
-            <div class="grid grid-shelf">
-                @foreach (var r in Model.RecentlyViewed) { <partial name="_DeckCard" model="r" /> }
-            </div>
-        </section>
-    }
+    <section class="section group shelf @(Model.RecentlyViewed.Count == 0 ? "hidden" : "")" data-section="recent-viewed" data-group-key="shelf:recent" id="recent-shelf">
+        <div class="section-head">
+            <button class="group-toggle" type="button" aria-expanded="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                <h2>Recently presented</h2>
+            </button>
+            <span class="faint count" data-recent-count>@Model.RecentlyViewed.Count deck@(Model.RecentlyViewed.Count == 1 ? "" : "s")</span>
+        </div>
+        <div class="grid cards-grid">
+            @foreach (var r in Model.RecentlyViewed) { <partial name="_DeckCard" model="r" /> }
+        </div>
+    </section>
 
     <div id="groups" class="section" aria-live="polite">
         <section class="section group" data-group-key="all">
             <div class="section-head"><h2>All decks</h2><span class="faint count"></span></div>
-            <div class="grid" id="pool">
+            <div class="grid cards-grid" id="pool">
                 @foreach (var r in Model.Decks) { <partial name="_DeckCard" model="r" /> }
             </div>
         </section>
@@ -162,7 +171,8 @@ else
 
   function render() {
     const filtering = search.value.trim().length > 0 || state.kind || state.vis || state.status;
-    shelves.forEach((s) => s.classList.toggle('hidden', !!filtering));
+    // Shelves step aside while searching/filtering; an emptied shelf (all recents dismissed) stays hidden.
+    shelves.forEach((s) => s.classList.toggle('hidden', !!filtering || s.querySelectorAll('.card').length === 0));
     clearBtn.classList.toggle('hidden', !filtering);
     document.body.dataset.group = state.group;
     document.body.dataset.density = state.density;
@@ -191,7 +201,7 @@ else
       const count = document.createElement('span'); count.className = 'faint count'; count.textContent = `${groups.get(key).length} deck${groups.get(key).length === 1 ? '' : 's'}`;
       btn.addEventListener('click', () => { state.collapsed[state.group + ':' + key] = !state.collapsed[state.group + ':' + key]; save(); render(); });
       head.append(btn, count);
-      const grid = document.createElement('div'); grid.className = 'grid';
+      const grid = document.createElement('div'); grid.className = 'grid cards-grid';
       grid.append(...groups.get(key));
       sec.append(head, grid);
       groupsRoot.append(sec);
@@ -210,6 +220,34 @@ else
     render();
   }));
   clearBtn.addEventListener('click', () => { state.kind = state.vis = state.status = null; search.value = ''; chips.forEach((c) => c.setAttribute('aria-pressed', 'false')); render(); });
+
+  // Shelves (Pinned, Recently presented) are server-rendered but behave like any other group: collapsible, remembered.
+  for (const shelf of shelves) {
+    const key = shelf.dataset.groupKey;
+    const btn = shelf.querySelector('.group-toggle');
+    const apply = () => { const collapsed = !!state.collapsed[key]; shelf.classList.toggle('collapsed', collapsed); btn.setAttribute('aria-expanded', String(!collapsed)); };
+    btn.addEventListener('click', () => { state.collapsed[key] = !state.collapsed[key]; save(); apply(); });
+    apply();
+  }
+
+  // Remove a deck from "Recently presented" (it returns the next time it is presented).
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-dismiss-recent]');
+    if (!btn) return;
+    e.preventDefault();
+    const slug = btn.dataset.dismissRecent;
+    const card = btn.closest('.card');
+    btn.disabled = true;
+    try {
+      await Podium.api('POST', `/api/recent/${slug}/dismiss`);
+      card.remove();
+      const shelf = document.getElementById('recent-shelf');
+      const left = shelf.querySelectorAll('.card').length;
+      shelf.querySelector('[data-recent-count]').textContent = `${left} deck${left === 1 ? '' : 's'}`;
+      if (left === 0) shelf.classList.add('hidden');
+      Podium.toast('Removed from recently presented', 'ok');
+    } catch (err) { btn.disabled = false; Podium.toast(err.message, 'error'); }
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === '/' && document.activeElement !== search && !/input|textarea|select/i.test(document.activeElement?.tagName || '')) { e.preventDefault(); search.focus(); search.select(); }
     if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; render(); search.blur(); }

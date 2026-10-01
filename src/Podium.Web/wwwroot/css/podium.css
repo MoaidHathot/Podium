@@ -188,23 +188,54 @@ label { font-size: .9rem; color: var(--text-muted); }
 .group .count { font-size: .82rem; }
 body[data-group="repo"] .card .repo { display: none; }
 
-/* Compact list density */
-body[data-density="list"] #groups .grid { display: flex; flex-direction: column; gap: .4rem; }
-body[data-density="list"] #groups .card { flex-direction: row; align-items: center; }
-body[data-density="list"] #groups .card-thumb { flex: 0 0 128px; aspect-ratio: 16 / 9; border-bottom: 0; border-right: 1px solid var(--border); }
-body[data-density="list"] #groups .thumb-placeholder { font-size: .9rem; }
-body[data-density="list"] #groups .card-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; grid-template-areas: "title meta actions" "sub meta actions"; align-items: center; gap: .15rem .9rem; padding: .5rem .9rem; }
-body[data-density="list"] #groups .card-title { grid-area: title; font-size: .98rem; }
-body[data-density="list"] #groups .card-sub { grid-area: sub; }
-body[data-density="list"] #groups .card-meta { grid-area: meta; }
-body[data-density="list"] #groups .card-actions { grid-area: actions; margin: 0; flex-wrap: nowrap; }
-body[data-density="list"] #groups .card-actions .spacer { display: none; }
-body[data-density="list"] #groups .thumb-badge { display: none; }
-@media (max-width: 760px) {
-  body[data-density="list"] #groups .card-body { grid-template-columns: 1fr; grid-template-areas: "title" "sub" "meta" "actions"; }
-  body[data-density="list"] #groups .card-thumb { flex-basis: 96px; }
+/* Compact list density.
+   Every row is a CSS subgrid of its group, so thumbnail, text, metadata and each action button share the same
+   column tracks across all rows: "Present" sits under "Present", "Manage" under "Manage". Columns:
+   1 thumb | 2 title+path | 3 badges/status | 4 primary | 5 presenter | 6 PDF | 7 PPTX | 8 manage.
+   Action slots have fixed minimum widths and the text/meta columns are proportional, so every group on the page
+   (all equally wide) resolves to the same tracks and rows align across groups too. */
+@media (min-width: 901px) {
+  body[data-density="list"] .cards-grid {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1.6fr) minmax(13rem, 1fr) minmax(5.6rem, max-content) minmax(6.4rem, max-content) minmax(3.9rem, max-content) minmax(4.5rem, max-content) minmax(5.4rem, max-content);
+    column-gap: 0; row-gap: .4rem;
+  }
+  body[data-density="list"] .cards-grid .card { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 64px; }
+  body[data-density="list"] .cards-grid .card-body,
+  body[data-density="list"] .cards-grid .card-actions { display: contents; }
+  body[data-density="list"] .cards-grid .card-thumb { grid-column: 1; align-self: stretch; aspect-ratio: auto; border-bottom: 0; border-right: 1px solid var(--border); }
+  body[data-density="list"] .cards-grid .card-thumb img { height: 100%; }
+  body[data-density="list"] .cards-grid .thumb-placeholder { font-size: .9rem; }
+  body[data-density="list"] .cards-grid .thumb-badge { display: none; }
+  body[data-density="list"] .cards-grid .card-text { grid-column: 2; min-width: 0; padding: .45rem .75rem .45rem .8rem; display: flex; flex-direction: column; gap: .1rem; }
+  body[data-density="list"] .cards-grid .card-title { font-size: .98rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Two tidy lines: badges + build status, then the last-updated date. */
+  body[data-density="list"] .cards-grid .card-meta { grid-column: 3; min-width: 0; gap: .2rem .4rem; padding: 0 1rem 0 .5rem; line-height: 1.3; }
+  body[data-density="list"] .cards-grid .card-meta .status { white-space: nowrap; }
+  body[data-density="list"] .cards-grid .card-meta .updated { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body[data-density="list"] .cards-grid .card-meta .sep { display: none; }
+  body[data-density="list"] .cards-grid .card-meta .updated { color: var(--text-faint); }
+  body[data-density="list"] .cards-grid .spacer { display: none; }
+  body[data-density="list"] .cards-grid .act-primary   { grid-column: 4; }
+  body[data-density="list"] .cards-grid .act-presenter { grid-column: 5; }
+  body[data-density="list"] .cards-grid .act-pdf       { grid-column: 6; }
+  body[data-density="list"] .cards-grid .act-pptx      { grid-column: 7; }
+  body[data-density="list"] .cards-grid .act-manage    { grid-column: 8; margin-right: .6rem; }
+  body[data-density="list"] .cards-grid .card-actions > .btn { justify-self: start; }
+  /* The dismiss button keeps overlaying the thumbnail's corner (top-right of the 120px thumb). */
+  body[data-density="list"] .cards-grid .card-dismiss  { top: .35rem; right: auto; left: calc(120px - 1.7rem - .35rem); width: 1.5rem; height: 1.5rem; }
 }
 
+/* Remove-from-recents button: sits on the thumbnail in grid mode, becomes a trailing column in list mode. */
+.card-dismiss {
+  position: absolute; top: .5rem; right: .5rem; z-index: 2;
+  display: inline-flex; align-items: center; justify-content: center; width: 1.7rem; height: 1.7rem;
+  border-radius: 50%; border: 1px solid var(--border-strong); background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text-muted); cursor: pointer; backdrop-filter: blur(6px); opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
+}
+.card:hover .card-dismiss, .card:focus-within .card-dismiss, .card-dismiss:focus-visible { opacity: 1; }
+.card-dismiss:hover { color: var(--text); border-color: var(--text-faint); }
+@media (hover: none) { .card-dismiss { opacity: 1; } }
 /* Sections and cards */
 .section { margin-top: 2rem; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: .75rem; }
@@ -216,6 +247,7 @@ body[data-density="list"] #groups .thumb-badge { display: none; }
 }
 .card:hover { border-color: var(--border-strong); }
 .card-body { display: flex; flex-direction: column; gap: .55rem; padding: .85rem 1rem .85rem; }
+.card-text { display: flex; flex-direction: column; gap: .4rem; min-width: 0; }
 .card-thumb {
   position: relative; display: block; aspect-ratio: 16 / 9; background: var(--bg-elev-2); overflow: hidden;
   border-bottom: 1px solid var(--border);

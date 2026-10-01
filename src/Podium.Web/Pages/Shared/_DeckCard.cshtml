@@ -3,7 +3,7 @@
     var d = Model.Deck;
     var kind = Model.KindCss;
     var vis = d.Visibility.ToString().ToLowerInvariant();
-    var status = d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running ? "building" : d.LatestBuildStatus == BuildStatus.Failed ? "failed" : "ok";
+    var status = Model.StatusKey;
     var visTitle = d.Visibility switch
     {
         Visibility.Public => "Anyone can view",
@@ -12,6 +12,7 @@
         _ => "Only you",
     };
     var canPresent = Model.Servable && d.Kind != DeckKind.GitPitch;
+    var isDoc = d.Kind is DeckKind.PowerPoint or DeckKind.Pdf;
 }
 <article class="card @(d.Pinned ? "pinned" : "") @(d.Archived ? "archived" : "")"
          data-slug="@d.Slug" data-search="@Model.SearchText" data-kind="@kind" data-kind-label="@Model.KindLabel" data-vis="@vis" data-vis-label="@Model.VisibilityLabel" data-status="@status"
@@ -40,50 +41,50 @@
         }
     </a>
     <div class="card-body">
-        <div class="card-title"><a href="/decks/@d.Slug">@d.Title</a></div>
-        <div class="card-sub" title="@Model.RepoLabel/@d.Path">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
-            <span class="path"><span class="@(string.IsNullOrEmpty(d.Path) ? "repo-root" : "repo")">@Model.RepoLabel@(string.IsNullOrEmpty(d.Path) ? "" : "/")</span>@d.Path</span>
+        <div class="card-text">
+            <div class="card-title"><a href="/decks/@d.Slug">@d.Title</a></div>
+            <div class="card-sub" title="@Model.RepoLabel/@d.Path">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+                <span class="path"><span class="@(string.IsNullOrEmpty(d.Path) ? "repo-root" : "repo")">@Model.RepoLabel@(string.IsNullOrEmpty(d.Path) ? "" : "/")</span>@d.Path</span>
+            </div>
         </div>
         <div class="card-meta">
             <span class="badge badge-kind-@kind">@Model.KindLabel</span>
-            <span class="badge badge-vis-@vis" title="@visTitle">
-                @switch (d.Visibility)
-                {
-                    case Visibility.Public: <text>Public</text> break;
-                    case Visibility.Link: <text>Link</text> break;
-                    case Visibility.Shared: <text>Shared</text> break;
-                    default: <text>Private</text> break;
-                }
-            </span>
-            <span><span class="dot @Model.StatusClass"></span> <span data-status-label>@Model.StatusLabel</span></span>
+            <span class="badge badge-vis-@vis" title="@visTitle">@Model.VisibilityLabel</span>
+            <span class="status"><span class="dot @Model.StatusClass"></span> <span data-status-label>@Model.StatusLabel</span></span>
             @if (d.LastCommitAt is { } at)
             {
-                <span class="faint">· updated <time datetime="@at.UtcDateTime.ToString("o")">@at.ToString("yyyy-MM-dd")</time></span>
+                <span class="faint updated"><span class="sep">· </span>updated <time datetime="@at.UtcDateTime.ToString("o")">@at.ToString("yyyy-MM-dd")</time></span>
             }
         </div>
         <div class="card-actions">
-            <a class="btn btn-primary btn-sm" href="/d/@d.Slug/" target="_blank" rel="noopener" data-present aria-disabled="@(canPresent ? null : "true")">@(d.Kind is DeckKind.PowerPoint or DeckKind.Pdf ? "Open" : "Present")</a>
+            <a class="btn btn-primary btn-sm act-primary" href="/d/@d.Slug/" target="_blank" rel="noopener" data-present aria-disabled="@(canPresent ? null : "true")">@(isDoc ? "Open" : "Present")</a>
             @if (Model.IsSlidev)
             {
-                <a class="btn btn-sm" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" title="Presenter view (notes, timer, next slide)" aria-disabled="@(canPresent ? null : "true")">Presenter</a>
+                <a class="btn btn-sm act-presenter" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" title="Presenter view (notes, timer, next slide)" aria-disabled="@(canPresent ? null : "true")">Presenter</a>
             }
             <span class="spacer"></span>
             @if (d.CurrentHasPdf)
             {
-                <a class="btn btn-ghost btn-sm btn-icon" href="/d/@(d.Slug).pdf" target="_blank" rel="noopener" title="Open PDF" aria-label="Open PDF">
+                <a class="btn btn-ghost btn-sm btn-icon act-pdf" href="/d/@(d.Slug).pdf" target="_blank" rel="noopener" title="Open PDF" aria-label="Open PDF">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>
                     <span>PDF</span>
                 </a>
             }
             @if (d.CurrentHasPptx)
             {
-                <a class="btn btn-ghost btn-sm btn-icon" href="/d/@(d.Slug).pptx" title="Download PowerPoint" aria-label="Download PowerPoint">
+                <a class="btn btn-ghost btn-sm btn-icon act-pptx" href="/d/@(d.Slug).pptx" title="Download PowerPoint" aria-label="Download PowerPoint">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
                     <span>PPTX</span>
                 </a>
             }
-            <a class="btn btn-ghost btn-sm" href="/decks/@d.Slug" title="Sharing, builds, exports">Manage</a>
+            <a class="btn btn-ghost btn-sm act-manage" href="/decks/@d.Slug" title="Sharing, builds, exports">Manage</a>
         </div>
     </div>
+    @if (Model.InRecentShelf)
+    {
+        <button type="button" class="card-dismiss" data-dismiss-recent="@d.Slug" title="Remove from recently presented" aria-label="Remove @d.Title from recently presented">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+    }
 </article>

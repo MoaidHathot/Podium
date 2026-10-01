@@ -44,6 +44,12 @@ public interface IViewHistoryStore
 {
     Task RecordAsync(ViewEvent e, CancellationToken ct = default);
     Task<IReadOnlyList<ViewEvent>> RecentForPrincipalAsync(string principal, int take = 20, CancellationToken ct = default);
+
+    /// <summary>Hides a deck from the principal's "recently presented" list until it is presented again.</summary>
+    Task DismissRecentAsync(string principal, string deckSlug, DateTimeOffset at, CancellationToken ct = default);
+
+    /// <summary>Deck slug to dismissal time, for the given principal.</summary>
+    Task<IReadOnlyDictionary<string, DateTimeOffset>> GetRecentDismissalsAsync(string principal, CancellationToken ct = default);
 }
 
 /// <summary>Represents a stored artifact object.</summary>

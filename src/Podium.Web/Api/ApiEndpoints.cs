@@ -223,6 +223,18 @@ public static class ApiEndpoints
 
         owner.MapGet("/me", (HttpContext http, CallerResolver callers) => Results.Ok(callers.Resolve(http.User)));
 
+        // Hide a deck from "Recently presented"; it comes back the next time it is presented.
+        owner.MapPost("/recent/{slug}/dismiss", async (string slug, HttpContext http, CallerResolver callers, IViewHistoryStore views, Microsoft.Extensions.Caching.Memory.IMemoryCache cache, CancellationToken ct) =>
+        {
+            if (!Podium.Core.Slug.IsValid(slug)) return Results.BadRequest();
+            var caller = callers.Resolve(http.User);
+            if (caller.Principal is null) return Results.Unauthorized();
+            await views.DismissRecentAsync(caller.Principal, slug, DateTimeOffset.UtcNow, ct);
+            // Drop the view de-duplication entry so presenting again right away records a fresh view and resurfaces the deck.
+            cache.Remove($"view:{caller.Principal}:{slug}:{ArtifactKind.Site}");
+            return Results.NoContent();
+        });
+
         return app;
     }
 

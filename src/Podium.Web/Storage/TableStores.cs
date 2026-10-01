@@ -294,4 +294,24 @@ public sealed class TableViewHistoryStore(TableClients tables) : IViewHistorySto
         }
         return list.OrderByDescending(v => v.At).Take(take).ToList();
     }
+
+    private const string DismissTable = "recentdismissals";
+
+    public async Task DismissRecentAsync(string principal, string deckSlug, DateTimeOffset at, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(DismissTable, ct);
+        await t.UpsertEntityAsync(new TableEntity(TableJson.Key(principal), deckSlug) { ["At"] = at }, TableUpdateMode.Replace, ct);
+    }
+
+    public async Task<IReadOnlyDictionary<string, DateTimeOffset>> GetRecentDismissalsAsync(string principal, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(DismissTable, ct);
+        var pk = TableJson.Key(principal);
+        var result = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey == pk, cancellationToken: ct))
+        {
+            if (e.GetDateTimeOffset("At") is { } at) result[e.RowKey] = at;
+        }
+        return result;
+    }
 }
