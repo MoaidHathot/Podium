@@ -241,9 +241,13 @@ async function buildPresenterm(deckDir, outDir, result) {
   const site = join(outDir, 'site');
   mkdirSync(site, { recursive: true });
   const html = join(site, 'index.html');
-  // presenterm probes the terminal for image protocol support unless told which one to use; in a container there is
-  // no terminal to answer and it either fails (no TTY) or blocks forever (pty). Pin a protocol: irrelevant for HTML.
-  const r = await run('presenterm', ['--export-html', entry, '--output', html, '--image-protocol', 'ascii-blocks'], { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color', COLUMNS: '120', LINES: '30' }, timeoutMs: Math.min(remainingMs(), 5 * 60 * 1000) });
+  // presenterm's HTML export still probes the terminal (capability query + terminal size) in 0.16. Without a TTY the
+  // size lookup fails ("Inappropriate ioctl"), and with a bare pty the query blocks forever. Giving it explicit export
+  // dimensions and a pinned image protocol sidesteps both. The deck's own config.yaml is merged in so the exported
+  // theme matches what the author sees locally.
+  const configPath = writePresentermConfig(deckDir);
+  const r = await run('presenterm', ['--export-html', entry, '--output', html, '--config-file', configPath, '--image-protocol', 'ascii-blocks'],
+    { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color', COLUMNS: '120', LINES: '30' }, timeoutMs: Math.min(remainingMs(), 5 * 60 * 1000) });
   const base = entry.replace(/\.md$/i, '');
   if (r.code === 0 && existsSync(html)) result.hasSite = true;
   else {
@@ -259,6 +263,25 @@ async function buildPresenterm(deckDir, outDir, result) {
   }
 }
 
+
+function writePresentermConfig(deckDir) {
+  const yaml = require('js-yaml');
+  let config = {};
+  for (const name of ['config.yaml', 'config.yml']) {
+    const p = join(deckDir, name);
+    if (existsSync(p)) {
+      try { config = yaml.load(readFileSync(p, 'utf8')) || {}; log(`Using deck ${name}`); }
+      catch (e) { log(`Ignoring invalid ${name}: ${e.message}`); }
+      break;
+    }
+  }
+  if (typeof config !== 'object' || Array.isArray(config)) config = {};
+  config.export = config.export && typeof config.export === 'object' ? config.export : {};
+  config.export.dimensions = config.export.dimensions || { rows: 30, columns: 120 };
+  const out = join(workRoot, 'presenterm-config.yaml');
+  writeFileSync(out, yaml.dump(config, { lineWidth: -1 }));
+  return out;
+}
 
 function findSibling(dir, base, ext) {
   const exact = join(dir, base + ext);
