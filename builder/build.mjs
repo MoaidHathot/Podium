@@ -241,12 +241,9 @@ async function buildPresenterm(deckDir, outDir, result) {
   const site = join(outDir, 'site');
   mkdirSync(site, { recursive: true });
   const html = join(site, 'index.html');
-  // presenterm probes the terminal even when exporting; without a TTY it fails with "Inappropriate ioctl for device".
-  // On Linux, util-linux's `script` lends it a pseudo-terminal.
-  const usePty = process.platform !== 'win32' && existsSync('/usr/bin/script');
-  const r = usePty
-    ? await run('/usr/bin/script', ['-qec', `presenterm --export-html ${shellQuote(entry)} --output ${shellQuote(html)}`, '/dev/null'], { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color', COLUMNS: '120', LINES: '30' } })
-    : await run('presenterm', ['--export-html', entry, '--output', html], { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color' } });
+  // presenterm probes the terminal for image protocol support unless told which one to use; in a container there is
+  // no terminal to answer and it either fails (no TTY) or blocks forever (pty). Pin a protocol: irrelevant for HTML.
+  const r = await run('presenterm', ['--export-html', entry, '--output', html, '--image-protocol', 'ascii-blocks'], { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color', COLUMNS: '120', LINES: '30' }, timeoutMs: Math.min(remainingMs(), 5 * 60 * 1000) });
   const base = entry.replace(/\.md$/i, '');
   if (r.code === 0 && existsSync(html)) result.hasSite = true;
   else {
@@ -262,7 +259,6 @@ async function buildPresenterm(deckDir, outDir, result) {
   }
 }
 
-function shellQuote(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 
 function findSibling(dir, base, ext) {
   const exact = join(dir, base + ext);
