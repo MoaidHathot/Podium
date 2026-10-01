@@ -75,6 +75,8 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Podium__OwnerGitHubId', value: string(ownerGitHubId) }
             // Builder callbacks use the platform FQDN so they never depend on custom-domain/certificate state.
             { name: 'Podium__CallbackBaseUrl', value: 'https://${baseName}-web.${environmentDefaultDomain}' }
+            // Decks from repositories the owner does not control are served from this second origin (platform FQDN).
+            { name: 'Podium__ExternalBaseUrl', value: 'https://${baseName}-web.${environmentDefaultDomain}' }
             { name: 'Podium__SigningKey', secretRef: 'podium-signing-key' }
             { name: 'Storage__AccountName', value: storageAccountName }
             { name: 'Builder__Mode', value: 'ContainerAppsJob' }

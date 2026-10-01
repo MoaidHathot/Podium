@@ -42,6 +42,19 @@ public sealed class HmacTokenService(IOptions<PodiumOptions> options) : IBuildTo
     private byte[] Sign(string purpose, string subject, long exp)
         => HMACSHA256.HashData(_key, Encoding.UTF8.GetBytes($"{purpose}\n{subject}\n{exp}"));
 
+    /// <summary>Signature over an arbitrary body (expiry is the caller's responsibility, e.g. inside the body).</summary>
+    public string SignFor(string purpose, string body)
+        => Base64Url(HMACSHA256.HashData(_key, Encoding.UTF8.GetBytes($"{purpose}\n{body}")));
+
+    public bool VerifyFor(string purpose, string body, string signature)
+    {
+        byte[] provided;
+        try { provided = FromBase64Url(signature); }
+        catch (FormatException) { return false; }
+        var expected = HMACSHA256.HashData(_key, Encoding.UTF8.GetBytes($"{purpose}\n{body}"));
+        return CryptographicOperations.FixedTimeEquals(provided, expected);
+    }
+
     private static byte[] DecodeKey(string key)
     {
         byte[] bytes;

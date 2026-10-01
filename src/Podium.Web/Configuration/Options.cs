@@ -12,6 +12,12 @@ public sealed class PodiumOptions
     /// <summary>Optional base URL for builder callbacks (e.g. the platform FQDN); defaults to PublicBaseUrl.</summary>
     public Uri? CallbackBaseUrl { get; set; }
 
+    /// <summary>
+    /// Separate origin from which decks of untrusted (external) sources are served, so their code can never touch the
+    /// owner session or private decks. Typically the platform FQDN. When unset, external decks cannot be viewed.
+    /// </summary>
+    public Uri? ExternalBaseUrl { get; set; }
+
     /// <summary>Numeric GitHub user id of the single owner. Logins can change; ids cannot.</summary>
     [Range(1, long.MaxValue)] public required long OwnerGitHubId { get; set; }
 

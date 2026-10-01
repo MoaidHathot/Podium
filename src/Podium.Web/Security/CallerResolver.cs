@@ -10,6 +10,10 @@ public static class PodiumClaims
     public const string GitHubId = "urn:podium:github_id";
     public const string Login = "urn:podium:login";
     public const string Avatar = "urn:podium:avatar";
+    /// <summary>Present when the identity came from a view token on the external deck origin (not a real session).</summary>
+    public const string ViewToken = "urn:podium:view_token";
+    /// <summary>Slug a view token grants link-based access to.</summary>
+    public const string ViewLinkSlug = "urn:podium:view_link_slug";
     public const string OwnerPolicy = "Owner";
 }
 

@@ -5,6 +5,8 @@ using Microsoft.Net.Http.Headers;
 using Podium.Core.Abstractions;
 using Podium.Core.Models;
 using Podium.Core.Security;
+using Microsoft.Extensions.Options;
+using Podium.Web.Configuration;
 using Podium.Web.Security;
 
 namespace Podium.Web.Serving;
@@ -20,10 +22,10 @@ public static class DeckServingEndpoints
 
     public static IEndpointRouteBuilder MapDeckServing(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/d/{slug}.pdf", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, CancellationToken ct)
-            => ServeArtifact(slug, ArtifactKind.Pdf, http, access, artifacts, callers, views, cache, ct));
-        app.MapGet("/d/{slug}.pptx", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, CancellationToken ct)
-            => ServeArtifact(slug, ArtifactKind.Pptx, http, access, artifacts, callers, views, cache, ct));
+        app.MapGet("/d/{slug}.pdf", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, CancellationToken ct)
+            => ServeArtifact(slug, ArtifactKind.Pdf, http, access, artifacts, callers, views, cache, viewTokens, ct));
+        app.MapGet("/d/{slug}.pptx", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, CancellationToken ct)
+            => ServeArtifact(slug, ArtifactKind.Pptx, http, access, artifacts, callers, views, cache, viewTokens, ct));
         app.MapGet("/d/{slug}.jpg", async (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct) =>
         {
             var caller = callers.Resolve(http.User);
@@ -42,13 +44,14 @@ public static class DeckServingEndpoints
         return app;
     }
 
-    private static async Task<IResult> ServeSite(string slug, string? path, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, CancellationToken ct)
+    private static async Task<IResult> ServeSite(string slug, string? path, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, IOptions<PodiumOptions> options, CancellationToken ct)
     {
         path ??= "";
         // Slidev is built with base "/d/{slug}/"; relative URLs only resolve correctly from the slash-terminated form.
         if (path.Length == 0 && !http.Request.Path.Value!.EndsWith('/'))
             return Results.Redirect($"/d/{slug}/{http.Request.QueryString}", permanent: false);
 
+        var onExternalHost = viewTokens.IsExternalHost(http.Request);
         var caller = callers.Resolve(http.User);
         var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
         if (result.Deck is null) return Results.NotFound();
@@ -56,12 +59,34 @@ public static class DeckServingEndpoints
         switch (result.Decision)
         {
             case AccessDecision.RequireLogin:
+                if (onExternalHost)
+                {
+                    // No session exists here by design; the main host signs the user in and hands out a fresh view token.
+                    return IsNavigation(http) ? Results.Redirect(MainHostUrl(options.Value, http)) : Results.Unauthorized();
+                }
                 return IsNavigation(http) ? Results.Redirect(LoginUrl(http)) : Results.Unauthorized();
             case AccessDecision.Deny:
                 return Results.NotFound();
         }
 
         var deck = result.Deck;
+
+        // Decks from sources the owner does not control carry author-written code. They are served from a separate
+        // origin so that code can never read the owner session or other private decks.
+        if (!result.Trusted && deck.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static && !onExternalHost)
+        {
+            var external = options.Value.ExternalBaseUrl;
+            if (external is null)
+                return Results.Content("<!doctype html><title>External deck</title><p style=\"font-family:system-ui;padding:2rem\">This deck comes from a repository you do not control. Set <code>Podium:ExternalBaseUrl</code> to a second hostname of this app to serve such decks from an isolated origin.</p>", "text/html; charset=utf-8", statusCode: 503);
+            if (!IsNavigation(http)) return Results.NotFound();
+            var token = viewTokens.Issue(caller.Principal, caller.IsOwner, caller.DisplayName, result.ViaShareLink ? slug : null);
+            var target = new UriBuilder(external) { Path = $"/d/{slug}/{path}" };
+            var query = System.Web.HttpUtility.ParseQueryString(http.Request.QueryString.Value ?? "");
+            query.Remove("share");
+            query[ExternalHostMiddleware.QueryParam] = token;
+            target.Query = query.ToString();
+            return Results.Redirect(target.Uri.ToString());
+        }
         if (deck.CurrentBuildId is null)
         {
             return caller.IsOwner && IsNavigation(http)
@@ -71,6 +96,19 @@ public static class DeckServingEndpoints
 
         var isIndex = path.Length == 0;
         var relative = isIndex ? "index.html" : path;
+
+        // PowerPoint decks can opt into Microsoft's Office Online viewer for a faithful rendering. The viewer service
+        // fetches the file itself, so it gets a short-lived signed URL rather than a cookie.
+        if (isIndex && deck.Kind == DeckKind.PowerPoint && deck.PptxViewer == PptxViewer.Office && deck.CurrentHasPptx
+            && !string.Equals(http.Request.Query["viewer"], "pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            var fileToken = viewTokens.IssueFileToken(slug, ArtifactKind.Pptx, TimeSpan.FromMinutes(20));
+            var fileUrl = $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{slug}.pptx?vt={Uri.EscapeDataString(fileToken)}";
+            var embed = "https://view.officeapps.live.com/op/embed.aspx?src=" + Uri.EscapeDataString(fileUrl);
+            http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct);
+            return Results.Content(OfficeViewerPage(deck, slug, embed), "text/html; charset=utf-8");
+        }
 
         // Never allow path tricks; blob names are exact so ".." has no meaning there, but keep the contract explicit.
         if (relative.Contains("..", StringComparison.Ordinal) || relative.Contains('\\')) return Results.NotFound();
@@ -101,13 +139,6 @@ public static class DeckServingEndpoints
                 html = InjectLiveScript(html, slug, deck.CurrentBuildId);
 
                 headers[HeaderNames.CacheControl] = "no-cache, private";
-                if (!result.Trusted && deck.Kind is not (DeckKind.PowerPoint or DeckKind.Pdf))
-                {
-                    // Untrusted (external) decks run in an opaque origin: no cookies, no credentialed same-origin fetches.
-                    // PowerPoint/PDF viewer pages are generated by Podium (no author code) and must embed the PDF, so
-                    // they are exempt: an opaque origin would make the browser refuse the same-origin frame.
-                    headers[HeaderNames.ContentSecurityPolicy] = "sandbox allow-scripts allow-popups allow-forms allow-modals allow-pointer-lock allow-downloads";
-                }
                 await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct);
                 return Results.Content(html, "text/html; charset=utf-8");
             }
@@ -122,10 +153,15 @@ public static class DeckServingEndpoints
             enableRangeProcessing: true);
     }
 
-    private static async Task<IResult> ServeArtifact(string slug, ArtifactKind kind, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, CancellationToken ct)
+    private static async Task<IResult> ServeArtifact(string slug, ArtifactKind kind, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, CancellationToken ct)
     {
         var caller = callers.Resolve(http.User);
-        var result = await access.EvaluateAsync(http, slug, kind, caller, ct);
+        // A signed file token (issued when the owner opens the Office viewer) stands in for the cookie; the Office
+        // service fetches the file anonymously.
+        var byToken = viewTokens.ValidateFileToken(http.Request.Query["vt"], slug, kind);
+        var result = byToken
+            ? new DeckAccessResult(await access.GetDeckAsync(slug, ct), AccessDecision.Allow, false, true)
+            : await access.EvaluateAsync(http, slug, kind, caller, ct);
         if (result.Deck is null) return Results.NotFound();
         switch (result.Decision)
         {
@@ -156,6 +192,25 @@ public static class DeckServingEndpoints
         return idx < 0 ? tag + html : html.Insert(idx, tag);
     }
 
+    private static string OfficeViewerPage(Deck deck, string slug, string embedUrl)
+    {
+        var title = System.Net.WebUtility.HtmlEncode(deck.Title);
+        var embed = System.Net.WebUtility.HtmlEncode(embedUrl);
+        return $$"""
+            <!doctype html>
+            <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>{{title}}</title>
+            <style>html,body{margin:0;height:100%;background:#0b0d12;color:#e6e9f0;font-family:system-ui,sans-serif}
+            iframe{border:0;width:100%;height:calc(100% - 2.2rem);display:block}
+            .bar{height:2.2rem;display:flex;align-items:center;gap:1rem;padding:0 .9rem;font-size:.8rem;color:#9aa3b5;background:#131720;border-bottom:1px solid #252b39}
+            .bar a{color:#7c9cff;text-decoration:none}.bar a:hover{text-decoration:underline}.bar .sp{flex:1}</style>
+            </head><body>
+            <div class="bar"><span>{{title}}</span><span class="sp"></span><span>Rendered by Microsoft Office Online</span><a href="?viewer=pdf">View as PDF</a><a href="/d/{{slug}}.pptx">Download</a></div>
+            <iframe src="{{embed}}" title="{{title}}" allowfullscreen></iframe>
+            </body></html>
+            """;
+    }
+
     private static async Task RecordViewAsync(IViewHistoryStore views, IMemoryCache cache, Caller caller, string slug, string path, ArtifactKind kind, CancellationToken ct)
     {
         var principal = caller.Principal ?? "anonymous";
@@ -180,6 +235,9 @@ public static class DeckServingEndpoints
     }
 
     private static string LoginUrl(HttpContext http) => "/login?returnUrl=" + Uri.EscapeDataString(http.Request.Path + http.Request.QueryString);
+
+    private static string MainHostUrl(PodiumOptions options, HttpContext http)
+        => options.PublicBaseUrl.ToString().TrimEnd('/') + http.Request.Path + http.Request.QueryString;
 
     private static string QuoteEtag(string etag) => etag.StartsWith('"') || etag.StartsWith("W/", StringComparison.Ordinal) ? etag : $"\"{etag}\"";
 }

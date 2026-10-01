@@ -38,6 +38,15 @@ public enum BuildStatus
     Cancelled = 4,
 }
 
+/// <summary>How a PowerPoint deck is shown in the browser.</summary>
+public enum PptxViewer
+{
+    /// <summary>The PDF rendition made by the builder (LibreOffice or a committed PDF). Nothing leaves Podium.</summary>
+    Pdf = 0,
+    /// <summary>Microsoft's Office Online viewer: real PowerPoint rendering, but Microsoft's service fetches the file through a short-lived link.</summary>
+    Office = 1,
+}
+
 /// <summary>Kinds of artifacts a build can produce.</summary>
 public enum ArtifactKind
 {

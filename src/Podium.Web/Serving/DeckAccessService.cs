@@ -44,7 +44,10 @@ public sealed class DeckAccessService(IDeckStore decks, ISourceStore sources, IG
         if (deck is null) return new DeckAccessResult(null, AccessDecision.Deny, false, false);
 
         var viaLink = false;
-        if (!caller.IsOwner)
+        // On the external origin a view token may carry a link grant for exactly one deck.
+        if (!caller.IsOwner && http.Items.TryGetValue("podium.viewLinkSlug", out var granted) && granted is string gs && gs == slug)
+            viaLink = true;
+        if (!caller.IsOwner && !viaLink)
         {
             var linkId = http.Request.Query["share"].FirstOrDefault() ?? http.Request.Cookies[ShareCookieName(slug)];
             if (!string.IsNullOrEmpty(linkId) && linkId.Length <= 64)

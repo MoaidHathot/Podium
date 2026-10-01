@@ -94,6 +94,7 @@ public static class ApiEndpoints
                 Pinned = patch.Pinned ?? deck.Pinned,
                 ExportPdf = patch.ExportPdf ?? deck.ExportPdf,
                 ExportPptx = patch.ExportPptx ?? deck.ExportPptx,
+                PptxViewer = patch.PptxViewer ?? deck.PptxViewer,
                 Title = string.IsNullOrWhiteSpace(patch.Title) ? deck.Title : patch.Title.Trim(),
                 Tags = patch.Tags ?? deck.Tags,
                 UpdatedAt = DateTimeOffset.UtcNow,
@@ -234,7 +235,7 @@ public static class ApiEndpoints
     private static bool IsValidGitHubName(string s) => s.Length is > 0 and <= 100 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.') && s != "." && s != "..";
 }
 
-public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags);
+public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label);
 public sealed record SourceRequest(string Owner, string Repo, string? Ref);

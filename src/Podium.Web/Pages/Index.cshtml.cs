@@ -10,7 +10,6 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
     public IReadOnlyList<DeckRow> Decks { get; private set; } = [];
     public IReadOnlyList<DeckRow> Pinned { get; private set; } = [];
     public IReadOnlyList<DeckRow> RecentlyViewed { get; private set; } = [];
-    public IReadOnlyList<DeckRow> RecentlyUpdated { get; private set; } = [];
     public IReadOnlyList<Source> Sources { get; private set; } = [];
     public bool AnyBuilding { get; private set; }
     public bool HasSources { get; private set; }
@@ -22,25 +21,26 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
         HasSources = Sources.Count > 0;
         var sourceMap = Sources.ToDictionary(s => s.Id, StringComparer.Ordinal);
 
-        var all = await decks.ListAsync(includeArchived: false, ct);
-        var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId))).ToList();
-        Decks = rows.OrderByDescending(r => r.Deck.LastCommitAt ?? r.Deck.UpdatedAt).ToList();
-        Pinned = Decks.Where(r => r.Deck.Pinned).ToList();
-        // Only worth a section once the library is large enough that "all decks" is not already the recent list.
-        RecentlyUpdated = Decks.Count > 9 ? Decks.Where(r => r.Deck.LastCommitAt is not null).Take(6).ToList() : [];
-        AnyBuilding = all.Any(d => d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running);
-
+        var lastViewed = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         if (caller.Principal is not null)
         {
-            var recent = await views.RecentForPrincipalAsync(caller.Principal, 40, ct);
-            var bySlug = rows.ToDictionary(r => r.Deck.Slug, StringComparer.Ordinal);
-            RecentlyViewed = recent.Where(v => v.Artifact == ArtifactKind.Site).Select(v => v.DeckSlug).Distinct().Take(6)
-                .Select(s => bySlug.GetValueOrDefault(s)).Where(r => r is not null).Cast<DeckRow>().ToList();
+            foreach (var v in await views.RecentForPrincipalAsync(caller.Principal, 200, ct))
+            {
+                if (v.Artifact != ArtifactKind.Site) continue;
+                if (!lastViewed.TryGetValue(v.DeckSlug, out var at) || v.At > at) lastViewed[v.DeckSlug] = v.At;
+            }
         }
+
+        var all = await decks.ListAsync(includeArchived: false, ct);
+        var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null)).ToList();
+        Decks = rows.OrderByDescending(r => r.Deck.LastCommitAt ?? r.Deck.UpdatedAt).ToList();
+        Pinned = Decks.Where(r => r.Deck.Pinned).ToList();
+        RecentlyViewed = rows.Where(r => r.LastViewed is not null).OrderByDescending(r => r.LastViewed).Take(6).ToList();
+        AnyBuilding = all.Any(d => d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running);
     }
 }
 
-public sealed record DeckRow(Deck Deck, Source? Source)
+public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastViewed)
 {
     public string RepoLabel => Source?.FullName ?? Deck.SourceId;
     public string KindLabel => Deck.Kind switch
@@ -58,6 +58,20 @@ public sealed record DeckRow(Deck Deck, Source? Source)
     public string ThumbnailUrl => $"/d/{Deck.Slug}.jpg?v={Deck.CurrentBuildId}";
     public bool Servable => Deck.CurrentBuildId is not null;
     public bool IsSlidev => Deck.Kind == DeckKind.Slidev;
+    public DateTimeOffset Updated => Deck.LastCommitAt ?? Deck.UpdatedAt;
+    public string VisibilityLabel => Deck.Visibility switch
+    {
+        Visibility.Public => "Public",
+        Visibility.Link => "Link",
+        Visibility.Shared => "Shared",
+        _ => "Private",
+    };
+    public string StatusKey => Deck.LatestBuildStatus switch
+    {
+        BuildStatus.Queued or BuildStatus.Running => "building",
+        BuildStatus.Failed => "failed",
+        _ => "ok",
+    };
     public string StatusClass => Deck.LatestBuildStatus switch
     {
         BuildStatus.Succeeded => "dot-ok",

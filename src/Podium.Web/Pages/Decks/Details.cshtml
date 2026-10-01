@@ -91,6 +91,23 @@
         </div>
     </section>
 
+    @if (d.Kind == DeckKind.PowerPoint)
+    {
+    <section class="panel">
+        <h3>Viewer</h3>
+        <p class="hint">How the deck is shown when opened in the browser. The original file is always available for download.</p>
+        <div class="seg" role="radiogroup" aria-label="PowerPoint viewer">
+            <input type="radio" name="pptxViewer" id="pptxViewer-Pdf" value="Pdf" @(d.PptxViewer == PptxViewer.Pdf ? "checked" : "") data-pptx-viewer />
+            <label for="pptxViewer-Pdf">PDF rendition</label>
+            <input type="radio" name="pptxViewer" id="pptxViewer-Office" value="Office" @(d.PptxViewer == PptxViewer.Office ? "checked" : "") data-pptx-viewer />
+            <label for="pptxViewer-Office">PowerPoint Online</label>
+        </div>
+        <p class="faint" style="margin-top:.6rem; font-size:.85rem">
+            <strong>PDF rendition</strong>: made by LibreOffice (or your committed PDF); nothing leaves Podium; animations are lost.<br />
+            <strong>PowerPoint Online</strong>: faithful rendering by Microsoft's Office viewer. Microsoft's service downloads the file through a 20-minute signed link each time the deck is opened. Files over ~10 MB may be refused by the viewer.
+        </p>
+    </section>
+    }
     <section class="panel" @(isDoc || d.Kind == DeckKind.Static ? "hidden" : "")>
         <h3>Exports</h3>
         <p class="hint">Generated on every build by the Slidev exporter (headless Chromium).</p>
@@ -236,6 +253,7 @@
   document.querySelectorAll('[data-vis-field]').forEach((r) => r.addEventListener('change', () => {
     const body = {}; body[r.dataset.visField] = r.value; patch(body, `Set to ${r.value}`);
   }));
+  document.querySelectorAll('[data-pptx-viewer]').forEach((r) => r.addEventListener('change', () => patch({ pptxViewer: r.value }, Viewer: ${r.value === 'Office' ? 'PowerPoint Online' : 'PDF'})));
   document.getElementById('exportPdf').addEventListener('change', (e) => patch({ exportPdf: e.target.checked }));
   document.getElementById('exportPptx').addEventListener('change', (e) => patch({ exportPptx: e.target.checked }));
 

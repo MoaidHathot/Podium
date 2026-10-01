@@ -25,8 +25,10 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Discovery**: one library across all connected repositories; `/` focuses search.
 - **Cross-device presenter sync**: a tiny Slidev addon is injected at build time; the presenter view on your phone or laptop drives the audience view on any other machine through a WebSocket relay. Only the owner can drive; viewers follow. Clickers work as plain keyboard input.
 - **Self-updating builds**: when the builder image changes, decks built by the previous builder are rebuilt automatically (failed ones are retried).
-- **External decks**: public repositories you do not own can be added; they build in the same sandbox and are served with a CSP sandbox (opaque origin).
-- **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container; installation tokens never touch disk; CSRF header + SameSite cookies; secrets in Key Vault.
+- **External decks**: public repositories you do not own can be added. They build in the same isolated job and are served from a *separate origin* (`Podium:ExternalBaseUrl`, by default the platform FQDN) with a short-lived view token instead of your session, so their code can never read your session or private decks.
+- **PowerPoint decks** can be viewed as a PDF rendition (default, nothing leaves Podium) or through Microsoft's Office Online viewer (faithful rendering; Microsoft's service fetches the file via a 20-minute signed link). Per-deck setting under *Manage*.
+- **Library**: group by repository/type/visibility/year, sort, grid or compact list, filters, pinned and recently-presented shelves; preferences are remembered per browser.
+- **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; secrets in Key Vault.
 
 ## Deck detection
 
@@ -88,7 +90,8 @@ dotnet run --project src/Podium.Web      # http://localhost:5187, /dev-login sig
 |---|---|
 | `Podium:PublicBaseUrl` | public origin, used for builder callbacks and links |
 | `Podium:OwnerGitHubId` | numeric GitHub id of the single owner |
-| `Podium:SigningKey` | base64 key for HMAC tokens (builder callbacks) |
+| `Podium:SigningKey` | base64 key for HMAC tokens (builder callbacks, view tokens, viewer file links) |
+| `Podium:ExternalBaseUrl` | second origin of the same app used to serve decks from repositories you do not control |
 | `GitHub:AppId`, `GitHub:AppSlug`, `GitHub:PrivateKeyPem`, `GitHub:ClientId`, `GitHub:ClientSecret`, `GitHub:WebhookSecret` | GitHub App |
 | `GitHub:Token` | development only: PAT used instead of installation tokens |
 | `Storage:AccountName` / `Storage:ConnectionString` | managed identity (prod) / Azurite or `memory` (dev) |

@@ -136,8 +136,12 @@ async function ensureSlidevProject(deckDir) {
   if (!existsSync(pkgPath)) {
     log('No package.json: using the builder\'s bundled Slidev');
     writeFileSync(pkgPath, JSON.stringify({ name: 'podium-deck', private: true, type: 'module' }, null, 2));
-    // Reuse the builder's own dependencies rather than hitting the network for an unpinned install.
-    linkDir(join(podiumModules), join(deckDir, 'node_modules'));
+    // Reuse the builder's own dependencies rather than hitting the network for an unpinned install. They must be a
+    // real directory inside the deck: through a symlink Vite resolves themes to their real path outside the project
+    // root and leaves import.meta.glob() calls untransformed, which breaks the built deck at runtime.
+    const t0 = Date.now();
+    cpSync(podiumModules, join(deckDir, 'node_modules'), { recursive: true, dereference: true });
+    log(`Copied bundled dependencies in ${Math.round((Date.now() - t0) / 1000)}s`);
     return;
   }
   const hasLock = existsSync(join(deckDir, 'package-lock.json')) || existsSync(join(deckDir, 'npm-shrinkwrap.json'));

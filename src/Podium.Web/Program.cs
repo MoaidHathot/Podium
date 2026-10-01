@@ -107,6 +107,7 @@ builder.Services.AddSingleton<InstallationDiscovery>();
 builder.Services.AddSingleton<GitHubWebhookHandler>();
 builder.Services.AddHostedService<MaintenanceService>();
 builder.Services.AddSingleton<CallerResolver>();
+builder.Services.AddSingleton<ViewTokenService>();
 builder.Services.AddSingleton<DeckAccessService>();
 builder.Services.AddSingleton<Podium.Web.Sync.SyncHub>();
 
@@ -165,6 +166,8 @@ if (gh.OAuthConfigured)
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy(PodiumClaims.OwnerPolicy, p => p.RequireAssertion(ctx =>
     {
+        // View-token identities (external deck origin) are never the owner for API/UI purposes.
+        if (ctx.User.HasClaim(c => c.Type == PodiumClaims.ViewToken)) return false;
         var id = ctx.User.FindFirstValue(PodiumClaims.GitHubId) ?? ctx.User.FindFirstValue(ClaimTypes.NameIdentifier);
         var owner = ctx.Resource is HttpContext http ? http.RequestServices.GetRequiredService<IOptions<PodiumOptions>>().Value.OwnerGitHubId : 0;
         return long.TryParse(id, out var v) && v == owner && owner > 0;
@@ -213,6 +216,7 @@ app.UseStaticFiles(new StaticFileOptions
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseRouting();
 app.UseAuthentication();
+app.UseMiddleware<ExternalHostMiddleware>();
 app.UseAuthorization();
 
 // ----- Login / logout -----

@@ -14,7 +14,8 @@
     var canPresent = Model.Servable && d.Kind != DeckKind.GitPitch;
 }
 <article class="card @(d.Pinned ? "pinned" : "") @(d.Archived ? "archived" : "")"
-         data-slug="@d.Slug" data-search="@Model.SearchText" data-kind="@kind" data-vis="@vis" data-status="@status">
+         data-slug="@d.Slug" data-search="@Model.SearchText" data-kind="@kind" data-kind-label="@Model.KindLabel" data-vis="@vis" data-vis-label="@Model.VisibilityLabel" data-status="@status"
+         data-repo="@Model.RepoLabel" data-title="@d.Title.ToLowerInvariant()" data-updated="@Model.Updated.UtcDateTime.ToString("o")" data-viewed="@(Model.LastViewed?.UtcDateTime.ToString("o"))" data-year="@Model.Updated.Year">
     <a class="card-thumb kind-@kind" href="@(canPresent ? $"/d/{d.Slug}/" : $"/decks/{d.Slug}")" target="@(canPresent ? "_blank" : null)" rel="noopener" tabindex="-1" aria-hidden="true">
         @if (Model.HasThumbnail)
         {
@@ -42,7 +43,7 @@
         <div class="card-title"><a href="/decks/@d.Slug">@d.Title</a></div>
         <div class="card-sub" title="@Model.RepoLabel/@d.Path">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
-            <span class="path">@Model.RepoLabel@(string.IsNullOrEmpty(d.Path) ? "" : "/" + d.Path)</span>
+            <span class="path"><span class="@(string.IsNullOrEmpty(d.Path) ? "repo-root" : "repo")">@Model.RepoLabel@(string.IsNullOrEmpty(d.Path) ? "" : "/")</span>@d.Path</span>
         </div>
         <div class="card-meta">
             <span class="badge badge-kind-@kind">@Model.KindLabel</span>

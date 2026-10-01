@@ -48,6 +48,8 @@ public sealed record Deck
     /// <summary>Whether to produce PDF / PPTX exports on build.</summary>
     public bool ExportPdf { get; init; } = true;
     public bool ExportPptx { get; init; }
+    /// <summary>PowerPoint decks only: in-browser viewer to use.</summary>
+    public PptxViewer PptxViewer { get; init; } = PptxViewer.Pdf;
     /// <summary>Commit SHA the deck content was last changed at.</summary>
     public string? LastCommitSha { get; init; }
     public DateTimeOffset? LastCommitAt { get; init; }
