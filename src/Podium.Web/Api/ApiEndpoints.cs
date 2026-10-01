@@ -44,10 +44,11 @@ public static class ApiEndpoints
                 return Results.Unauthorized();
             }
             var eventName = http.Request.Headers["X-GitHub-Event"].ToString();
-            using var doc = JsonDocument.Parse(ms.GetBuffer().AsMemory(0, (int)ms.Length));
-            var outcome = await handler.HandleAsync(eventName, doc, ct);
-            log.LogInformation("Webhook {Event}: {Outcome}", eventName, outcome);
-            return Results.Ok(new { outcome });
+            var payload = ms.ToArray();
+            // GitHub gives up after 10 seconds and a scaled-to-zero app may already have spent most of that starting up.
+            // Acknowledge now; the handler only talks to GitHub's API and enqueues work, so nothing is lost by detaching.
+            handler.HandleInBackground(eventName, payload);
+            return Results.Accepted(value: new { outcome = "accepted" });
         }).DisableAntiforgery();
 
         // ----- Access-policy protected (works for anonymous public decks) -----

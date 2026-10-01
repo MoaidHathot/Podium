@@ -13,8 +13,32 @@ public sealed class GitHubWebhookHandler(
     ISourceStore sources,
     SyncQueue queue,
     InstallationDiscovery discovery,
+    IHostApplicationLifetime lifetime,
     ILogger<GitHubWebhookHandler> log)
 {
+    /// <summary>
+    /// Processes a verified delivery after the HTTP response has been sent. Bounded by a timeout and by host shutdown;
+    /// a failure here is logged and otherwise harmless because the periodic poll catches up on anything missed.
+    /// </summary>
+    public void HandleInBackground(string eventName, byte[] payload)
+    {
+        _ = Task.Run(async () =>
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
+            cts.CancelAfter(TimeSpan.FromMinutes(2));
+            try
+            {
+                using var doc = JsonDocument.Parse(payload);
+                var outcome = await HandleAsync(eventName, doc, cts.Token);
+                log.LogInformation("Webhook {Event}: {Outcome}", eventName, outcome);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogError(ex, "Webhook {Event} failed", eventName);
+            }
+        });
+    }
+
     public bool VerifySignature(ReadOnlySpan<byte> body, string? signatureHeader)
     {
         var secret = options.Value.WebhookSecret;
