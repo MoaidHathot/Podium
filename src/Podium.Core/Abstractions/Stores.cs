@@ -79,6 +79,9 @@ public interface IBuildRunner
 {
     /// <summary>Starts the build somewhere isolated and returns a runner execution id.</summary>
     Task<string> StartAsync(BuildRequest request, CancellationToken ct = default);
+
+    /// <summary>Stable identity of the current builder (image reference/digest or script hash). Changes trigger rebuilds.</summary>
+    Task<string> GetBuilderVersionAsync(CancellationToken ct = default);
 }
 
 public interface IRepositoryClient

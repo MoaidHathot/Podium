@@ -39,6 +39,21 @@ public static class BuilderEnvironment
 /// <summary>Starts an execution of the pre-provisioned Container Apps Job, overriding only env vars and resources.</summary>
 public sealed class ContainerAppsJobRunner(ArmClient arm, IOptions<BuilderOptions> options, ILogger<ContainerAppsJobRunner> log) : IBuildRunner
 {
+    private (string Value, DateTimeOffset At)? _versionCache;
+
+    public async Task<string> GetBuilderVersionAsync(CancellationToken ct = default)
+    {
+        if (_versionCache is { } c && DateTimeOffset.UtcNow - c.At < TimeSpan.FromMinutes(2)) return c.Value;
+        var o = options.Value;
+        if (!string.IsNullOrWhiteSpace(o.Image)) return o.Image;
+        if (string.IsNullOrWhiteSpace(o.JobResourceId)) throw new InvalidOperationException("Builder:JobResourceId is not configured.");
+        var job = arm.GetContainerAppJobResource(new ResourceIdentifier(o.JobResourceId));
+        var data = await job.GetAsync(ct);
+        var image = data.Value.Data.Template.Containers.FirstOrDefault()?.Image ?? "unknown";
+        _versionCache = (image, DateTimeOffset.UtcNow);
+        return image;
+    }
+
     public async Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
     {
         var o = options.Value;
@@ -88,6 +103,18 @@ public sealed class ContainerAppsJobRunner(ArmClient arm, IOptions<BuilderOption
 /// </summary>
 public sealed class LocalProcessRunner(IOptions<BuilderOptions> options, IHostEnvironment env, ILogger<LocalProcessRunner> log) : IBuildRunner
 {
+    /// <summary>Hash of the builder script and addon sources, so local edits trigger rebuilds just like a new image would.</summary>
+    public Task<string> GetBuilderVersionAsync(CancellationToken ct = default)
+    {
+        var script = Path.GetFullPath(options.Value.LocalScriptPath ?? throw new InvalidOperationException("Builder:LocalScriptPath is not configured."));
+        var files = new List<string> { script };
+        var addonDir = Path.Combine(Path.GetDirectoryName(script)!, "addon");
+        if (Directory.Exists(addonDir)) files.AddRange(Directory.EnumerateFiles(addonDir, "*", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal));
+        using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        foreach (var f in files) sha.AppendData(File.ReadAllBytes(f));
+        return Task.FromResult("local-" + Convert.ToHexString(sha.GetHashAndReset())[..16].ToLowerInvariant());
+    }
+
     public Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
     {
         if (!env.IsDevelopment()) throw new InvalidOperationException("LocalProcess builder is only allowed in the Development environment.");

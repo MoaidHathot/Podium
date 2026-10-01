@@ -23,6 +23,7 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
             await scope.ServiceProvider.GetRequiredService<InstallationDiscovery>().DiscoverAsync(ct);
         }, stoppingToken);
 
+        var lastUpgradeCheck = DateTimeOffset.MinValue;
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
@@ -31,6 +32,21 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
                 using var scope = scopes.CreateScope();
                 await scope.ServiceProvider.GetRequiredService<BuildService>().ReapStaleAsync(ct);
             }, stoppingToken);
+
+            // Builder upgrades roll out automatically: decks built by an older builder are rebuilt. Checked at start
+            // (after the first tick, so discovery has had a chance to register sources) and hourly thereafter.
+            if (DateTimeOffset.UtcNow - lastUpgradeCheck > TimeSpan.FromHours(1))
+            {
+                lastUpgradeCheck = DateTimeOffset.UtcNow;
+                await RunSafely("builder upgrade check", async ct =>
+                {
+                    using var scope = scopes.CreateScope();
+                    var sp = scope.ServiceProvider;
+                    var decks = await sp.GetRequiredService<IDeckStore>().ListAsync(includeArchived: false, ct);
+                    var sources = sp.GetRequiredService<ISourceStore>();
+                    await sp.GetRequiredService<BuildService>().RebuildOutdatedAsync(decks, id => sources.GetAsync(id, ct), ct);
+                }, stoppingToken);
+            }
 
             await RunSafely("poll", async ct =>
             {

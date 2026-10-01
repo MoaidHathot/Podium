@@ -27,6 +27,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund --loglevel error \
  && chown -R pwuser:pwuser /opt/podium /ms-playwright
 COPY build.mjs ./
+COPY addon ./addon
 
 # Workspace for clone + output. Ephemeral per execution.
 RUN mkdir -p /work && chown pwuser:pwuser /work

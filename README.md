@@ -23,6 +23,8 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Live updates**: pushes trigger rebuilds via webhook; open decks detect the new build and reload on the same slide.
 - **Access control** per deck *and* per artifact: Private, Link (revocable signed URLs), Shared (specific GitHub users), Public.
 - **Discovery**: one library across all connected repositories; `/` focuses search.
+- **Cross-device presenter sync**: a tiny Slidev addon is injected at build time; the presenter view on your phone or laptop drives the audience view on any other machine through a WebSocket relay. Only the owner can drive; viewers follow. Clickers work as plain keyboard input.
+- **Self-updating builds**: when the builder image changes, decks built by the previous builder are rebuilt automatically (failed ones are retried).
 - **External decks**: public repositories you do not own can be added; they build in the same sandbox and are served with a CSP sandbox (opaque origin).
 - **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container; installation tokens never touch disk; CSRF header + SameSite cookies; secrets in Key Vault.
 
@@ -84,4 +86,5 @@ dotnet run --project src/Podium.Web      # http://localhost:5187, /dev-login sig
 
 - Code that needs a server at runtime (custom runners, server-side execution) is not available; Monaco runs in the browser and works.
 - presenterm PDF export requires weasyprint, which the builder does not ship; commit the PDF next to the deck to serve it.
-- Presenter/audience sync across *devices* is on the roadmap (a sync addon injected at build time); within one machine it works out of the box.
+- Public decks expose the presenter view (and therefore speaker notes) to anyone, since notes are part of the Slidev bundle. Use Link/Shared visibility for decks with sensitive notes.
+- Cross-device sync relays only Slidev shared state (slide, clicks, drawings, presenter cursor); it does not stream video.

@@ -108,6 +108,7 @@ builder.Services.AddSingleton<GitHubWebhookHandler>();
 builder.Services.AddHostedService<MaintenanceService>();
 builder.Services.AddSingleton<CallerResolver>();
 builder.Services.AddSingleton<DeckAccessService>();
+builder.Services.AddSingleton<Podium.Web.Sync.SyncHub>();
 
 // ----- Auth -----
 var gh = config.GetSection(GitHubOptions.Section).Get<GitHubOptions>() ?? new GitHubOptions();
@@ -209,6 +210,7 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "public, max-age=3600",
 });
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -248,6 +250,7 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
 app.MapGet("/healthz", () => Results.Ok(new { ok = true }));
 app.MapDeckServing();
 app.MapPodiumApi();
+Podium.Web.Sync.SyncEndpoints.MapSync(app);
 app.MapRazorPages();
 
 app.Run();

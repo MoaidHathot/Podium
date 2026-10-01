@@ -46,6 +46,7 @@ public sealed class BuildService(
             Status = BuildStatus.Queued,
             TriggeredBy = triggeredBy,
             Warnings = warnings,
+            BuilderVersion = await SafeBuilderVersionAsync(ct),
         };
         await builds.UpsertAsync(build, ct);
         await decks.UpsertAsync(deck with { LatestBuildId = build.Id, LatestBuildStatus = BuildStatus.Queued, UpdatedAt = DateTimeOffset.UtcNow }, ct);
@@ -134,6 +135,44 @@ public sealed class BuildService(
 
         log.LogInformation("Build {Build} for {Deck} finished: {Status} {Error}", buildId, deckSlug, build.Status, build.Error);
         return true;
+    }
+
+    private async Task<string?> SafeBuilderVersionAsync(CancellationToken ct)
+    {
+        try { return await runner.GetBuilderVersionAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Could not determine builder version");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Queues rebuilds for decks whose current (or last failed) build came from a different builder version, so builder
+    /// upgrades roll out without manual action. Returns the number of builds queued.
+    /// </summary>
+    public async Task<int> RebuildOutdatedAsync(IReadOnlyList<Deck> allDecks, Func<string, Task<Source?>> getSource, CancellationToken ct = default)
+    {
+        var current = await SafeBuilderVersionAsync(ct);
+        if (current is null) return 0;
+        var active = (await builds.ListActiveAsync(ct)).Select(b => b.DeckSlug).ToHashSet(StringComparer.Ordinal);
+        var queued = 0;
+        foreach (var deck in allDecks.Where(d => !d.Archived && d.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static))
+        {
+            if (active.Contains(deck.Slug)) continue;
+            var referenceId = deck.CurrentBuildId ?? deck.LatestBuildId;
+            if (referenceId is null) continue;
+            var reference = await builds.GetAsync(deck.Slug, referenceId, ct);
+            if (reference is null || string.Equals(reference.BuilderVersion, current, StringComparison.Ordinal)) continue;
+            var source = await getSource(deck.SourceId);
+            if (source is null) continue;
+            var sha = deck.LastCommitSha ?? source.LastSeenSha;
+            if (sha is null) continue;
+            await QueueAsync(deck, source, sha, "builder-upgrade", [], ct);
+            queued++;
+        }
+        if (queued > 0) log.LogInformation("Queued {Count} rebuild(s) after builder change to {Version}", queued, current);
+        return queued;
     }
 
     /// <summary>Marks runs that never reported back as failed.</summary>

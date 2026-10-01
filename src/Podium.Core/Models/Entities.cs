@@ -81,6 +81,8 @@ public sealed record Build
     /// <summary>Features the deck uses that are not supported remotely (reported by the builder).</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public string? TriggeredBy { get; init; }
+    /// <summary>Identity of the builder that produced this build (image digest or script hash); used to rebuild after builder upgrades.</summary>
+    public string? BuilderVersion { get; init; }
 }
 
 /// <summary>Explicit access grant for a deck.</summary>

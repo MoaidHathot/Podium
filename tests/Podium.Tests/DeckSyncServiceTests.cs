@@ -30,6 +30,8 @@ internal sealed class FakeRunner : IBuildRunner
 {
     public List<BuildRequest> Started { get; } = [];
     public bool Fail { get; set; }
+    public string Version { get; set; } = "builder-v1";
+    public Task<string> GetBuilderVersionAsync(CancellationToken ct = default) => Task.FromResult(Version);
     public Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
     {
         if (Fail) throw new InvalidOperationException("runner down");
@@ -261,5 +263,31 @@ public class DeckSyncServiceTests
         await svc.ReapStaleAsync();
         Assert.Empty(await _builds.ListActiveAsync());
         Assert.Equal(BuildStatus.Failed, (await _decks.GetAsync("slides-agents"))!.LatestBuildStatus);
+    }
+
+    [Fact]
+    public async Task Builder_upgrade_rebuilds_decks_built_by_older_builder_and_retries_failed_ones()
+    {
+        await _sync.SyncAsync(_source);
+        // Finish agents successfully; leave intro failed.
+        var agents = _runner.Started.Single(s => s.Deck.Slug == "slides-agents");
+        var intro = _runner.Started.Single(s => s.Deck.Slug == "slides-intro");
+        Assert.True(await _buildService.CompleteAsync("slides-agents", agents.Build.Id, agents.CallbackToken, new BuildReport(true, true, false, false, null, null)));
+        Assert.True(await _buildService.CompleteAsync("slides-intro", intro.Build.Id, intro.CallbackToken, new BuildReport(false, false, false, false, "boom", null)));
+        Assert.Equal("builder-v1", (await _builds.GetAsync("slides-agents", agents.Build.Id))!.BuilderVersion);
+
+        // Same builder: nothing to do.
+        var decks = await _decks.ListAsync();
+        Assert.Equal(0, await _buildService.RebuildOutdatedAsync(decks, id => _sources.GetAsync(id)));
+
+        // New builder: both decks are rebuilt (one upgrade, one retry), each exactly once.
+        _runner.Version = "builder-v2";
+        Assert.Equal(2, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
+        Assert.Equal(4, _runner.Started.Count);
+        Assert.All(await _builds.ListActiveAsync(), b => Assert.Equal("builder-v2", b.BuilderVersion));
+        Assert.Equal("builder-upgrade", (await _builds.ListActiveAsync()).First().TriggeredBy);
+
+        // While those builds are active a second pass must not queue duplicates.
+        Assert.Equal(0, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
     }
 }

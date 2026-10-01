@@ -182,6 +182,7 @@ async function buildSlidev(deckDir, outDir, result) {
   if (!existsSync(entryPath)) throw new Error(`Entry ${entry} not found in ${deckPath || '/'}`);
   const fm = readHeadmatter(entryPath);
   await ensureSlidevProject(deckDir);
+  injectPodiumAddon(deckDir, entryPath);
 
   const slidevBin = resolveSlidevBin(deckDir);
   const site = join(outDir, 'site');
@@ -232,7 +233,42 @@ function resolveSlidevBin(deckDir) {
 function injectPodiumMeta(indexHtml) {
   const html = readFileSync(indexHtml, 'utf8');
   if (html.includes('name="podium-build"')) return;
-  writeFileSync(indexHtml, html.replace('<head>', `<head><meta name="podium-build" content="${buildId}">`));
+  writeFileSync(indexHtml, html.replace('<head>', `<head><meta name="podium-build" content="${buildId}"><meta name="podium-slug" content="${slug}">`));
+}
+
+/**
+ * Adds the Podium sync addon (cross-device presenter sync) to the deck's headmatter. Only the headmatter block is
+ * re-serialised; the slide content is left byte-for-byte intact. Works on the ephemeral checkout only.
+ */
+function injectPodiumAddon(deckDir, entryPath) {
+  const source = join(here, 'addon');
+  if (!existsSync(join(source, 'setup', 'root.ts'))) { log('Podium addon not bundled with this builder; skipping sync addon'); return; }
+  const target = join(deckDir, '.podium-addon');
+  rmSync(target, { recursive: true, force: true });
+  cpSync(source, target, { recursive: true });
+
+  const yaml = require('js-yaml');
+  const text = readFileSync(entryPath, 'utf8');
+  const normalized = text.replace(/\r\n/g, '\n');
+  let fm = {};
+  let body = normalized;
+  if (normalized.startsWith('---\n')) {
+    const end = normalized.indexOf('\n---', 4);
+    if (end >= 0) {
+      try { fm = yaml.load(normalized.slice(4, end), { schema: yaml.CORE_SCHEMA }) || {}; } catch (e) { log(`Cannot parse headmatter (${e.message}); sync addon not injected`); return; }
+      // Keep whatever follows the closing fence (usually a newline) exactly as it was.
+      body = normalized.slice(end + 4);
+    }
+  }
+  if (typeof fm !== 'object' || Array.isArray(fm)) { log('Unexpected headmatter shape; sync addon not injected'); return; }
+  const addons = Array.isArray(fm.addons) ? fm.addons : (typeof fm.addons === 'string' ? [fm.addons] : []);
+  // '@/' is Slidev's syntax for a path relative to the deck root (absolute Windows paths are rejected as addon names).
+  const ref = '@/.podium-addon';
+  if (!addons.includes(ref)) addons.push(ref);
+  fm.addons = addons;
+  const dumped = yaml.dump(fm, { lineWidth: -1, noRefs: true, schema: yaml.CORE_SCHEMA });
+  writeFileSync(entryPath, `---\n${dumped}---${body}`);
+  log('Injected Podium sync addon');
 }
 
 async function buildPresenterm(deckDir, outDir, result) {

@@ -1,0 +1,8 @@
+{
+  "name": "slidev-addon-podium-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Podium: relays Slidev's shared state (slide, clicks, drawings) through the Podium server so presenter and audience can run on different devices.",
+  "keywords": ["slidev-addon"],
+  "engines": { "slidev": ">=0.50.0" }
+}
