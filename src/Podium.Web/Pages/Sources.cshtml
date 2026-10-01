@@ -80,13 +80,13 @@
     const s = e.target.closest('[data-sync]');
     if (s) {
       s.disabled = true;
-      try { await api('POST', `/api/sources/${encodeURIComponent(s.dataset.sync)}/sync?force=${s.dataset.force ? 'true' : 'false'}`); toast(s.dataset.force ? 'Rebuilding all decks' : 'Sync queued', 'ok'); }
+      try { await api('POST', `/api/sources/${s.dataset.sync}/sync?force=${s.dataset.force ? 'true' : 'false'}`); toast(s.dataset.force ? 'Rebuilding all decks' : 'Sync queued', 'ok'); }
       catch (err) { toast(err.message, 'error'); }
       finally { s.disabled = false; }
     }
     const r = e.target.closest('[data-remove]');
     if (r && confirm(`Remove ${r.dataset.remove} and archive its decks?`)) {
-      try { await api('DELETE', `/api/sources/${encodeURIComponent(r.dataset.remove)}`); r.closest('tr').remove(); toast('Removed', 'ok'); }
+      try { await api('DELETE', `/api/sources/${r.dataset.remove}`); r.closest('tr').remove(); toast('Removed', 'ok'); }
       catch (err) { toast(err.message, 'error'); }
     }
   });

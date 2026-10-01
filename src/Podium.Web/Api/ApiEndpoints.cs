@@ -194,8 +194,9 @@ public static class ApiEndpoints
             return Results.Ok(source);
         });
 
-        owner.MapDelete("/sources/{id}", async (string id, ISourceStore sources, IDeckStore decks, DeckAccessService access, CancellationToken ct) =>
+        owner.MapDelete("/sources/{sourceOwner}/{sourceRepo}", async (string sourceOwner, string sourceRepo, ISourceStore sources, IDeckStore decks, DeckAccessService access, CancellationToken ct) =>
         {
+            var id = Source.MakeId(sourceOwner, sourceRepo);
             var source = await sources.GetAsync(id, ct);
             if (source is null) return Results.NotFound();
             foreach (var d in await decks.ListBySourceAsync(id, ct))
@@ -208,8 +209,10 @@ public static class ApiEndpoints
             return Results.NoContent();
         });
 
-        owner.MapPost("/sources/{id}/sync", (string id, [FromQuery] bool force, SyncQueue queue) =>
+        owner.MapPost("/sources/{sourceOwner}/{sourceRepo}/sync", async (string sourceOwner, string sourceRepo, [FromQuery] bool force, ISourceStore sources, SyncQueue queue, CancellationToken ct) =>
         {
+            var id = Source.MakeId(sourceOwner, sourceRepo);
+            if (await sources.GetAsync(id, ct) is null) return Results.NotFound();
             queue.TryEnqueue(new SyncJob(id, null, force, "manual"));
             return Results.Accepted();
         });
