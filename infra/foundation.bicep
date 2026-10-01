@@ -25,6 +25,9 @@ param budgetAmount int = 8
 @description('E-mail that receives budget alerts.')
 param budgetEmail string
 
+@description('Deployment timestamp; used only to anchor the budget period.')
+param deploymentTime string = utcNow('yyyy-MM')
+
 var suffix = uniqueString(resourceGroup().id)
 var storageName = toLower('st${baseName}${take(suffix, 10)}')
 var kvName = toLower('kv-${baseName}-${take(suffix, 8)}')
@@ -159,11 +162,11 @@ resource builderJob 'Microsoft.App/jobs@2024-03-01' = {
 // ---------------------------------------------------------------------------------------------------------------
 var roles = {
   storageBlobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-  storageTableDataContributor: '0a9a7e1f-b9d0-4cc4-a60d-0319b160aebd'
+  storageTableDataContributor: '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
   storageBlobDelegator: 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a'
   keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
   keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
-  contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24f'
+  contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 }
 
 resource webBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -208,7 +211,7 @@ resource budget 'Microsoft.Consumption/budgets@2023-11-01' = {
     category: 'Cost'
     amount: budgetAmount
     timeGrain: 'Monthly'
-    timePeriod: { startDate: '${substring(utcNow(), 0, 7)}-01' }
+    timePeriod: { startDate: '${deploymentTime}-01' }
     notifications: {
       actual80: { enabled: true, operator: 'GreaterThan', threshold: 80, thresholdType: 'Actual', contactEmails: [ budgetEmail ] }
       forecast100: { enabled: true, operator: 'GreaterThan', threshold: 100, thresholdType: 'Forecasted', contactEmails: [ budgetEmail ] }

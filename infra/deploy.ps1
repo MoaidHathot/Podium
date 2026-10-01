@@ -26,22 +26,23 @@ $ErrorActionPreference = 'Stop'
 $infra = $PSScriptRoot
 
 function Invoke-Az {
-    param([Parameter(ValueFromRemainingArguments)] [string[]] $Args)
-    $out = & az @Args 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "az $($Args -join ' ') failed:`n$out" }
+    # Usage: Invoke-Az @('group', 'create', '-n', $rg). An explicit array avoids clashes with PowerShell common parameters (-o).
+    param([string[]] $AzArgs)
+    $out = & az @AzArgs 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "az $($AzArgs -join ' ') failed:`n$out" }
     return $out
 }
 
 function Get-FoundationOutputs {
-    $json = Invoke-Az deployment group show -g $ResourceGroup -n podium-foundation --query properties.outputs -o json
+    $json = Invoke-Az @('deployment', 'group', 'show', '-g', $ResourceGroup, '-n', 'podium-foundation', '--query', 'properties.outputs', '-o', 'json')
     return ($json | ConvertFrom-Json)
 }
 
 if ($Phase -in 'foundation', 'all') {
     Write-Host "== Foundation ($ResourceGroup, $Location)" -ForegroundColor Cyan
-    Invoke-Az group create -n $ResourceGroup -l $Location -o none
-    Invoke-Az deployment group create -g $ResourceGroup -n podium-foundation -f (Join-Path $infra 'foundation.bicep') `
-        -p baseName=$BaseName githubRepository=$GitHubRepository builderImage=$BuilderImage budgetEmail=$BudgetEmail -o none
+    Invoke-Az @('group', 'create', '-n', $ResourceGroup, '-l', $Location, '-o', 'none') | Out-Null
+    Invoke-Az @('deployment', 'group', 'create', '-g', $ResourceGroup, '-n', 'podium-foundation', '-f', (Join-Path $infra 'foundation.bicep'),
+        '-p', "baseName=$BaseName", "githubRepository=$GitHubRepository", "builderImage=$BuilderImage", "budgetEmail=$BudgetEmail", '-o', 'none') | Out-Null
     $o = Get-FoundationOutputs
     Write-Host "storage: $($o.storageAccountName.value)  keyvault: $($o.keyVaultName.value)"
     Write-Host "deploy identity client id (GitHub variable AZURE_CLIENT_ID): $($o.deployIdentityClientId.value)"
@@ -52,14 +53,14 @@ if ($Phase -in 'secrets', 'all') {
     $o = Get-FoundationOutputs
     $kv = $o.keyVaultName.value
     # The deploying user needs data-plane access to write secrets (RBAC vault: Owner alone is not enough).
-    $me = Invoke-Az ad signed-in-user show --query id -o tsv
-    $kvId = Invoke-Az keyvault show -n $kv --query id -o tsv
-    Invoke-Az role assignment create --assignee-object-id $me --assignee-principal-type User --role 'Key Vault Administrator' --scope $kvId -o none
+    $me = (Invoke-Az @('ad', 'signed-in-user', 'show', '--query', 'id', '-o', 'tsv')).Trim()
+    $kvId = (Invoke-Az @('keyvault', 'show', '-n', $kv, '--query', 'id', '-o', 'tsv')).Trim()
+    Invoke-Az @('role', 'assignment', 'create', '--assignee-object-id', $me, '--assignee-principal-type', 'User', '--role', 'Key Vault Administrator', '--scope', $kvId, '-o', 'none') | Out-Null
     Write-Host 'waiting for RBAC propagation...'
     $deadline = (Get-Date).AddMinutes(3)
     do {
         Start-Sleep -Seconds 10
-        $existing = & az keyvault secret list --vault-name $kv --query "[].name" -o tsv 2>$null
+        $existing = & az keyvault secret list --vault-name $kv --query '[].name' -o tsv 2>$null
         $ok = $LASTEXITCODE -eq 0
     } while (-not $ok -and (Get-Date) -lt $deadline)
     if (-not $ok) { throw 'Key Vault access did not propagate in time; rerun -Phase secrets' }
@@ -67,11 +68,11 @@ if ($Phase -in 'secrets', 'all') {
     if ($existing -notcontains 'podium-signing-key') {
         $bytes = New-Object byte[] 48
         [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-        Invoke-Az keyvault secret set --vault-name $kv -n podium-signing-key --value ([Convert]::ToBase64String($bytes)) -o none
+        Invoke-Az @('keyvault', 'secret', 'set', '--vault-name', $kv, '-n', 'podium-signing-key', '--value', ([Convert]::ToBase64String($bytes)), '-o', 'none') | Out-Null
         Write-Host 'created podium-signing-key'
     }
     foreach ($s in 'github-private-key', 'github-client-id', 'github-client-secret', 'github-webhook-secret') {
-        if ($existing -notcontains $s) { Write-Warning "secret '$s' missing: run scripts/github-app-manifest.ps1 first" }
+        if ($existing -notcontains $s) { Write-Warning "secret '$s' missing: run scripts/github-app-manifest.ps1 -KeyVaultName $kv" }
     }
 }
 
@@ -86,13 +87,13 @@ if ($Phase -in 'app', 'all') {
         "keyVaultName=$($o.keyVaultName.value)", "webIdentityId=$($o.webIdentityId.value)", "webIdentityClientId=$($o.webIdentityClientId.value)"
     )
     # Preserve any custom domain binding that already exists so re-deploys do not drop it.
-    $existingDomains = & az containerapp show -g $ResourceGroup -n "$BaseName-web" --query "properties.configuration.ingress.customDomains" -o json 2>$null
+    $existingDomains = & az containerapp show -g $ResourceGroup -n "$BaseName-web" --query 'properties.configuration.ingress.customDomains' -o json 2>$null
     if ($LASTEXITCODE -eq 0 -and $existingDomains -and $existingDomains -ne 'null') {
         $doms = ($existingDomains | ConvertFrom-Json) | Where-Object { $_.certificateId } | ForEach-Object { @{ name = $_.name; certificateId = $_.certificateId } }
         if ($doms) { $params += "customDomains=$(ConvertTo-Json @($doms) -Compress)" }
     }
-    Invoke-Az deployment group create -g $ResourceGroup -n podium-app -f (Join-Path $infra 'app.bicep') -p @params -o none
-    $app = Invoke-Az deployment group show -g $ResourceGroup -n podium-app --query properties.outputs -o json | ConvertFrom-Json
+    Invoke-Az (@('deployment', 'group', 'create', '-g', $ResourceGroup, '-n', 'podium-app', '-f', (Join-Path $infra 'app.bicep'), '-p') + $params + @('-o', 'none')) | Out-Null
+    $app = (Invoke-Az @('deployment', 'group', 'show', '-g', $ResourceGroup, '-n', 'podium-app', '--query', 'properties.outputs', '-o', 'json')) | ConvertFrom-Json
     Write-Host "FQDN: $($app.fqdn.value)"
     Write-Host "DNS for $PublicHostname :"
     Write-Host "  CNAME  $($PublicHostname.Split('.')[0])          -> $($app.fqdn.value)"
@@ -101,10 +102,10 @@ if ($Phase -in 'app', 'all') {
 
 if ($Phase -in 'domain', 'all') {
     Write-Host "== Custom domain $PublicHostname" -ForegroundColor Cyan
-    $env = "cae-$BaseName"
+    $envName = "cae-$BaseName"
     $bound = & az containerapp hostname list -g $ResourceGroup -n "$BaseName-web" --query "[?name=='$PublicHostname'].bindingType" -o tsv 2>$null
     if ($bound -eq 'SniEnabled') { Write-Host 'already bound'; return }
-    if (-not $bound) { Invoke-Az containerapp hostname add -g $ResourceGroup -n "$BaseName-web" --hostname $PublicHostname -o none }
-    Invoke-Az containerapp hostname bind -g $ResourceGroup -n "$BaseName-web" --hostname $PublicHostname --environment $env --validation-method CNAME -o none
+    if (-not $bound) { Invoke-Az @('containerapp', 'hostname', 'add', '-g', $ResourceGroup, '-n', "$BaseName-web", '--hostname', $PublicHostname, '-o', 'none') | Out-Null }
+    Invoke-Az @('containerapp', 'hostname', 'bind', '-g', $ResourceGroup, '-n', "$BaseName-web", '--hostname', $PublicHostname, '--environment', $envName, '--validation-method', 'CNAME', '-o', 'none') | Out-Null
     Write-Host 'bound with a managed certificate'
 }
