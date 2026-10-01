@@ -4,7 +4,7 @@ targetScope = 'resourceGroup'
 
 param location string = resourceGroup().location
 param baseName string = 'podium'
-param webImage string = 'ghcr.io/moaidhathot/podium-web:latest'
+param webImage string = 'ghcr.io/moaidhathot/podium/web:latest'
 
 @description('Public origin, e.g. https://slides.moaid.codes')
 param publicBaseUrl string

@@ -17,7 +17,7 @@ param githubRepository string
 param githubBranch string = 'main'
 
 @description('Builder container image.')
-param builderImage string = 'ghcr.io/moaidhathot/podium-builder:latest'
+param builderImage string = 'ghcr.io/moaidhathot/podium/builder:latest'
 
 @description('Monthly budget in USD for the resource group.')
 param budgetAmount int = 8

@@ -19,8 +19,8 @@ param(
     [string] $GitHubRepository = 'MoaidHathot/Podium',
     [string] $GitHubAppId,
     [string] $GitHubAppSlug,
-    [string] $WebImage = 'ghcr.io/moaidhathot/podium-web:latest',
-    [string] $BuilderImage = 'ghcr.io/moaidhathot/podium-builder:latest'
+    [string] $WebImage = 'ghcr.io/moaidhathot/podium/web:latest',
+    [string] $BuilderImage = 'ghcr.io/moaidhathot/podium/builder:latest'
 )
 $ErrorActionPreference = 'Stop'
 $infra = $PSScriptRoot
