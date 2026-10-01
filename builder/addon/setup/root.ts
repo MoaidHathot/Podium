@@ -1,9 +1,15 @@
-// Podium sync: an additional Slidev sync method that relays shared state over a WebSocket to the Podium server.
-// Slidev's built-in sync uses BroadcastChannel, which only reaches windows of the same browser profile. With this,
-// the presenter view on a phone or laptop drives the audience view on another machine.
+// Podium addon root setup, injected at build time by the Podium builder (see builder/build.mjs).
 //
-// Injected at build time by the Podium builder (see builder/build.mjs). The server decides who may send: only the
-// deck owner's sockets are allowed to publish; everyone else receives.
+// 1. Base-path rebasing for dynamic media URLs. Podium serves every deck under /d/<slug>/ and builds it with that
+//    base. Vite rewrites *static* asset references, but a runtime-bound `:src="'/screenshots/x.png'"` reaches the
+//    browser untouched, 404s at the site root, and the deck shows a broken image or its own placeholder, while the
+//    same deck works locally at base "/". When such a request fails, retry it under the base path. Correct URLs are
+//    never touched; a genuinely missing file fails again on the retry and the author's own error handling proceeds.
+//
+// 2. Cross-device sync: an additional Slidev sync method that relays shared state over a WebSocket to the Podium
+//    server. Slidev's built-in sync uses BroadcastChannel, which only reaches windows of the same browser profile.
+//    With this, the presenter view on a phone or laptop drives the audience view on another machine. The server
+//    decides who may send: only the deck owner's sockets are allowed to publish; everyone else receives.
 import { toRaw } from 'vue'
 import { addSyncMethod } from '@slidev/client/state/syncState.ts'
 
@@ -11,8 +17,36 @@ type Handler = (data: Record<string, unknown>) => void
 
 declare const __PODIUM_SLUG__: string | undefined
 
-export default function setupPodiumSync() {
+export default function setupPodium() {
   if (typeof window === 'undefined') return
+  installBasePathRebase()
+  setupPodiumSync()
+}
+
+function installBasePathRebase() {
+  const base: string = import.meta.env.BASE_URL || '/'
+  if (base === '/' || base === './' || base === '') return
+  const prefix = base.endsWith('/') ? base.slice(0, -1) : base
+
+  const rebased = (value: string | null): string | null => {
+    if (!value || !value.startsWith('/') || value.startsWith('//') || value.startsWith(base)) return null
+    return prefix + value
+  }
+
+  // Resource "error" events do not bubble, but they do pass through the capture phase. Handling them at the
+  // document level lets us retry before the element's own listeners (e.g. a Vue @error) see the failure.
+  document.addEventListener('error', (event) => {
+    const el = event.target
+    if (!(el instanceof HTMLImageElement || el instanceof HTMLVideoElement || el instanceof HTMLAudioElement || el instanceof HTMLSourceElement || el instanceof HTMLTrackElement)) return
+    const next = rebased(el.getAttribute('src'))
+    if (!next) return
+    event.stopPropagation()
+    el.setAttribute('src', next)
+    if (el instanceof HTMLSourceElement && el.parentElement instanceof HTMLMediaElement) el.parentElement.load()
+  }, true)
+}
+
+function setupPodiumSync() {
   const slug = resolveSlug()
   if (!slug) return
   // Headless export / print renders must not try to sync.
