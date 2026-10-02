@@ -88,8 +88,10 @@ Prerequisites: `az` logged in, `gh` logged in, PowerShell 7.
 ```
 
 The web app scales to zero after 30 idle minutes (`scaleToZeroAfterSeconds` in `infra/app.bicep`; the platform default is 5).
-A cold start takes roughly 20-25 s, almost all of it Azure scheduling the replica; set `minReplicas: 1` if you would rather
-pay a few dollars a month for an always-warm instance.
+A cold start takes roughly 20-25 s, almost all of it Azure scheduling the replica; run `./infra/deploy.ps1 -Phase app -MinReplicas 1`
+if you would rather pay a few dollars a month for an always-warm instance.
+
+Secret rotation, backups/export and troubleshooting queries are in [docs/operations.md](docs/operations.md).
 
 Set repository variables `AZURE_CLIENT_ID` (deploy identity), `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
 `AZURE_RESOURCE_GROUP` and the GitHub Actions workflow builds both images to GHCR and rolls them out with OIDC.

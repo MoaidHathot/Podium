@@ -20,6 +20,8 @@ param(
     [string] $GitHubAppId,
     [string] $GitHubAppSlug,
     [string] $WebImage = 'ghcr.io/moaidhathot/podium/web:latest',
+    # 0 = scale to zero when idle (default); 1 = always-warm replica (app phase).
+    [ValidateRange(0, 1)] [int] $MinReplicas = 0,
     [string] $BuilderImage = 'ghcr.io/moaidhathot/podium/builder:latest'
 )
 $ErrorActionPreference = 'Stop'
@@ -150,6 +152,7 @@ if ($Phase -in 'app', 'all') {
         $doms = @(($existingDomains | Out-String | ConvertFrom-Json) | Where-Object { $_.certificateId } | ForEach-Object { @{ name = $_.name; certificateId = $_.certificateId } })
         if ($doms.Count -gt 0) { $params.customDomains = $doms }
     }
+    $params.minReplicas = $MinReplicas
     $paramFile = Write-ParametersFile $params
     try { Invoke-Az @('deployment', 'group', 'create', '-g', $ResourceGroup, '-n', 'podium-app', '-f', (Join-Path $infra 'app.bicep'), '-p', "@$paramFile", '-o', 'none') | Out-Null }
     finally { Remove-Item $paramFile -Force -ErrorAction SilentlyContinue }

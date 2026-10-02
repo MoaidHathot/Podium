@@ -34,6 +34,11 @@ param customDomains array = []
 @minValue(60)
 param scaleToZeroAfterSeconds int = 1800
 
+@description('Replicas kept running at all times. 0 (default) scales to zero when idle and costs almost nothing; 1 keeps the app warm (no cold start, a few dollars a month). The sync socket and presenter state are per replica, so maxReplicas stays 1.')
+@minValue(0)
+@maxValue(1)
+param minReplicas int = 0
+
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = { name: keyVaultName }
 
 var secretNames = [ 'podium-signing-key', 'github-private-key', 'github-client-id', 'github-client-secret', 'github-webhook-secret' ]
@@ -65,7 +70,7 @@ resource web 'Microsoft.App/containerApps@2025-01-01' = {
     }
     template: {
       scale: {
-        minReplicas: 0
+        minReplicas: minReplicas
         maxReplicas: 1
         cooldownPeriod: scaleToZeroAfterSeconds
         rules: [ { name: 'http', http: { metadata: { concurrentRequests: '100' } } } ]

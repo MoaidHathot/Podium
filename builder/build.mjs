@@ -65,12 +65,25 @@ try { const q = new URL(uploadUrl).search; if (q.length > 1) secrets.push(q.slic
 // ---------------------------------------------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------------------------------------------
+// The build log is uploaded with the artifacts and shown in the UI. Deck tooling can be very chatty (npm, Vite,
+// LibreOffice); keep the head (what was attempted) and the tail (what went wrong) and drop the middle.
+const LOG_MAX_LINES = Number(env.PODIUM_LOG_MAX_LINES) || 4000;
+const LOG_MAX_LINE_CHARS = 2000;
 const logLines = [];
+let droppedLines = 0;
 const scrub = (s) => secrets.reduce((acc, sec) => (sec ? acc.split(sec).join('***') : acc), String(s));
 function log(msg) {
-  const line = `[${new Date().toISOString()}] ${scrub(msg)}`;
+  let text = scrub(msg);
+  if (text.length > LOG_MAX_LINE_CHARS) text = `${text.slice(0, LOG_MAX_LINE_CHARS)} ... [${text.length - LOG_MAX_LINE_CHARS} chars trimmed]`;
+  const line = `[${new Date().toISOString()}] ${text}`;
+  if (logLines.length >= LOG_MAX_LINES) { logLines.splice(Math.floor(LOG_MAX_LINES / 4), 1); droppedLines++; }
   logLines.push(line);
   process.stdout.write(line + '\n');
+}
+function logText() {
+  if (!droppedLines) return logLines.join('\n') + '\n';
+  const head = Math.floor(LOG_MAX_LINES / 4);
+  return [...logLines.slice(0, head), `... ${droppedLines} line(s) trimmed from the middle of the log ...`, ...logLines.slice(head)].join('\n') + '\n';
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -677,7 +690,7 @@ async function finish(outDir, result) {
     mkdirSync(outDir, { recursive: true });
     enforceOutputBudget(outDir, result);
     log(`Result: success=${result.success} site=${result.hasSite} pdf=${result.hasPdf} pptx=${result.hasPptx}`);
-    writeFileSync(join(outDir, 'build.log'), logLines.join('\n') + '\n');
+    writeFileSync(join(outDir, 'build.log'), logText());
     await upload(outDir);
   } catch (e) {
     result.success = false;
