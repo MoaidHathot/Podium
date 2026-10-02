@@ -23,9 +23,9 @@ public static class DeckServingEndpoints
     public static IEndpointRouteBuilder MapDeckServing(this IEndpointRouteBuilder app)
     {
         app.MapGet("/d/{slug}.pdf", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, CancellationToken ct)
-            => ServeArtifact(slug, ArtifactKind.Pdf, http, access, artifacts, callers, views, cache, viewTokens, ct));
+            => ServeArtifact(slug, ArtifactKind.Pdf, http, access, artifacts, callers, views, cache, viewTokens, ct)).RequireRateLimiting("deck-entry");
         app.MapGet("/d/{slug}.pptx", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, CancellationToken ct)
-            => ServeArtifact(slug, ArtifactKind.Pptx, http, access, artifacts, callers, views, cache, viewTokens, ct));
+            => ServeArtifact(slug, ArtifactKind.Pptx, http, access, artifacts, callers, views, cache, viewTokens, ct)).RequireRateLimiting("deck-entry");
         app.MapGet("/d/{slug}.jpg", async (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct) =>
         {
             var caller = callers.Resolve(http.User);
@@ -40,7 +40,8 @@ public static class DeckServingEndpoints
                 entityTag: file.ETag is null ? null : new Microsoft.Net.Http.Headers.EntityTagHeaderValue(QuoteEtag(file.ETag)));
         });
         // Note: routing ignores trailing slashes, so "/d/{slug}" and "/d/{slug}/" both land here with an empty path.
-        app.MapMethods("/d/{slug}/{**path}", ["GET", "HEAD"], ServeSite);
+        // Share-link probing is bounded on navigations only; asset fetches of an open deck are not counted.
+        app.MapMethods("/d/{slug}/{**path}", ["GET", "HEAD"], ServeSite).AddEndpointFilter<NavigationRateLimitFilter>();
         return app;
     }
 
@@ -240,4 +241,28 @@ public static class DeckServingEndpoints
         => options.PublicBaseUrl.ToString().TrimEnd('/') + http.Request.Path + http.Request.QueryString;
 
     private static string QuoteEtag(string etag) => etag.StartsWith('"') || etag.StartsWith("W/", StringComparison.Ordinal) ? etag : $"\"{etag}\"";
+
+    internal static bool IsNavigationRequest(HttpContext http) => IsNavigation(http);
+}
+
+/// <summary>Applies the "deck-entry" sliding-window limit to HTML navigations only (per client IP).</summary>
+public sealed class NavigationRateLimitFilter : IEndpointFilter
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Threading.RateLimiting.SlidingWindowRateLimiter> Limiters = new(StringComparer.Ordinal);
+
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var http = context.HttpContext;
+        if (!DeckServingEndpoints.IsNavigationRequest(http)) return await next(context);
+        var key = http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var limiter = Limiters.GetOrAdd(key, _ => new System.Threading.RateLimiting.SlidingWindowRateLimiter(new System.Threading.RateLimiting.SlidingWindowRateLimiterOptions { PermitLimit = 90, Window = TimeSpan.FromMinutes(1), SegmentsPerWindow = 6, QueueLimit = 0 }));
+        using var lease = limiter.AttemptAcquire();
+        if (!lease.IsAcquired)
+        {
+            http.Response.Headers.RetryAfter = "10";
+            return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+        }
+        if (Limiters.Count > 10_000) Limiters.Clear(); // crude bound; limiters are cheap to recreate
+        return await next(context);
+    }
 }

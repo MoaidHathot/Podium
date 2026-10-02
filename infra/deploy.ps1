@@ -50,6 +50,7 @@ function Get-FoundationOutputs {
     # Resolve from the resource group itself so partial deployments do not block later phases.
     $storage = (Invoke-Az @('storage', 'account', 'list', '-g', $ResourceGroup, '--query', "[?starts_with(name,'st$BaseName')].name | [0]", '-o', 'tsv') | Out-String).Trim()
     $kv = (Invoke-Az @('keyvault', 'list', '-g', $ResourceGroup, '--query', "[?starts_with(name,'kv-$BaseName')].name | [0]", '-o', 'tsv') | Out-String).Trim()
+    $dpKey = (& az keyvault key show --vault-name $kv -n podium-dataprotection --query key.kid -o tsv 2>$null | Out-String).Trim()
     $envId = (Invoke-Az @('containerapp', 'env', 'show', '-g', $ResourceGroup, '-n', "cae-$BaseName", '--query', 'id', '-o', 'tsv') | Out-String).Trim()
     $envDomain = (Invoke-Az @('containerapp', 'env', 'show', '-g', $ResourceGroup, '-n', "cae-$BaseName", '--query', 'properties.defaultDomain', '-o', 'tsv') | Out-String).Trim()
     $jobId = (& az containerapp job show -g $ResourceGroup -n "$BaseName-builder" --query id -o tsv 2>$null | Where-Object { "$_" -notmatch 'WARNING' } | Out-String).Trim()
@@ -58,6 +59,7 @@ function Get-FoundationOutputs {
     return [pscustomobject]@{
         storageAccountName       = $storage
         keyVaultName             = $kv
+        dataProtectionKeyId      = $dpKey
         environmentId            = $envId
         environmentDefaultDomain = $envDomain
         builderJobId             = $jobId
@@ -137,6 +139,7 @@ if ($Phase -in 'app', 'all') {
         builderJobId             = $o.builderJobId
         storageAccountName       = $o.storageAccountName
         keyVaultName             = $o.keyVaultName
+        dataProtectionKeyId      = $o.dataProtectionKeyId
         webIdentityId            = $o.webIdentityId
         webIdentityClientId      = $o.webIdentityClientId
         customDomains            = @()

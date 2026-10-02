@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 using Microsoft.Extensions.Options;
 using Podium.Core.Abstractions;
 using Podium.Core.InMemory;
@@ -65,8 +67,9 @@ else
     builder.Services.AddSingleton<IViewHistoryStore, TableViewHistoryStore>();
     builder.Services.AddSingleton<IArtifactStore, BlobArtifactStore>();
 
-    // Data protection keys (cookie encryption) must survive restarts and scale-out.
-    builder.Services.AddDataProtection()
+    // Data protection keys (cookie encryption) must survive restarts and scale-out. In production the key ring is
+    // additionally wrapped with a Key Vault RSA key, so the XML in Blob is useless without Key Vault access.
+    var dp = builder.Services.AddDataProtection()
         .SetApplicationName("Podium")
         .PersistKeysToAzureBlobStorage(sp =>
         {
@@ -74,6 +77,11 @@ else
             container.CreateIfNotExists();
             return container.GetBlobClient("dataprotection-keys.xml");
         });
+    var dpKeyId = config["DataProtection:KeyVaultKeyId"];
+    if (!string.IsNullOrWhiteSpace(dpKeyId))
+        dp.ProtectKeysWithAzureKeyVault(new Uri(dpKeyId), credential);
+    else if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException("DataProtection:KeyVaultKeyId must be set outside Development so cookie keys are encrypted at rest.");
 }
 
 // ----- Builder runner -----
@@ -182,6 +190,23 @@ builder.Services.AddRazorPages(o =>
     o.Conventions.AllowAnonymousToPage("/Error");
 });
 builder.Services.AddHttpContextAccessor();
+
+// ----- Rate limiting (per client IP) -----
+// Keeps credential stuffing, share-link guessing and webhook floods cheap to absorb. Deck assets are exempt: a single
+// slide deck legitimately fetches dozens of files in a burst.
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.OnRejected = (ctx, _) => { ctx.HttpContext.Response.Headers.RetryAfter = "10"; return ValueTask.CompletedTask; };
+    static string ClientKey(HttpContext http) => http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    static RateLimitPartition<string> Sliding(HttpContext http, int permits) => RateLimitPartition.GetSlidingWindowLimiter(ClientKey(http),
+        _ => new SlidingWindowRateLimiterOptions { PermitLimit = permits, Window = TimeSpan.FromMinutes(1), SegmentsPerWindow = 6, QueueLimit = 0 });
+    o.AddPolicy("auth", http => Sliding(http, 20));
+    o.AddPolicy("webhook", http => Sliding(http, 60));
+    o.AddPolicy("probe", http => Sliding(http, 120));
+    // Deck entry pages and artifact downloads (not assets): bounds share-link enumeration; far above human navigation.
+    o.AddPolicy("deck-entry", http => Sliding(http, 90));
+});
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -215,6 +240,7 @@ app.UseStaticFiles(new StaticFileOptions
 });
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseRouting();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseMiddleware<ExternalHostMiddleware>();
 app.UseAuthorization();
@@ -225,7 +251,7 @@ app.MapGet("/login/github", (string? returnUrl) =>
     if (!gh.OAuthConfigured) return Results.Problem("GitHub OAuth is not configured.", statusCode: 503);
     var target = SafeReturnUrl(returnUrl);
     return Results.Challenge(new AuthenticationProperties { RedirectUri = target }, [GitHubAuthenticationDefaults.AuthenticationScheme]);
-});
+}).RequireRateLimiting("auth");
 app.MapPost("/logout", async (HttpContext http, Microsoft.AspNetCore.Antiforgery.IAntiforgery antiforgery) =>
 {
     if (!await antiforgery.IsRequestValidAsync(http)) return Results.BadRequest();

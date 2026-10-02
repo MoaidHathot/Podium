@@ -122,6 +122,18 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
+// Wraps the ASP.NET data-protection key ring (cookie encryption keys) so the XML stored in Blob is not usable without
+// Key Vault access.
+resource dataProtectionKey 'Microsoft.KeyVault/vaults/keys@2023-07-01' = {
+  parent: keyVault
+  name: 'podium-dataprotection'
+  properties: {
+    kty: 'RSA'
+    keySize: 2048
+    keyOps: [ 'wrapKey', 'unwrapKey' ]
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Container Apps environment + builder job
 // ---------------------------------------------------------------------------------------------------------------
@@ -173,6 +185,7 @@ var roles = {
   storageTableDataContributor: '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
   storageBlobDelegator: 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a'
   keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
+  keyVaultCryptoUser: '12338af0-0e69-4776-bea7-57ae8d297424'
   keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
   contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
 }
@@ -196,6 +209,11 @@ resource webKv 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(keyVault.id, webIdentity.id, roles.keyVaultSecretsUser)
   scope: keyVault
   properties: { principalId: webIdentity.properties.principalId, principalType: 'ServicePrincipal', roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser) }
+}
+resource webKvCrypto 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, webIdentity.id, roles.keyVaultCryptoUser)
+  scope: keyVault
+  properties: { principalId: webIdentity.properties.principalId, principalType: 'ServicePrincipal', roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultCryptoUser) }
 }
 // Starting job executions needs write access on the job resource; scoped to the job only.
 resource webJob 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -230,6 +248,7 @@ resource budget 'Microsoft.Consumption/budgets@2023-11-01' = {
 output storageAccountName string = storage.name
 output keyVaultName string = keyVault.name
 output keyVaultUri string = keyVault.properties.vaultUri
+output dataProtectionKeyId string = dataProtectionKey.properties.keyUriWithVersion
 output environmentId string = env.id
 output environmentDefaultDomain string = env.properties.defaultDomain
 output builderJobId string = builderJob.id

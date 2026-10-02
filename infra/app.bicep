@@ -22,6 +22,8 @@ param environmentDefaultDomain string
 param builderJobId string
 param storageAccountName string
 param keyVaultName string
+@description('Key Vault key (URI with version) that wraps the data-protection key ring.')
+param dataProtectionKeyId string
 param webIdentityId string
 param webIdentityClientId string
 
@@ -84,6 +86,7 @@ resource web 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'Podium__ExternalBaseUrl', value: 'https://${baseName}-web.${environmentDefaultDomain}' }
             { name: 'Podium__SigningKey', secretRef: 'podium-signing-key' }
             { name: 'Storage__AccountName', value: storageAccountName }
+            { name: 'DataProtection__KeyVaultKeyId', value: dataProtectionKeyId }
             { name: 'Builder__Mode', value: 'ContainerAppsJob' }
             { name: 'Builder__JobResourceId', value: builderJobId }
             { name: 'Builder__Cpu', value: '2' }

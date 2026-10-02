@@ -134,7 +134,9 @@ function mkdirForDeck(dir) {
 
 /** Copies a tree so that the deck user owns the copy (Vite writes caches into node_modules). */
 async function copyTreeForDeck(from, to) {
-  if (dropPrivileges) await run('cp', ['-r', from, to], { echo: false });
+  // Running as the deck user, `cp` creates files owned by that user; --no-preserve stops it from carrying over the
+  // source's root ownership/mode, which would leave node_modules read-only for the build (EACCES on .slidev/virtual).
+  if (dropPrivileges) await run('cp', ['-rL', '--no-preserve=ownership,mode', from, to], { echo: false });
   else cpSync(from, to, { recursive: true, dereference: true });
 }
 

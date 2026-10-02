@@ -29,7 +29,7 @@ public static class ApiEndpoints
             var ok = await builds.CompleteAsync(slug, buildId, auth[7..], report, ct);
             if (ok) access.Invalidate(slug);
             return ok ? Results.Ok() : Results.Unauthorized();
-        }).DisableAntiforgery();
+        }).DisableAntiforgery().RequireRateLimiting("webhook");
 
         app.MapPost("/api/github/webhook", async (HttpContext http, GitHubWebhookHandler handler, ILoggerFactory lf, CancellationToken ct) =>
         {
@@ -49,7 +49,7 @@ public static class ApiEndpoints
             // Acknowledge now; the handler only talks to GitHub's API and enqueues work, so nothing is lost by detaching.
             handler.HandleInBackground(eventName, payload);
             return Results.Accepted(value: new { outcome = "accepted" });
-        }).DisableAntiforgery();
+        }).DisableAntiforgery().RequireRateLimiting("webhook");
 
         // ----- Access-policy protected (works for anonymous public decks) -----
         app.MapGet("/api/decks/{slug}/version", async (string slug, HttpContext http, DeckAccessService access, CallerResolver callers, CancellationToken ct) =>
@@ -59,7 +59,7 @@ public static class ApiEndpoints
             if (r.Deck is null || r.Decision != AccessDecision.Allow) return Results.NotFound();
             http.Response.Headers.CacheControl = "no-store";
             return Results.Ok(new { build = r.Deck.CurrentBuildId, status = r.Deck.LatestBuildStatus?.ToString(), updatedAt = r.Deck.UpdatedAt });
-        });
+        }).RequireRateLimiting("probe");
 
         // ----- Owner only -----
         var owner = app.MapGroup("/api").RequireAuthorization(PodiumClaims.OwnerPolicy).AddEndpointFilter<RequestHeaderFilter>();

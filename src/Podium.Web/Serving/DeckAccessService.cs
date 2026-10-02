@@ -59,12 +59,14 @@ public sealed class DeckAccessService(IDeckStore decks, ISourceStore sources, IG
                           && (link.ExpiresAt is null || link.ExpiresAt > DateTimeOffset.UtcNow);
                 if (viaLink && http.Request.Query.ContainsKey("share"))
                 {
+                    // Host-wide path: the deck's sync socket (/ws/sync/{slug}) and version probe (/api/decks/{slug}/version)
+                    // live outside /d/{slug}/, and the cookie is already bound to one deck by name and validated per slug.
                     http.Response.Cookies.Append(ShareCookieName(slug), linkId, new CookieOptions
                     {
                         HttpOnly = true,
                         Secure = http.Request.IsHttps,
                         SameSite = SameSiteMode.Lax,
-                        Path = linkArtifact == ArtifactKind.Site ? $"/d/{slug}/" : $"/d/{slug}.{linkArtifact.ToString().ToLowerInvariant()}",
+                        Path = "/",
                         MaxAge = link!.ExpiresAt is { } exp ? exp - DateTimeOffset.UtcNow : TimeSpan.FromDays(7),
                     });
                 }
