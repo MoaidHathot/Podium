@@ -29,8 +29,14 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Self-updating builds**: when the builder image changes, decks built by the previous builder are rebuilt automatically (failed ones are retried).
 - **External decks**: public repositories you do not own can be added. They build in the same isolated job and are served from a *separate origin* (`Podium:ExternalBaseUrl`, by default the platform FQDN) with a short-lived view token instead of your session, so their code can never read your session or private decks.
 - **PowerPoint decks** can be viewed as a PDF rendition (default, nothing leaves Podium) or through Microsoft's Office Online viewer (faithful rendering; Microsoft's service fetches the file via a 20-minute signed link). Per-deck setting under *Manage*.
-- **Library**: group by repository/type/visibility/year, sort, grid or an aligned compact list, filters, collapsible Pinned and Recently-presented shelves (decks can be removed from recents until presented again); preferences are remembered per browser.
-- **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; secrets in Key Vault.
+- **Library**: group by repository/type/visibility/year, sort, grid or an aligned compact list, filters (including tags), collapsible Pinned and Recently-presented shelves (decks can be removed from recents until presented again); preferences are remembered per browser.
+- **Short aliases**: `/d/<alias>/` redirects to the canonical deck URL (set under *Manage* or in `.podium.yml`); deep links and query strings are preserved.
+- **Frozen decks**: pin the build you rehearsed with while pushes keep building in the background; roll forward whenever you choose.
+- **View analytics** on each deck's page: views in the last 7/30 days, distinct viewers and the most recent viewers.
+- **Link previews**: public decks carry Open Graph / Twitter card tags (title, description, first-slide thumbnail) so links unfurl in chat and social clients; tags the deck already declares are left alone.
+- **Clean-up**: decks that disappear from their repository are archived (artifacts purged after 30 days) and listed in an *Archived* shelf with a *Delete permanently* action for immediate removal of builds, grants and share links.
+- **GitHub check runs** (optional): grant the app *Checks: write* and every build reports back on the commit with a link to the deck.
+- **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; per-IP rate limits on login, webhook and deck entry; secrets in Key Vault, data-protection keys wrapped by a Key Vault key.
 
 ## Deck detection
 
