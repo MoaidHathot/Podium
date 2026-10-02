@@ -19,7 +19,7 @@ public static class ApiEndpoints
     public static IEndpointRouteBuilder MapPodiumApi(this IEndpointRouteBuilder app)
     {
         // ----- Unauthenticated, token/signature protected -----
-        app.MapPost("/api/builds/{slug}/{buildId}/report", async (string slug, string buildId, HttpContext http, BuildService builds, DeckAccessService access, CancellationToken ct) =>
+        app.MapPost("/api/builds/{slug}/{buildId}/report", async (string slug, string buildId, HttpContext http, BuildService builds, DeckAccessService access, IDeckStore decks, Sync.SyncHub hub, CancellationToken ct) =>
         {
             var auth = http.Request.Headers.Authorization.ToString();
             if (!auth.StartsWith("Bearer ", StringComparison.Ordinal)) return Results.Unauthorized();
@@ -27,7 +27,13 @@ public static class ApiEndpoints
             var report = await http.Request.ReadFromJsonAsync<BuildReport>(ct);
             if (report is null) return Results.BadRequest();
             var ok = await builds.CompleteAsync(slug, buildId, auth[7..], report, ct);
-            if (ok) access.Invalidate(slug);
+            if (ok)
+            {
+                access.Invalidate(slug);
+                // Open decks learn about the new served build immediately (frozen decks keep serving the old one, so no notice).
+                var deck = await decks.GetAsync(slug, ct);
+                if (deck?.CurrentBuildId == buildId) await hub.NotifyBuildAsync(slug, buildId, ct);
+            }
             return ok ? Results.Ok() : Results.Unauthorized();
         }).DisableAntiforgery().RequireRateLimiting("webhook");
 
@@ -126,21 +132,24 @@ public static class ApiEndpoints
         });
 
         // Serve a specific successful build (rollback / promote); optionally freeze on it.
-        owner.MapPost("/decks/{slug}/builds/{buildId}/serve", async (string slug, string buildId, [FromQuery] bool freeze, BuildService builds, DeckAccessService access, CancellationToken ct) =>
+        owner.MapPost("/decks/{slug}/builds/{buildId}/serve", async (string slug, string buildId, [FromQuery] bool freeze, BuildService builds, DeckAccessService access, Sync.SyncHub hub, CancellationToken ct) =>
         {
             if (!Podium.Core.Slug.IsValid(slug) || buildId.Length > 40) return Results.BadRequest();
             var deck = await builds.ServeBuildAsync(slug, buildId, freeze, ct);
             if (deck is null) return Results.NotFound(new { error = "Build not found, not successful, or its artifacts were cleaned up" });
             access.Invalidate(slug);
+            await hub.NotifyBuildAsync(slug, buildId, ct);
             return Results.Ok(deck);
         });
 
         // Freeze: keep serving the current build while new pushes keep building in the background. Unfreeze catches up.
-        owner.MapPost("/decks/{slug}/freeze", async (string slug, [FromQuery] bool frozen, BuildService builds, DeckAccessService access, CancellationToken ct) =>
+        owner.MapPost("/decks/{slug}/freeze", async (string slug, [FromQuery] bool frozen, BuildService builds, DeckAccessService access, IDeckStore decks, Sync.SyncHub hub, CancellationToken ct) =>
         {
+            var before = (await decks.GetAsync(slug, ct))?.CurrentBuildId;
             var deck = await builds.SetFrozenAsync(slug, frozen, ct);
             if (deck is null) return Results.NotFound();
             access.Invalidate(slug);
+            if (deck.CurrentBuildId is not null && deck.CurrentBuildId != before) await hub.NotifyBuildAsync(slug, deck.CurrentBuildId, ct);
             return Results.Ok(deck);
         });
 

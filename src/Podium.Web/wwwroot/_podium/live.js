@@ -1,5 +1,8 @@
-// Injected into every served deck by Podium. Detects new builds and reloads so a `git push` updates open decks.
-// The current slide survives the reload because Slidev keeps it in the URL.
+// Injected into every served deck by Podium. Reacts to new builds of the deck:
+//   - a Slidev deck receives {"t":"build"} over the Podium sync socket (see the injected addon), which calls
+//     window.__podiumNewBuild(buildId); other deck kinds fall back to polling /api/decks/<slug>/version.
+//   - Never yank a presenter: the presenter view only shows a notice. Visible audience tabs show a notice with a
+//     Reload button; hidden tabs reload silently. The current slide survives a reload (it is in the URL).
 (function () {
   'use strict';
   var script = document.currentScript || document.querySelector('script[src*="/_podium/live.js"]');
@@ -8,35 +11,73 @@
   var build = script.getAttribute('data-build');
   if (!slug || !build) return;
 
-  var interval = 20000;
+  var isPresenter = /\/presenter(\/|$)/.test(location.pathname) || /\/remote(\/|$)/.test(location.pathname);
+  var isPrint = /[?&]print=/.test(location.search);
+  var pending = null;
+  var noticeEl = null;
+
+  function reload() { location.reload(); }
+
+  function showNotice(message, canReload) {
+    if (noticeEl) noticeEl.remove();
+    var el = document.createElement('div');
+    el.setAttribute('role', 'status');
+    el.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2147483647;display:flex;gap:10px;align-items:center;' +
+      'padding:10px 14px;border-radius:10px;background:rgba(19,23,32,.94);color:#e6e9f0;border:1px solid #354055;box-shadow:0 8px 30px rgba(0,0,0,.45);' +
+      'font:14px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;backdrop-filter:blur(8px)';
+    var text = document.createElement('span'); text.textContent = message; el.appendChild(text);
+    if (canReload) {
+      var btn = document.createElement('button'); btn.type = 'button'; btn.textContent = 'Reload';
+      btn.style.cssText = 'font:inherit;font-weight:600;padding:5px 10px;border-radius:6px;border:1px solid #7c9cff;background:#7c9cff;color:#0b0d12;cursor:pointer';
+      btn.addEventListener('click', reload); el.appendChild(btn);
+    }
+    var close = document.createElement('button'); close.type = 'button'; close.setAttribute('aria-label', 'Dismiss'); close.textContent = '\u00d7';
+    close.style.cssText = 'font:16px/1 inherit;padding:2px 6px;border:0;background:transparent;color:#9aa3b5;cursor:pointer';
+    close.addEventListener('click', function () { el.remove(); noticeEl = null; });
+    el.appendChild(close);
+    document.body.appendChild(el);
+    noticeEl = el;
+  }
+
+  function onNewBuild(newBuild) {
+    if (!newBuild || newBuild === build || newBuild === pending) return;
+    pending = newBuild;
+    if (isPrint) return;
+    if (isPresenter) {
+      showNotice('A new version of this deck is available. Reload when convenient.', true);
+      return;
+    }
+    if (document.visibilityState === 'hidden') { reload(); return; }
+    showNotice('A new version of this deck is available.', true);
+  }
+
+  // Hidden audience tabs catch up the moment they are shown again... no: reload while still hidden so the
+  // viewer never sees a flash; if a notice is pending when the tab becomes visible, leave it to the user.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden' && pending && !isPresenter && !isPrint) reload();
+  });
+
+  window.__podiumNewBuild = onNewBuild;
+  window.__podiumBuild = build;
+
+  // Polling fallback (non-Slidev decks, or until the socket connects). Backs off and stops on auth loss.
+  var interval = 30000;
   var failures = 0;
+  var socketActive = false;
+  window.__podiumSocketActive = function (active) { socketActive = !!active; };
 
   function check() {
+    if (socketActive) return schedule();
     if (document.visibilityState === 'hidden') return schedule();
     fetch('/api/decks/' + encodeURIComponent(slug) + '/version', { credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) {
-        if (r.status === 401 || r.status === 404) { failures = 99; return null; } // sandboxed or no longer visible: stop
+        if (r.status === 401 || r.status === 404) { failures = 99; return null; }
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       })
-      .then(function (v) {
-        if (!v) return;
-        failures = 0;
-        if (v.build && v.build !== build) {
-          // Small delay so the presenter is not yanked mid-transition.
-          setTimeout(function () { location.reload(); }, 800);
-          return;
-        }
-        schedule();
-      })
+      .then(function (v) { if (!v) return; failures = 0; onNewBuild(v.build); schedule(); })
       .catch(function () { failures++; schedule(); });
   }
-
-  function schedule() {
-    if (failures > 10) return;
-    setTimeout(check, Math.min(interval * (1 + failures), 120000));
-  }
-
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') check(); });
+  function schedule() { if (failures > 10) return; setTimeout(check, Math.min(interval * (1 + failures), 180000)); }
   schedule();
 })();

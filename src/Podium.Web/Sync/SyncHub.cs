@@ -43,7 +43,8 @@ public sealed class SyncHub(ILogger<SyncHub> log)
 
         try
         {
-            // Replay the latest known state so this window catches up immediately.
+            // Tell the client what it may do, then replay the latest known state so this window catches up immediately.
+            await SendAsync(entry, JsonSerializer.Serialize(new { t = "hello", canSend }), ct);
             foreach (var (_, payload) in room.LastState)
                 await SendAsync(entry, payload, ct);
 
@@ -64,11 +65,21 @@ public sealed class SyncHub(ILogger<SyncHub> log)
                 if (result.MessageType == WebSocketMessageType.Text && canSend)
                 {
                     var payload = Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);
-                    var channel = ValidateAndGetChannel(payload);
-                    if (channel is not null)
+                    var (kind, channel) = Validate(payload);
+                    switch (kind)
                     {
-                        room.LastState[channel] = payload;
-                        await BroadcastAsync(room, id, payload, ct);
+                        case "state":
+                            room.LastState[channel!] = payload;
+                            await BroadcastAsync(room, id, payload, ct);
+                            break;
+                        case "info":
+                            // Current position reported by a presenting instance; kept so a remote joining later knows where we are.
+                            room.LastState["\u0000info"] = payload;
+                            await BroadcastAsync(room, id, payload, ct);
+                            break;
+                        case "nav":
+                            await BroadcastAsync(room, id, payload, ct);
+                            break;
                     }
                 }
                 message.SetLength(0);
@@ -85,21 +96,52 @@ public sealed class SyncHub(ILogger<SyncHub> log)
         }
     }
 
-    /// <summary>Accepts only {"t":"state","channel":string,"state":object}. Returns the channel or null.</summary>
-    private static string? ValidateAndGetChannel(string payload)
+    /// <summary>Tells every open instance of a deck that a new build is being served (they decide how to react).</summary>
+    public async Task NotifyBuildAsync(string slug, string buildId, CancellationToken ct = default)
+    {
+        if (!_rooms.TryGetValue(slug, out var room)) return;
+        var payload = JsonSerializer.Serialize(new { t = "build", build = buildId });
+        await BroadcastAsync(room, Guid.Empty, payload, ct);
+        log.LogDebug("Notified {Count} sockets of build {Build} for {Slug}", room.Sockets.Count, buildId, slug);
+    }
+
+    private static readonly HashSet<string> NavActions = new(StringComparer.Ordinal) { "next", "prev", "first", "last", "go", "nextSlide", "prevSlide" };
+
+    /// <summary>
+    /// Accepts exactly three message shapes from presenting sockets:
+    ///   {"t":"state","channel":string,"state":object}        Slidev shared/drawing state
+    ///   {"t":"nav","action":string,"page"?:int}             remote-control command
+    ///   {"t":"info","page":int,"total":int,"clicks":int,"clicksTotal":int}  position report
+    /// Returns (kind, channel) or (null, null) for anything else.
+    /// </summary>
+    private static (string? Kind, string? Channel) Validate(string payload)
     {
         try
         {
             using var doc = JsonDocument.Parse(payload);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
-            if (!root.TryGetProperty("t", out var t) || t.GetString() != "state") return null;
-            if (!root.TryGetProperty("channel", out var c) || c.ValueKind != JsonValueKind.String) return null;
-            if (!root.TryGetProperty("state", out var s) || s.ValueKind != JsonValueKind.Object) return null;
-            var channel = c.GetString();
-            return string.IsNullOrEmpty(channel) || channel.Length > 200 ? null : channel;
+            if (root.ValueKind != JsonValueKind.Object) return (null, null);
+            if (!root.TryGetProperty("t", out var t) || t.ValueKind != JsonValueKind.String) return (null, null);
+            switch (t.GetString())
+            {
+                case "state":
+                    if (!root.TryGetProperty("channel", out var c) || c.ValueKind != JsonValueKind.String) return (null, null);
+                    if (!root.TryGetProperty("state", out var s) || s.ValueKind != JsonValueKind.Object) return (null, null);
+                    var channel = c.GetString();
+                    return string.IsNullOrEmpty(channel) || channel.Length > 200 ? (null, null) : ("state", channel);
+                case "nav":
+                    if (!root.TryGetProperty("action", out var a) || a.ValueKind != JsonValueKind.String || !NavActions.Contains(a.GetString()!)) return (null, null);
+                    if (root.TryGetProperty("page", out var p) && (p.ValueKind != JsonValueKind.Number || !p.TryGetInt32(out var pn) || pn < 1 || pn > 10_000)) return (null, null);
+                    return ("nav", null);
+                case "info":
+                    foreach (var f in new[] { "page", "total", "clicks", "clicksTotal" })
+                        if (!root.TryGetProperty(f, out var v) || v.ValueKind != JsonValueKind.Number || !v.TryGetInt32(out var n) || n < 0 || n > 100_000) return (null, null);
+                    return ("info", null);
+                default:
+                    return (null, null);
+            }
         }
-        catch (JsonException) { return null; }
+        catch (JsonException) { return (null, null); }
     }
 
     private async Task BroadcastAsync(Room room, Guid sender, string payload, CancellationToken ct)

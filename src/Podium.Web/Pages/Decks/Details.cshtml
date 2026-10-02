@@ -82,6 +82,21 @@
             <label>Deck URL</label>
             <div class="url-box"><code>@Model.Origin/d/@d.Slug/</code><button class="btn btn-sm" data-copy="@Model.Origin/d/@d.Slug/">Copy</button></div>
         </div>
+        @if (servable)
+        {
+            <div class="row" style="margin-top:1rem; align-items:flex-start; gap:1.25rem">
+                <a href="/d/@d.Slug/qr.svg" target="_blank" rel="noopener" title="Open the QR code full-screen for the room"><img class="qr" src="/d/@d.Slug/qr.svg" alt="QR code linking to this deck" width="132" height="132" /></a>
+                <div style="font-size:.88rem" class="muted">
+                    <strong style="color:var(--text)">Let the room follow along.</strong><br />
+                    Show this QR code (click to enlarge); phones that scan it open the deck and follow your navigation live.
+                    Visibility applies: for a Private deck only signed-in people with access can open it.
+                    @if (d.Kind == DeckKind.Slidev)
+                    {
+                        <span><br /><br /><strong style="color:var(--text)">Phone remote:</strong> <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a> &mdash; prev/next, slide counter and a timer; drives every open instance of the deck.</span>
+                    }
+                </div>
+            </div>
+        }
         <div style="margin-top:.75rem" class="row">
             @if (Model.CurrentBuild?.HasPdf == true)
             {

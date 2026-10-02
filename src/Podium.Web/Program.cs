@@ -279,6 +279,7 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
 
 app.MapGet("/healthz", () => Results.Ok(new { ok = true }));
 app.MapDeckServing();
+Podium.Web.Serving.PresenterToolsEndpoints.MapPresenterTools(app);
 app.MapPodiumApi();
 Podium.Web.Sync.SyncEndpoints.MapSync(app);
 app.MapRazorPages();

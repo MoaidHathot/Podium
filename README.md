@@ -23,7 +23,9 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Live updates**: pushes trigger rebuilds via webhook; open decks detect the new build and reload on the same slide.
 - **Access control** per deck *and* per artifact: Private, Link (revocable signed URLs), Shared (specific GitHub users), Public.
 - **Discovery**: one library across all connected repositories; `/` focuses search.
-- **Cross-device presenter sync**: a tiny Slidev addon is injected at build time; the presenter view on your phone or laptop drives the audience view on any other machine through a WebSocket relay. Only the owner can drive; viewers follow. Clickers work as plain keyboard input.
+- **Cross-device presenter sync**: a tiny Slidev addon is injected at build time; any instance opened by you (or a *Present* grantee) drives every other open instance through a WebSocket relay. Viewers follow. Clickers work as plain keyboard input.
+- **Phone remote** at `/d/<slug>/remote` (prev/next, counter, timer) and a **QR code** (`/d/<slug>/qr.svg`, shown on the deck page) so the room can open the deck and follow live.
+- **Live updates without surprises**: a new build is announced over the socket; hidden tabs reload silently, visible viewers get a "Reload" notice, presenter views are never reloaded automatically.
 - **Self-updating builds**: when the builder image changes, decks built by the previous builder are rebuilt automatically (failed ones are retried).
 - **External decks**: public repositories you do not own can be added. They build in the same isolated job and are served from a *separate origin* (`Podium:ExternalBaseUrl`, by default the platform FQDN) with a short-lived view token instead of your session, so their code can never read your session or private decks.
 - **PowerPoint decks** can be viewed as a PDF rendition (default, nothing leaves Podium) or through Microsoft's Office Online viewer (faithful rendering; Microsoft's service fetches the file via a 20-minute signed link). Per-deck setting under *Manage*.

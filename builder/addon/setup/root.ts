@@ -10,8 +10,10 @@
 //    server. Slidev's built-in sync uses BroadcastChannel, which only reaches windows of the same browser profile.
 //    With this, the presenter view on a phone or laptop drives the audience view on another machine. The server
 //    decides who may send: only the deck owner's sockets are allowed to publish; everyone else receives.
-import { toRaw } from 'vue'
+import { toRaw, watch } from 'vue'
 import { addSyncMethod } from '@slidev/client/state/syncState.ts'
+import { useNav } from '@slidev/client/composables/useNav.ts'
+import { patch as patchShared } from '@slidev/client/state/shared.ts'
 
 type Handler = (data: Record<string, unknown>) => void
 
@@ -58,7 +60,41 @@ function setupPodiumSync() {
   let socket: WebSocket | null = null
   let backoff = 1000
   let closedByPage = false
+  let canSend = false
   const pending: string[] = []
+
+  // Slidev navigation, for executing remote-control commands and reporting the position to the remote.
+  const nav = useNav()
+  async function executeNav(action: string, page?: number) {
+    switch (action) {
+      case 'next': await nav.next(); break
+      case 'prev': await nav.prev(); break
+      case 'nextSlide': await nav.nextSlide(); break
+      case 'prevSlide': await nav.prevSlide(); break
+      case 'first': await nav.go(1); break
+      case 'last': await nav.go(nav.total.value); break
+      case 'go': if (page && page >= 1 && page <= nav.total.value) await nav.go(page); break
+    }
+  }
+  let lastInfo = ''
+  const instanceId = `podium_${Math.random().toString(36).slice(2)}`
+  function reportPosition(force = false) {
+    if (!canSend) return
+    const payload = JSON.stringify({ t: 'info', page: nav.currentSlideNo.value, total: nav.total.value, clicks: nav.clicks.value, clicksTotal: nav.clicksTotal.value })
+    if (!force && payload === lastInfo) return
+    lastInfo = payload
+    send(payload)
+    // Slidev only publishes shared state from presenter views (and from trusted dev origins). A presenting instance
+    // in plain play mode, e.g. the owner's laptop on the projector driven by a clicker or the phone remote, must
+    // publish too so viewers follow. Patching the shared state triggers every sync method, including this socket.
+    if (!nav.isPresenter.value) {
+      patchShared('page', nav.currentSlideNo.value)
+      patchShared('clicks', nav.clicks.value)
+      patchShared('clicksTotal', nav.clicksTotal.value)
+      patchShared('lastUpdate', { id: instanceId, type: 'presenter', time: Date.now() })
+    }
+  }
+  watch([nav.currentSlideNo, nav.clicks, nav.clicksTotal], () => reportPosition())
 
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/sync/${encodeURIComponent(slug)}`
 
@@ -74,15 +110,35 @@ function setupPodiumSync() {
       backoff = 1000
       while (pending.length && socket?.readyState === WebSocket.OPEN) socket.send(pending.shift()!)
     })
+    socket.addEventListener('open', () => { (window as any).__podiumSocketActive?.(true) })
     socket.addEventListener('message', (ev) => {
-      let msg: { t?: string; channel?: string; state?: Record<string, unknown> }
+      let msg: { t?: string; channel?: string; state?: Record<string, unknown>; build?: string; canSend?: boolean; action?: string; page?: number }
       try { msg = JSON.parse(ev.data) } catch { return }
-      if (msg.t !== 'state' || !msg.channel || !msg.state) return
-      const h = handlers.get(msg.channel)
-      if (h) h(msg.state)
+      switch (msg.t) {
+        case 'hello':
+          // The server decides who may publish; presenting instances also execute remote commands and report position.
+          canSend = !!msg.canSend
+          if (canSend) reportPosition(true)
+          return
+        case 'build':
+          // New build being served: live.js decides whether to reload now, later, or just show a notice.
+          if (msg.build) (window as any).__podiumNewBuild?.(msg.build)
+          return
+        case 'nav':
+          // Phone remote. Only presenting instances act (viewers follow through Slidev's shared state as usual).
+          if (canSend && msg.action) void executeNav(msg.action, msg.page)
+          return
+        case 'state': {
+          if (!msg.channel || !msg.state) return
+          const h = handlers.get(msg.channel)
+          if (h) h(msg.state)
+          return
+        }
+      }
     })
     socket.addEventListener('close', (ev) => {
       socket = null
+      ;(window as any).__podiumSocketActive?.(false)
       // 4403 = not allowed to join (private deck, no access); do not retry.
       if (ev.code === 4403 || ev.code === 4404) return
       scheduleReconnect()

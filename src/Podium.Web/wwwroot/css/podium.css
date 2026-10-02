@@ -319,6 +319,7 @@ body[data-group="repo"] .card .repo { display: none; }
 .seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .url-box { display: flex; gap: .4rem; align-items: center; }
+.qr { border-radius: var(--radius-sm); background: #fff; display: block; }
 .url-box code { flex: 1; padding: .45rem .6rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .alert { padding: .75rem 1rem; border-radius: var(--radius-sm); border: 1px solid; font-size: .92rem; margin-bottom: 1rem; }
