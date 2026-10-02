@@ -58,6 +58,7 @@ public sealed class InstallationDiscovery(GitHubAppAuth auth, ISourceStore sourc
         var app = auth.CreateAppClient();
         var installations = await app.GitHubApps.GetAllInstallationsForCurrent().WaitAsync(ct);
         var known = (await sources.ListAsync(ct)).ToDictionary(s => s.Id, StringComparer.Ordinal);
+        var knownByRepoId = known.Values.Where(s => s.RepoId is not null).ToDictionary(s => s.RepoId!.Value);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var added = 0;
 
@@ -68,14 +69,24 @@ public sealed class InstallationDiscovery(GitHubAppAuth auth, ISourceStore sourc
             foreach (var r in repos.Repositories)
             {
                 var id = Source.MakeId(r.Owner.Login, r.Name);
-                seen.Add(id);
-                if (known.TryGetValue(id, out var existing))
+                // GitHub's numeric id is the identity; the name is a label. A renamed or transferred repository keeps
+                // its source (and so its decks, slugs, grants and links) and only has its label updated.
+                if (!known.TryGetValue(id, out var existing) && knownByRepoId.TryGetValue(r.Id, out var renamed))
                 {
-                    if (existing.InstallationId != inst.Id || existing.IsPrivateRepo != r.Private || !existing.Trusted)
-                        await sources.UpsertAsync(existing with { InstallationId = inst.Id, IsPrivateRepo = r.Private, Trusted = true }, ct);
+                    log.LogInformation("Repository {Old} is now {New}; keeping source {Source}", renamed.FullName, r.FullName, renamed.Id);
+                    existing = renamed with { Owner = r.Owner.Login, Repo = r.Name };
+                    await sources.UpsertAsync(existing, ct);
+                    known[existing.Id] = existing;
+                }
+                if (existing is not null)
+                {
+                    seen.Add(existing.Id);
+                    if (existing.InstallationId != inst.Id || existing.IsPrivateRepo != r.Private || !existing.Trusted || existing.RepoId != r.Id)
+                        await sources.UpsertAsync(existing with { InstallationId = inst.Id, IsPrivateRepo = r.Private, Trusted = true, RepoId = r.Id }, ct);
                     continue;
                 }
-                var source = new Source { Id = id, Owner = r.Owner.Login, Repo = r.Name, InstallationId = inst.Id, Trusted = true, IsPrivateRepo = r.Private };
+                seen.Add(id);
+                var source = new Source { Id = id, Owner = r.Owner.Login, Repo = r.Name, RepoId = r.Id, InstallationId = inst.Id, Trusted = true, IsPrivateRepo = r.Private };
                 await sources.UpsertAsync(source, ct);
                 queue.TryEnqueue(new SyncJob(id, null, false, "installation"));
                 added++;

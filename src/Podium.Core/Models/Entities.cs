@@ -5,10 +5,13 @@ namespace Podium.Core.Models;
 /// </summary>
 public sealed record Source
 {
-    /// <summary>Stable id: "owner/repo" lower-cased.</summary>
+    /// <summary>Stable key: "owner/repo" lower-cased at registration time. Decks reference it; it survives renames.</summary>
     public required string Id { get; init; }
+    /// <summary>Current GitHub owner and name; updated when GitHub reports a rename or transfer.</summary>
     public required string Owner { get; init; }
     public required string Repo { get; init; }
+    /// <summary>GitHub's numeric repository id; the identity that survives renames and transfers.</summary>
+    public long? RepoId { get; init; }
     /// <summary>Branch or tag to track. Null = repository default branch.</summary>
     public string? Ref { get; init; }
     /// <summary>GitHub App installation id when the App is installed on this repo; null for external/public repos.</summary>

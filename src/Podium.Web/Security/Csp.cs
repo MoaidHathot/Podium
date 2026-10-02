@@ -19,7 +19,8 @@ public static class Csp
     public static string Nonce(HttpContext http)
     {
         if (http.Items.TryGetValue(ItemKey, out var existing) && existing is string s) return s;
-        var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        // base64url: CSP accepts it and Razor does not entity-encode it inside attributes (plain base64's "+" becomes &#x2B;).
+        var nonce = System.Buffers.Text.Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(18));
         http.Items[ItemKey] = nonce;
         return nonce;
     }

@@ -117,5 +117,5 @@ public interface IRepositoryClient
     Task<IReadOnlyList<string>> DiffPathsAsync(Source source, string fromSha, string toSha, CancellationToken ct = default);
     Task<(DateTimeOffset CommittedAt, string Sha)?> LastCommitForPathAsync(Source source, string sha, string path, CancellationToken ct = default);
     Task<Uri> GetAuthenticatedCloneUrlAsync(Source source, CancellationToken ct = default);
-    Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default);
+    Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner, long RepoId)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default);
 }

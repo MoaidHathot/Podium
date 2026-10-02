@@ -94,6 +94,32 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
     }
 
     [Fact]
+    public async Task Push_from_a_renamed_repository_is_matched_by_github_id_and_relabels_the_source()
+    {
+        var sources = app.Services.GetRequiredService<ISourceStore>();
+        await sources.UpsertAsync(new Source { Id = "owner/old-name", Owner = "owner", Repo = "old-name", RepoId = 987654, Trusted = true, LastSeenSha = "0123456789abcdef0123456789abcdef01234567" });
+        var body = """{"ref":"refs/heads/main","forced":false,"commits":[],"repository":{"id":987654,"name":"new-name","full_name":"owner/new-name","default_branch":"main","owner":{"login":"owner"}}}""";
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        req.Headers.Add("X-GitHub-Event", "push");
+        req.Headers.Add("X-GitHub-Delivery", Guid.NewGuid().ToString());
+        req.Headers.Add("X-Hub-Signature-256", "sha256=" + Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes("whsec-test"), Encoding.UTF8.GetBytes(body))).ToLowerInvariant());
+        var r = await app.Client().SendAsync(req);
+        Assert.True(r.IsSuccessStatusCode, $"webhook returned {(int)r.StatusCode}");
+
+        // The delivery is acknowledged first and processed right after; give the background step a moment.
+        Source? relabelled = null;
+        for (var i = 0; i < 100 && relabelled?.Repo != "new-name"; i++) { await Task.Delay(50); relabelled = await sources.GetAsync("owner/old-name"); }
+        Assert.NotNull(relabelled);
+        Assert.Equal("new-name", relabelled!.Repo);
+        Assert.Equal("owner/new-name", relabelled.FullName);
+        Assert.Null(await sources.GetAsync("owner/new-name")); // no duplicate source, decks keep their slugs
+        // The owner API addresses it by its current name.
+        var owner = await app.OwnerClientAsync();
+        Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync("/api/sources/owner/new-name")).StatusCode);
+        Assert.Null(await sources.GetAsync("owner/old-name"));
+    }
+
+    [Fact]
     public async Task Builder_report_requires_a_valid_callback_token()
     {
         var deck = await app.SeedDeckAsync("report-deck");

@@ -88,13 +88,14 @@ public sealed class GitHubWebhookHandler(
         var defaultBranch = root.GetProperty("repository").GetProperty("default_branch").GetString() ?? "main";
         var refName = root.GetProperty("ref").GetString() ?? "";
         var id = Source.MakeId(owner, repo);
+        long? repoId = root.GetProperty("repository").TryGetProperty("id", out var rid) && rid.ValueKind == JsonValueKind.Number ? rid.GetInt64() : null;
 
-        var source = await sources.GetAsync(id, ct);
+        var source = await sources.GetAsync(id, ct) ?? await ByRepoIdAsync(repoId, owner, repo, ct);
         if (source is null)
         {
             log.LogInformation("Push for unregistered repository {Repo}; running discovery", id);
             await discovery.DiscoverAsync(ct);
-            source = await sources.GetAsync(id, ct);
+            source = await sources.GetAsync(id, ct) ?? await ByRepoIdAsync(repoId, owner, repo, ct);
             if (source is null) return "unknown repository";
         }
 
@@ -122,7 +123,19 @@ public sealed class GitHubWebhookHandler(
             }
         }
 
-        queue.TryEnqueue(new SyncJob(id, changed, false, "push"));
+        queue.TryEnqueue(new SyncJob(source.Id, changed, false, "push"));
         return changed is null ? "queued full sync" : $"queued sync of {changed.Count} changed paths";
+    }
+
+    /// <summary>A push from a renamed/transferred repository: find the source by GitHub's id and relabel it.</summary>
+    private async Task<Source?> ByRepoIdAsync(long? repoId, string owner, string repo, CancellationToken ct)
+    {
+        if (repoId is null) return null;
+        var match = (await sources.ListAsync(ct)).FirstOrDefault(s => s.RepoId == repoId);
+        if (match is null) return null;
+        log.LogInformation("Repository {Old} is now {New}; keeping source {Source}", match.FullName, $"{owner}/{repo}", match.Id);
+        match = match with { Owner = owner, Repo = repo };
+        await sources.UpsertAsync(match, ct);
+        return match;
     }
 }

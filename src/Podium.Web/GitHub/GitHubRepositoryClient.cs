@@ -83,11 +83,11 @@ public sealed class GitHubRepositoryClient(GitHubAppAuth auth, ISourceStore sour
             : new Uri($"https://x-access-token:{Uri.EscapeDataString(token)}@github.com/{source.Owner}/{source.Repo}.git");
     }
 
-    public async Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default)
+    public async Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner, long RepoId)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default)
     {
         var any = (await sources.ListAsync(ct)).FirstOrDefault(s => s.InstallationId is not null)?.InstallationId;
         var client = await auth.CreatePublicClientAsync(any, ct);
         var r = await client.Repository.Get(owner, repo).WaitAsync(ct);
-        return (r.Private, r.DefaultBranch, r.Permissions?.Admin ?? false);
+        return (r.Private, r.DefaultBranch, r.Permissions?.Admin ?? false, r.Id);
     }
 }

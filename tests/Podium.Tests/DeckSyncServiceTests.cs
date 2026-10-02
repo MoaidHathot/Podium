@@ -23,7 +23,7 @@ internal sealed class FakeRepo : IRepositoryClient
     public Task<IReadOnlyList<string>> DiffPathsAsync(Source source, string fromSha, string toSha, CancellationToken ct = default) { DiffCalls++; return Task.FromResult<IReadOnlyList<string>>(Changed.ToList()); }
     public Task<(DateTimeOffset CommittedAt, string Sha)?> LastCommitForPathAsync(Source source, string sha, string path, CancellationToken ct = default) { LastCommitCalls++; return Task.FromResult<(DateTimeOffset, string)?>((DateTimeOffset.UtcNow, sha)); }
     public Task<Uri> GetAuthenticatedCloneUrlAsync(Source source, CancellationToken ct = default) => Task.FromResult(new Uri("https://x-access-token:secret@github.com/o/r.git"));
-    public Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default) => Task.FromResult((true, "main", true));
+    public Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner, long RepoId)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default) => Task.FromResult((true, "main", true, 4242L));
 }
 
 internal sealed class FakeRunner : IBuildRunner

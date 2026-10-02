@@ -11,7 +11,7 @@ using Podium.Web.Serving;
 
 namespace Podium.Web.Api;
 
-public static class ApiEndpoints
+public static partial class ApiEndpoints
 {
     /// <summary>Mutating owner endpoints require this header: browsers cannot add it cross-origin without a CORS preflight, which we never grant.</summary>
     public const string RequestHeader = "X-Podium-Request";
@@ -245,13 +245,15 @@ public static class ApiEndpoints
             if (await sources.GetAsync(id, ct) is not null) return Results.Conflict(new { error = "Source already registered" });
             if (!opts.Value.AllowExternalSources) return Results.BadRequest(new { error = "External sources are disabled" });
 
-            (bool IsPrivate, string DefaultBranch, bool CallerIsOwner) info;
+            (bool IsPrivate, string DefaultBranch, bool CallerIsOwner, long RepoId) info;
             try { info = await repos.GetRepoInfoAsync(owner_, repo, ct); }
             catch (Octokit.NotFoundException) { return Results.NotFound(new { error = "Repository not found or not accessible. Install the GitHub App on it for private repositories." }); }
             // Without an App installation the only credential that can reach a private repo is the development PAT.
             if (info.IsPrivate && gh.GetDevToken() is null) return Results.BadRequest(new { error = "Private repositories must be added by installing the GitHub App on them." });
 
-            var source = new Source { Id = id, Owner = owner_, Repo = repo, Ref = string.IsNullOrWhiteSpace(req.Ref) ? null : req.Ref.Trim(), Trusted = info.CallerIsOwner, IsPrivateRepo = info.IsPrivate };
+            if ((await sources.ListAsync(ct)).FirstOrDefault(s => s.RepoId == info.RepoId) is { } same)
+                return Results.Conflict(new { error = $"This repository is already registered as {same.FullName} (it was renamed on GitHub)." });
+            var source = new Source { Id = id, Owner = owner_, Repo = repo, RepoId = info.RepoId, Ref = string.IsNullOrWhiteSpace(req.Ref) ? null : req.Ref.Trim(), Trusted = info.CallerIsOwner, IsPrivateRepo = info.IsPrivate };
             await sources.UpsertAsync(source, ct);
             queue.TryEnqueue(new SyncJob(id, null, false, "added"));
             return Results.Ok(source);
@@ -259,24 +261,23 @@ public static class ApiEndpoints
 
         owner.MapDelete("/sources/{sourceOwner}/{sourceRepo}", async (string sourceOwner, string sourceRepo, ISourceStore sources, IDeckStore decks, DeckAccessService access, CancellationToken ct) =>
         {
-            var id = Source.MakeId(sourceOwner, sourceRepo);
-            var source = await sources.GetAsync(id, ct);
+            var source = await ResolveSourceAsync(sources, sourceOwner, sourceRepo, ct);
             if (source is null) return Results.NotFound();
-            foreach (var d in await decks.ListBySourceAsync(id, ct))
+            foreach (var d in await decks.ListBySourceAsync(source.Id, ct))
             {
                 await decks.UpsertAsync(d with { Archived = true, UpdatedAt = DateTimeOffset.UtcNow }, ct);
                 access.Invalidate(d.Slug);
             }
-            await sources.DeleteAsync(id, ct);
-            access.InvalidateSource(id);
+            await sources.DeleteAsync(source.Id, ct);
+            access.InvalidateSource(source.Id);
             return Results.NoContent();
         });
 
         owner.MapPost("/sources/{sourceOwner}/{sourceRepo}/sync", async (string sourceOwner, string sourceRepo, [FromQuery] bool force, ISourceStore sources, SyncQueue queue, CancellationToken ct) =>
         {
-            var id = Source.MakeId(sourceOwner, sourceRepo);
-            if (await sources.GetAsync(id, ct) is null) return Results.NotFound();
-            queue.TryEnqueue(new SyncJob(id, null, force, "manual"));
+            var source = await ResolveSourceAsync(sources, sourceOwner, sourceRepo, ct);
+            if (source is null) return Results.NotFound();
+            queue.TryEnqueue(new SyncJob(source.Id, null, force, "manual"));
             return Results.Accepted();
         });
 
@@ -312,6 +313,14 @@ public static class ApiEndpoints
 public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label);
+
+public static partial class ApiEndpoints
+{
+    /// <summary>Sources are keyed by the name they were registered under; after a rename on GitHub they are addressed by their current name.</summary>
+    internal static async Task<Source?> ResolveSourceAsync(ISourceStore sources, string owner, string repo, CancellationToken ct)
+        => await sources.GetAsync(Source.MakeId(owner, repo), ct)
+           ?? (await sources.ListAsync(ct)).FirstOrDefault(s => string.Equals(s.Owner, owner, StringComparison.OrdinalIgnoreCase) && string.Equals(s.Repo, repo, StringComparison.OrdinalIgnoreCase));
+}
 public sealed record SourceRequest(string Owner, string Repo, string? Ref);
 
 /// <summary>Rejects mutating requests that lack the custom header (CSRF defence in depth on top of SameSite cookies).</summary>
