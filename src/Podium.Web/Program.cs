@@ -289,3 +289,6 @@ app.Run();
 
 static string SafeReturnUrl(string? returnUrl)
     => !string.IsNullOrEmpty(returnUrl) && returnUrl.StartsWith('/') && !returnUrl.StartsWith("//", StringComparison.Ordinal) && !returnUrl.StartsWith("/\\", StringComparison.Ordinal) ? returnUrl : "/";
+
+/// <summary>Exposes the entry point to integration tests (WebApplicationFactory).</summary>
+public partial class Program { }

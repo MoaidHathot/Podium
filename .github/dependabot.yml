@@ -1,0 +1,48 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directories:
+      - /src/Podium.Core
+      - /src/Podium.Web
+      - /tests/Podium.Tests
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      nuget:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directories:
+      - /builder
+      - /builder/addon
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      slidev:
+        patterns: ["@slidev/*", "slidev"]
+      builder-tooling:
+        patterns: ["*"]
+        exclude-patterns: ["@slidev/*", "slidev"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /builder
+    schedule:
+      interval: weekly
+      day: monday
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]

@@ -96,6 +96,14 @@ No deployment secrets exist anywhere.
 
 Finally install the GitHub App on the repositories holding your slides (Sources page has the link).
 
+## Tests and CI
+
+`dotnet test tests/Podium.Tests` runs the Core unit tests and the web integration tests. The latter boot the real
+pipeline (authentication, rate limiting, external-origin isolation, serving, owner API) on in-memory stores with a fake
+artifact store, so they cover the security boundaries without Azure, GitHub or a builder. Pull requests run `ci.yml`
+(build + tests, builder lint, both Dockerfiles assembled without pushing); pushes to `main` run `deploy.yml`.
+Dependabot keeps NuGet, npm (Slidev grouped separately), Docker base images and GitHub Actions current.
+
 ## Local development
 
 ```pwsh
