@@ -49,9 +49,9 @@
             </div>
         </div>
         <div class="card-meta">
-            <span class="badge badge-kind-@kind">@Model.KindLabel</span>
-            <span class="badge badge-vis-@vis" title="@visTitle">@Model.VisibilityLabel</span>
-            <span class="status"><span class="dot @Model.StatusClass"></span> <span data-status-label>@Model.StatusLabel</span></span>
+            <span class="badge badge-kind-@kind kind">@Model.KindLabel</span>
+            <span class="badge badge-vis-@vis vis" title="@visTitle">@Model.VisibilityLabel</span>
+            <span class="status" title="@Model.StatusLabel"><span class="dot @Model.StatusClass"></span> <span class="status-long" data-status-label>@Model.StatusLabel</span><span class="status-short" data-status-short>@Model.StatusShort</span></span>
             @if (d.LastCommitAt is { } at)
             {
                 <span class="faint updated"><span class="sep">· </span>updated <time datetime="@at.UtcDateTime.ToString("o")">@at.ToString("yyyy-MM-dd")</time></span>

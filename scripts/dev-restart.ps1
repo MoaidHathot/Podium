@@ -25,6 +25,21 @@ if ($Build) {
     if ($LASTEXITCODE -ne 0) { throw 'build failed' }
 }
 
+# Azurite backs the Development configuration (UseDevelopmentStorage=true); start it when it is not listening.
+if (-not (Get-NetTCPConnection -LocalPort 10000 -State Listen -ErrorAction SilentlyContinue)) {
+    $azurite = Join-Path $env:APPDATA 'npm\node_modules\azurite\dist\src\azurite.js'
+    if (Test-Path $azurite) {
+        $azDir = Join-Path $stateDir 'azurite'
+        New-Item -ItemType Directory -Force -Path $azDir | Out-Null
+        $hidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+        Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "node `"$azurite`" --silent --location `"$azDir`" --skipApiVersionCheck"; ProcessStartupInformation = $hidden } | Out-Null
+        $azDeadline = (Get-Date).AddSeconds(30)
+        while (-not (Get-NetTCPConnection -LocalPort 10000 -State Listen -ErrorAction SilentlyContinue) -and (Get-Date) -lt $azDeadline) { Start-Sleep -Milliseconds 500 }
+        Write-Output 'Azurite started'
+    }
+    else { Write-Warning 'Azurite not installed (npm i -g azurite); storage calls will fail' }
+}
+
 $token = (gh auth token)
 $dll = Join-Path $root 'src\Podium.Web\bin\Debug\net10.0\Podium.Web.dll'
 $cwd = Join-Path $root 'src\Podium.Web'

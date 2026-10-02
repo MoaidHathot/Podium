@@ -96,5 +96,14 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
         BuildStatus.Running => "Building",
         _ => "Not built",
     };
+    /// <summary>Compact status for the list layout; the full label stays in the tooltip.</summary>
+    public string StatusShort => Deck.Kind == DeckKind.GitPitch ? "N/A" : Deck.LatestBuildStatus switch
+    {
+        BuildStatus.Succeeded => "Built",
+        BuildStatus.Failed => "Failed",
+        BuildStatus.Queued => "Queued",
+        BuildStatus.Running => "Building",
+        _ => "Not built",
+    };
     public string SearchText => string.Join(' ', Deck.Title, Deck.Slug, Deck.Path, RepoLabel, KindLabel, Deck.Author ?? "", string.Join(' ', Deck.Tags), Deck.Visibility.ToString()).ToLowerInvariant();
 }

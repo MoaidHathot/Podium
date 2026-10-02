@@ -270,6 +270,10 @@ else
           if (dot) dot.className = 'dot ' + (status === 'Succeeded' ? 'dot-ok' : status === 'Failed' ? 'dot-bad' : isBusy ? 'dot-busy' : '');
           const label = el.querySelector('[data-status-label]');
           if (label) label.textContent = isBusy ? (status === 'Queued' ? 'Queued' : 'Building') : status === 'Succeeded' ? 'Built' : status === 'Failed' ? (d.currentBuildId ? 'Last build failed (serving previous)' : 'Build failed') : 'Not built';
+          const short = el.querySelector('[data-status-short]');
+          if (short) short.textContent = isBusy ? (status === 'Queued' ? 'Queued' : 'Building') : status === 'Succeeded' ? 'Built' : status === 'Failed' ? 'Failed' : 'Not built';
+          const statusEl = el.querySelector('.card-meta .status');
+          if (statusEl && label) statusEl.title = label.textContent;
           el.dataset.status = isBusy ? 'building' : status === 'Failed' ? 'failed' : 'ok';
         });
       }

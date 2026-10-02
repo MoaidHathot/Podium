@@ -154,6 +154,7 @@ label { font-size: .9rem; color: var(--text-muted); }
 .badge-vis-shared { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .badge-vis-private { color: var(--text-muted); }
 
+.status-short { display: none; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); vertical-align: middle; }
 .dot-ok { background: var(--ok); }
 .dot-warn { background: var(--warn); }
@@ -197,7 +198,7 @@ body[data-group="repo"] .card .repo { display: none; }
 @media (min-width: 901px) {
   body[data-density="list"] .cards-grid {
     display: grid;
-    grid-template-columns: 120px minmax(0, 1.6fr) minmax(13rem, 1fr) minmax(5.6rem, max-content) minmax(6.4rem, max-content) minmax(3.9rem, max-content) minmax(4.5rem, max-content) minmax(5.4rem, max-content);
+    grid-template-columns: 120px minmax(0, 1.5fr) minmax(17rem, 1fr) minmax(6.8rem, max-content) minmax(7.6rem, max-content) minmax(4.4rem, max-content) minmax(5rem, max-content) minmax(5.6rem, max-content);
     column-gap: 0; row-gap: .4rem;
   }
   body[data-density="list"] .cards-grid .card { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; min-height: 64px; }
@@ -209,19 +210,29 @@ body[data-group="repo"] .card .repo { display: none; }
   body[data-density="list"] .cards-grid .thumb-badge { display: none; }
   body[data-density="list"] .cards-grid .card-text { grid-column: 2; min-width: 0; padding: .45rem .75rem .45rem .8rem; display: flex; flex-direction: column; gap: .1rem; }
   body[data-density="list"] .cards-grid .card-title { font-size: .98rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  /* Two tidy lines: badges + build status, then the last-updated date. */
-  body[data-density="list"] .cards-grid .card-meta { grid-column: 3; min-width: 0; gap: .2rem .4rem; padding: 0 1rem 0 .5rem; line-height: 1.3; }
-  body[data-density="list"] .cards-grid .card-meta .status { white-space: nowrap; }
-  body[data-density="list"] .cards-grid .card-meta .updated { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Metadata is itself a small grid with fixed badge columns, so the type badge, visibility badge and build
+     status each start at the same x in every row regardless of label length; the date sits on a second row. */
+  body[data-density="list"] .cards-grid .card-meta {
+    grid-column: 3; min-width: 0; padding: 0 1rem 0 .5rem; line-height: 1.3;
+    display: grid; grid-template-columns: 6rem 4.6rem minmax(0, 1fr); grid-template-areas: 'kind vis status' 'updated updated updated';
+    column-gap: .4rem; row-gap: .2rem; align-items: center;
+  }
+  body[data-density="list"] .cards-grid .card-meta .kind { grid-area: kind; justify-self: start; }
+  body[data-density="list"] .cards-grid .card-meta .vis { grid-area: vis; justify-self: start; }
+  body[data-density="list"] .cards-grid .card-meta .status { grid-area: status; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  body[data-density="list"] .cards-grid .card-meta .status-long { display: none; }
+  body[data-density="list"] .cards-grid .card-meta .status-short { display: inline; }
+  body[data-density="list"] .cards-grid .card-meta .updated { grid-area: updated; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body[data-density="list"] .cards-grid .card-meta .sep { display: none; }
   body[data-density="list"] .cards-grid .card-meta .updated { color: var(--text-faint); }
   body[data-density="list"] .cards-grid .spacer { display: none; }
-  body[data-density="list"] .cards-grid .act-primary   { grid-column: 4; }
-  body[data-density="list"] .cards-grid .act-presenter { grid-column: 5; }
+  /* Same width for every primary button (Open vs Present) and presenter button: they fill their slot. */
+  body[data-density="list"] .cards-grid .act-primary   { grid-column: 4; justify-self: stretch; margin-right: .5rem; }
+  body[data-density="list"] .cards-grid .act-presenter { grid-column: 5; justify-self: stretch; margin-right: .5rem; }
   body[data-density="list"] .cards-grid .act-pdf       { grid-column: 6; }
   body[data-density="list"] .cards-grid .act-pptx      { grid-column: 7; }
   body[data-density="list"] .cards-grid .act-manage    { grid-column: 8; margin-right: .6rem; }
-  body[data-density="list"] .cards-grid .card-actions > .btn { justify-self: start; }
+  body[data-density="list"] .cards-grid .act-pdf, body[data-density="list"] .cards-grid .act-pptx, body[data-density="list"] .cards-grid .act-manage { justify-self: start; }
   /* The dismiss button keeps overlaying the thumbnail's corner (top-right of the 120px thumb). */
   body[data-density="list"] .cards-grid .card-dismiss  { top: .35rem; right: auto; left: calc(120px - 1.7rem - .35rem); width: 1.5rem; height: 1.5rem; }
 }

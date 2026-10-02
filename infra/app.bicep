@@ -28,11 +28,15 @@ param webIdentityClientId string
 @description('Optional custom hostnames already verified in DNS; bound with managed certificates via deploy.ps1.')
 param customDomains array = []
 
+@description('Idle time (seconds) before the last replica is removed. Default 1800 (30 min) so a presentation session never pays a cold start; the platform default is 300.')
+@minValue(60)
+param scaleToZeroAfterSeconds int = 1800
+
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = { name: keyVaultName }
 
 var secretNames = [ 'podium-signing-key', 'github-private-key', 'github-client-id', 'github-client-secret', 'github-webhook-secret' ]
 
-resource web 'Microsoft.App/containerApps@2024-03-01' = {
+resource web 'Microsoft.App/containerApps@2025-01-01' = {
   name: '${baseName}-web'
   location: location
   identity: {
@@ -61,6 +65,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
       scale: {
         minReplicas: 0
         maxReplicas: 1
+        cooldownPeriod: scaleToZeroAfterSeconds
         rules: [ { name: 'http', http: { metadata: { concurrentRequests: '100' } } } ]
       }
       containers: [
@@ -90,9 +95,12 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'GitHub__ClientSecret', secretRef: 'github-client-secret' }
             { name: 'GitHub__WebhookSecret', secretRef: 'github-webhook-secret' }
           ]
+          // Readiness is checked every 2 s with a generous timeout: after a cold start the app receives traffic within
+          // ~2 s of being ready, instead of losing up to 10 s to a failed first probe and a long period.
           probes: [
-            { type: 'Liveness', httpGet: { path: '/healthz', port: 8080 }, initialDelaySeconds: 10, periodSeconds: 30 }
-            { type: 'Readiness', httpGet: { path: '/healthz', port: 8080 }, initialDelaySeconds: 3, periodSeconds: 10 }
+            { type: 'Startup', httpGet: { path: '/healthz', port: 8080 }, initialDelaySeconds: 1, periodSeconds: 2, timeoutSeconds: 3, failureThreshold: 30 }
+            { type: 'Readiness', httpGet: { path: '/healthz', port: 8080 }, periodSeconds: 2, timeoutSeconds: 3, failureThreshold: 3 }
+            { type: 'Liveness', httpGet: { path: '/healthz', port: 8080 }, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 3 }
           ]
         }
       ]
