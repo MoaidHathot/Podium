@@ -5,8 +5,12 @@ using Podium.Core.Models;
 
 namespace Podium.Web.Pages.Decks;
 
-public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links) : PageModel
+public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links, IViewHistoryStore views) : PageModel
 {
+    public IReadOnlyList<ViewEvent> RecentViews { get; private set; } = [];
+    public int Views7d { get; private set; }
+    public int Views30d { get; private set; }
+    public int DistinctViewers30d { get; private set; }
     public Deck Deck { get; private set; } = default!;
     public Source? Source { get; private set; }
     public IReadOnlyList<Build> Builds { get; private set; } = [];
@@ -26,6 +30,11 @@ public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildS
         Grants = await grants.ListForDeckAsync(slug, ct);
         Links = await links.ListForDeckAsync(slug, ct);
         CurrentBuild = deck.CurrentBuildId is null ? null : Builds.FirstOrDefault(b => b.Id == deck.CurrentBuildId) ?? await builds.GetAsync(slug, deck.CurrentBuildId, ct);
+        RecentViews = await views.RecentForDeckAsync(slug, 200, ct);
+        var now = DateTimeOffset.UtcNow;
+        Views7d = RecentViews.Count(v => v.At > now.AddDays(-7));
+        Views30d = RecentViews.Count(v => v.At > now.AddDays(-30));
+        DistinctViewers30d = RecentViews.Where(v => v.At > now.AddDays(-30)).Select(v => v.Principal).Distinct().Count();
         return Page();
     }
 }

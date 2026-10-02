@@ -151,6 +151,9 @@ public static class DeckServingEndpoints
                 await file.Content.CopyToAsync(ms, ct);
                 var html = Encoding.UTF8.GetString(ms.ToArray());
                 html = InjectLiveScript(html, slug, deck.CurrentBuildId);
+                // Link previews (Slack/Teams/Twitter) for decks anyone can open; private decks reveal nothing to crawlers anyway.
+                if (deck.Visibility == Visibility.Public && !onExternalHost)
+                    html = InjectOpenGraph(html, deck, $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}");
 
                 headers[HeaderNames.CacheControl] = "no-cache, private";
                 await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct);
@@ -204,6 +207,34 @@ public static class DeckServingEndpoints
         var tag = $"<script defer src=\"{LiveScriptPath}\" data-slug=\"{slug}\" data-build=\"{buildId}\"></script>";
         var idx = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
         return idx < 0 ? tag + html : html.Insert(idx, tag);
+    }
+
+    internal static string InjectOpenGraph(string html, Deck deck, string origin)
+    {
+        var url = $"{origin}/d/{deck.Slug}/";
+        var title = System.Net.WebUtility.HtmlEncode(deck.Title);
+        var desc = System.Net.WebUtility.HtmlEncode(deck.Description ?? (deck.Author is null ? "Slides" : $"Slides by {deck.Author}"));
+        var image = deck.CurrentHasThumbnail ? $"{origin}/d/{deck.Slug}.jpg?v={deck.CurrentBuildId}" : null;
+        // Additive only: Slidev (seoMeta) and hand-written index.html files may already carry some of these; the first
+        // tag wins with most crawlers, so never emit a duplicate of what the deck declares itself.
+        var sb = new StringBuilder();
+        void Add(string attr, string name, string? content)
+        {
+            if (content is null || html.Contains($"{attr}=\"{name}\"", StringComparison.OrdinalIgnoreCase) || html.Contains($"{attr}='{name}'", StringComparison.OrdinalIgnoreCase)) return;
+            sb.Append($"<meta {attr}=\"{name}\" content=\"{content}\">");
+        }
+        Add("property", "og:type", "website");
+        Add("property", "og:title", title);
+        Add("property", "og:description", desc);
+        Add("property", "og:url", url);
+        Add("property", "og:image", image);
+        Add("name", "twitter:card", image is null ? "summary" : "summary_large_image");
+        Add("name", "twitter:title", title);
+        Add("name", "twitter:description", desc);
+        Add("name", "twitter:image", image);
+        if (sb.Length == 0) return html;
+        var idx = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
+        return idx < 0 ? sb + html : html.Insert(idx, sb.ToString());
     }
 
     private static string OfficeViewerPage(Deck deck, string slug, string embedUrl)

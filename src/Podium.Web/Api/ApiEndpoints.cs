@@ -159,6 +159,20 @@ public static class ApiEndpoints
             return Results.Ok(deck);
         });
 
+        // Permanently delete an archived deck: artifacts, build history, grants, links and the deck record itself.
+        owner.MapDelete("/decks/{slug}", async (string slug, IDeckStore decks, IGrantStore grants, IShareLinkStore links, BuildService builds, DeckAccessService access, CancellationToken ct) =>
+        {
+            var deck = await decks.GetAsync(slug, ct);
+            if (deck is null) return Results.NotFound();
+            if (!deck.Archived) return Results.Conflict(new { error = "Only archived decks can be deleted. Remove the deck from the repository (or the source) first; it is archived on the next sync." });
+            await builds.PurgeDeckAsync(deck, ct);
+            foreach (var g in await grants.ListForDeckAsync(slug, ct)) await grants.DeleteAsync(slug, g.Principal, ct);
+            foreach (var l in await links.ListForDeckAsync(slug, ct)) await links.UpsertAsync(l with { Revoked = true }, ct);
+            await decks.DeleteAsync(slug, ct);
+            access.Invalidate(slug);
+            return Results.NoContent();
+        });
+
         // Freeze: keep serving the current build while new pushes keep building in the background. Unfreeze catches up.
         owner.MapPost("/decks/{slug}/freeze", async (string slug, [FromQuery] bool frozen, BuildService builds, DeckAccessService access, IDeckStore decks, Sync.SyncHub hub, CancellationToken ct) =>
         {

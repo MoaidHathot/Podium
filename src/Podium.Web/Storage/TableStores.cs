@@ -158,6 +158,13 @@ public sealed class TableDeckStore(TableClients tables) : IDeckStore
         };
         await t.UpsertEntityAsync(e, TableUpdateMode.Replace, ct);
     }
+
+    public async Task DeleteAsync(string slug, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try { await t.DeleteEntityAsync("deck", slug, cancellationToken: ct); }
+        catch (RequestFailedException ex) when (ex.Status == 404) { }
+    }
 }
 
 public sealed class TableBuildStore(TableClients tables) : IBuildStore
@@ -304,11 +311,32 @@ public sealed class TableViewHistoryStore(TableClients tables) : IViewHistorySto
 {
     private const string Table = "views";
 
+    private const string DeckViewsTable = "deckviews";
+
     public async Task RecordAsync(ViewEvent e, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
         var entity = new TableEntity(TableJson.Key(e.Principal), TableJson.InvertedTicks(e.At) + "_" + e.DeckSlug) { ["Json"] = TableJson.Serialize(e) };
         await t.UpsertEntityAsync(entity, TableUpdateMode.Replace, ct);
+        // Second copy partitioned by deck: the per-deck analytics query becomes a cheap partition scan.
+        var byDeck = await tables.GetAsync(DeckViewsTable, ct);
+        await byDeck.UpsertEntityAsync(new TableEntity(e.DeckSlug, TableJson.InvertedTicks(e.At) + "_" + TableJson.Key(e.Principal)) { ["Json"] = TableJson.Serialize(e) }, TableUpdateMode.Replace, ct);
+    }
+
+    public async Task<IReadOnlyList<ViewEvent>> RecentForDeckAsync(string deckSlug, int take = 100, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(DeckViewsTable, ct);
+        var list = new List<ViewEvent>();
+        await foreach (var page in t.QueryAsync<TableEntity>(x => x.PartitionKey == deckSlug, maxPerPage: take, cancellationToken: ct).AsPages())
+        {
+            foreach (var e in page.Values)
+            {
+                var v = TableJson.Deserialize<ViewEvent>(e);
+                if (v is not null) list.Add(v);
+            }
+            if (list.Count >= take) break;
+        }
+        return list.OrderByDescending(v => v.At).Take(take).ToList();
     }
 
     public async Task<IReadOnlyList<ViewEvent>> RecentForPrincipalAsync(string principal, int take = 20, CancellationToken ct = default)

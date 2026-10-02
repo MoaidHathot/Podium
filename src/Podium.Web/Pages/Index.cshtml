@@ -128,6 +128,35 @@ else
         <h3>No matches</h3>
         <p>Try a different search or clear the filters.</p>
     </div>
+
+    @if (Model.Archived.Count > 0)
+    {
+        <section class="section group collapsed" data-group-key="shelf:archived" id="archived">
+            <div class="section-head">
+                <button class="group-toggle" type="button" aria-expanded="false">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                    <h2>Archived</h2>
+                </button>
+                <span class="faint count">@Model.Archived.Count deck@(Model.Archived.Count == 1 ? "" : "s") no longer in their repositories; artifacts are purged after 30 days</span>
+            </div>
+            <div class="grid cards-grid">
+                <table class="table" style="grid-column:1/-1">
+                    <thead><tr><th>Deck</th><th>Repository</th><th>Archived</th><th></th></tr></thead>
+                    <tbody>
+                    @foreach (var r in Model.Archived)
+                    {
+                        <tr data-archived="@r.Deck.Slug">
+                            <td><a href="/decks/@r.Deck.Slug">@r.Deck.Title</a> <span class="faint mono" style="font-size:.78rem">@r.Deck.Path</span></td>
+                            <td class="mono">@r.RepoLabel</td>
+                            <td><time datetime="@r.Deck.UpdatedAt.UtcDateTime.ToString("o")">@r.Deck.UpdatedAt.ToString("yyyy-MM-dd")</time></td>
+                            <td style="text-align:right"><button class="btn btn-danger btn-sm" data-delete-deck="@r.Deck.Slug">Delete permanently</button></td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
 }
 
 @section Scripts {
@@ -141,7 +170,7 @@ else
   const chips = [...document.querySelectorAll('#filters .chip[data-filter]')];
   const clearBtn = document.getElementById('clear-filters');
   const groupsRoot = document.getElementById('groups');
-  const shelves = [...document.querySelectorAll('section.shelf')];
+  const shelves = [...document.querySelectorAll('section.shelf, section#archived')];
   const noResults = document.getElementById('no-results');
   // The pool cards are the canonical nodes; grouping moves them between sections.
   const cards = [...document.querySelectorAll('#pool > .card')];
@@ -180,7 +209,7 @@ else
   function render() {
     const filtering = search.value.trim().length > 0 || state.kind || state.vis || state.status || state.tag;
     // Shelves step aside while searching/filtering; an emptied shelf (all recents dismissed) stays hidden.
-    shelves.forEach((s) => s.classList.toggle('hidden', !!filtering || s.querySelectorAll('.card').length === 0));
+    shelves.forEach((s) => s.classList.toggle('hidden', !!filtering || (s.id !== 'archived' && s.querySelectorAll('.card').length === 0)));
     clearBtn.classList.toggle('hidden', !filtering);
     document.body.dataset.group = state.group;
     document.body.dataset.density = state.density;
@@ -239,10 +268,21 @@ else
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
-  // Shelves (Pinned, Recently presented) are server-rendered but behave like any other group: collapsible, remembered.
+  document.addEventListener('click', async (e) => {
+    const del = e.target.closest('[data-delete-deck]');
+    if (!del) return;
+    const slug = del.dataset.deleteDeck;
+    if (!confirm(`Permanently delete "${slug}" with all its builds, grants and links? This cannot be undone.`)) return;
+    del.disabled = true;
+    try { await Podium.api('DELETE', `/api/decks/${slug}`); del.closest('tr').remove(); Podium.toast('Deck deleted', 'ok'); }
+    catch (err) { del.disabled = false; Podium.toast(err.message, 'error'); }
+  });
+
+  // Shelves (Pinned, Recently presented, Archived) are server-rendered but behave like any other group: collapsible, remembered.
   for (const shelf of shelves) {
     const key = shelf.dataset.groupKey;
     const btn = shelf.querySelector('.group-toggle');
+    if (shelf.id === 'archived' && !(key in state.collapsed)) state.collapsed[key] = true; // archived starts folded
     const apply = () => { const collapsed = !!state.collapsed[key]; shelf.classList.toggle('collapsed', collapsed); btn.setAttribute('aria-expanded', String(!collapsed)); };
     btn.addEventListener('click', () => { state.collapsed[key] = !state.collapsed[key]; save(); apply(); });
     apply();

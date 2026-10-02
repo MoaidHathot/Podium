@@ -24,6 +24,7 @@ public sealed class InMemoryDeckStore : IDeckStore
     public Task<IReadOnlyList<Deck>> ListBySourceAsync(string sourceId, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Deck>>(_items.Values.Where(d => d.SourceId == sourceId).OrderBy(d => d.Slug, StringComparer.Ordinal).ToList());
     public Task UpsertAsync(Deck deck, CancellationToken ct = default) { _items[deck.Slug] = deck; return Task.CompletedTask; }
+    public Task DeleteAsync(string slug, CancellationToken ct = default) { _items.TryRemove(slug, out _); return Task.CompletedTask; }
 }
 
 public sealed class InMemoryBuildStore : IBuildStore
@@ -77,4 +78,6 @@ public sealed class InMemoryViewHistoryStore : IViewHistoryStore
     }
     public Task<IReadOnlyList<ViewEvent>> RecentForPrincipalAsync(string principal, int take = 20, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<ViewEvent>>(_items.Where(v => v.Principal == principal).OrderByDescending(v => v.At).Take(take).ToList());
+    public Task<IReadOnlyList<ViewEvent>> RecentForDeckAsync(string deckSlug, int take = 100, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ViewEvent>>(_items.Where(v => v.DeckSlug == deckSlug).OrderByDescending(v => v.At).Take(take).ToList());
 }

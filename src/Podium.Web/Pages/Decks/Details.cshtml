@@ -256,6 +256,33 @@
 </div>
 
 <section class="panel" style="margin-top:1rem">
+    <h3>Views</h3>
+    <p class="hint">One view per person per deck per 10 minutes; your own views are included. Anonymous public viewers appear as one entry.</p>
+    <div class="row" style="gap:2rem; margin-bottom:.75rem">
+        <div><div class="faint" style="font-size:.78rem; text-transform:uppercase; letter-spacing:.05em">Last 7 days</div><div style="font-size:1.6rem; font-weight:700">@Model.Views7d</div></div>
+        <div><div class="faint" style="font-size:.78rem; text-transform:uppercase; letter-spacing:.05em">Last 30 days</div><div style="font-size:1.6rem; font-weight:700">@Model.Views30d</div></div>
+        <div><div class="faint" style="font-size:.78rem; text-transform:uppercase; letter-spacing:.05em">Distinct viewers (30d)</div><div style="font-size:1.6rem; font-weight:700">@Model.DistinctViewers30d</div></div>
+    </div>
+    @if (Model.RecentViews.Count > 0)
+    {
+        <table class="table">
+            <thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead>
+            <tbody>
+            @foreach (var v in Model.RecentViews.Take(12))
+            {
+                <tr>
+                    <td><time datetime="@v.At.UtcDateTime.ToString("o")">@v.At.ToString("g")</time></td>
+                    <td class="mono">@(v.Principal == "anonymous" ? "anonymous (public/link)" : v.Principal)</td>
+                    <td>@(v.Presenter ? "presenter view" : v.Artifact.ToString().ToLowerInvariant())</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+    else { <p class="faint">No views recorded yet.</p> }
+</section>
+
+<section class="panel" style="margin-top:1rem">
     <h3>Builds</h3>
     <table class="table">
         <thead><tr><th>Build</th><th>Commit</th><th>Status</th><th>Started</th><th>Duration</th><th>Artifacts</th><th>Trigger</th><th></th></tr></thead>

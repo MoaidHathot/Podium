@@ -11,6 +11,7 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
     public IReadOnlyList<DeckRow> Pinned { get; private set; } = [];
     public IReadOnlyList<DeckRow> RecentlyViewed { get; private set; } = [];
     public IReadOnlyList<Source> Sources { get; private set; } = [];
+    public IReadOnlyList<DeckRow> Archived { get; private set; } = [];
     public bool AnyBuilding { get; private set; }
     public bool HasSources { get; private set; }
 
@@ -33,7 +34,9 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
             dismissed = await views.GetRecentDismissalsAsync(caller.Principal, ct);
         }
 
-        var all = await decks.ListAsync(includeArchived: false, ct);
+        var everything = await decks.ListAsync(includeArchived: true, ct);
+        var all = everything.Where(d => !d.Archived).ToList();
+        Archived = everything.Where(d => d.Archived).OrderByDescending(d => d.UpdatedAt).Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), null)).ToList();
         var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null)).ToList();
         Decks = rows.OrderByDescending(r => r.Deck.LastCommitAt ?? r.Deck.UpdatedAt).ToList();
         Pinned = Decks.Where(r => r.Deck.Pinned).ToList();

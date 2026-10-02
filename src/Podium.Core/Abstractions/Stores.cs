@@ -18,6 +18,7 @@ public interface IDeckStore
     Task<IReadOnlyList<Deck>> ListAsync(bool includeArchived = false, CancellationToken ct = default);
     Task<IReadOnlyList<Deck>> ListBySourceAsync(string sourceId, CancellationToken ct = default);
     Task UpsertAsync(Deck deck, CancellationToken ct = default);
+    Task DeleteAsync(string slug, CancellationToken ct = default);
 }
 
 public interface IBuildStore
@@ -53,6 +54,9 @@ public interface IViewHistoryStore
 
     /// <summary>Deck slug to dismissal time, for the given principal.</summary>
     Task<IReadOnlyDictionary<string, DateTimeOffset>> GetRecentDismissalsAsync(string principal, CancellationToken ct = default);
+
+    /// <summary>Recent views of one deck across all principals (newest first), for the owner's analytics panel.</summary>
+    Task<IReadOnlyList<ViewEvent>> RecentForDeckAsync(string deckSlug, int take = 100, CancellationToken ct = default);
 }
 
 /// <summary>Represents a stored artifact object.</summary>
