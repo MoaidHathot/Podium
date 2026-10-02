@@ -447,5 +447,21 @@ public class DeckSyncServiceTests
 
         // While those builds are active a second pass must not queue duplicates.
         Assert.Equal(0, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
+
+        // The agents rebuild fails on the new builder: the deck keeps serving its v1 build, and the failed v2 attempt
+        // counts as "tried" - later checks must not queue it again and again (that would loop on every check).
+        var agents2 = _runner.Started.Last(s => s.Deck.Slug == "slides-agents");
+        Assert.True(await _buildService.CompleteAsync("slides-agents", agents2.Build.Id, agents2.CallbackToken, new BuildReport(false, false, false, false, "broken on v2", null)));
+        var intro2 = _runner.Started.Last(s => s.Deck.Slug == "slides-intro");
+        Assert.True(await _buildService.CompleteAsync("slides-intro", intro2.Build.Id, intro2.CallbackToken, new BuildReport(true, true, false, false, null, null)));
+        var served = (await _decks.GetAsync("slides-agents"))!;
+        Assert.Equal(agents.Build.Id, served.CurrentBuildId);
+        Assert.Equal(agents2.Build.Id, served.LatestBuildId);
+        Assert.Equal(0, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
+        Assert.Equal(4, _runner.Started.Count);
+
+        // A further builder change retries it once more.
+        _runner.Version = "builder-v3";
+        Assert.Equal(2, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
     }
 }

@@ -1,11 +1,9 @@
 name: CI
 
-# Pull requests and pushes to non-main branches: build, test, lint the builder and check both Dockerfiles still
-# assemble. Nothing here publishes images or touches Azure; that is deploy.yml on main.
+# Pull requests: build, test, lint the builder and check both Dockerfiles still assemble. Nothing here publishes images or touches Azure; that is deploy.yml on main.
 on:
   pull_request:
-  push:
-    branches-ignore: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

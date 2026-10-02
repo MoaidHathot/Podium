@@ -133,6 +133,11 @@ function mkdirForDeck(dir) {
   if (dropPrivileges) spawnSync('chown', ['-R', `${deckUser}:${deckUser}`, dir], { stdio: 'ignore' });
 }
 
+/** Hands a file the orchestrator wrote to the deck user. */
+function ownForDeck(path) {
+  if (dropPrivileges) spawnSync('chown', [`${deckUser}:${deckUser}`, path], { stdio: 'ignore' });
+}
+
 /** Copies a tree so that the deck user owns the copy (Vite writes caches into node_modules). */
 async function copyTreeForDeck(from, to) {
   // Running as the deck user, `cp` creates files owned by that user; --no-preserve stops it from carrying over the
@@ -190,11 +195,13 @@ async function ensureSlidevProject(deckDir) {
   if (!existsSync(pkgPath)) {
     log('No package.json: using the builder\'s bundled Slidev');
     writeFileSync(pkgPath, JSON.stringify({ name: 'podium-deck', private: true, type: 'module' }, null, 2));
+    ownForDeck(pkgPath);
     // Reuse the builder's own dependencies rather than hitting the network for an unpinned install. They must be a
     // real directory inside the deck: through a symlink Vite resolves themes to their real path outside the project
-    // root and leaves import.meta.glob() calls untransformed, which breaks the built deck at runtime.
+    // root and leaves import.meta.glob() calls untransformed, which breaks the built deck at runtime. The copy is made
+    // by the deck user so Slidev can write its caches (node_modules/.slidev) into it.
     const t0 = Date.now();
-    cpSync(podiumModules, join(deckDir, 'node_modules'), { recursive: true, dereference: true });
+    await copyTreeForDeck(podiumModules, join(deckDir, 'node_modules'));
     log(`Copied bundled dependencies in ${Math.round((Date.now() - t0) / 1000)}s`);
     return;
   }

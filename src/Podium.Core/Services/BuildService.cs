@@ -288,7 +288,9 @@ public sealed class BuildService(
         foreach (var deck in allDecks.Where(d => !d.Archived && d.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static or DeckKind.PowerPoint or DeckKind.Pdf))
         {
             if (active.Contains(deck.Slug)) continue;
-            var referenceId = deck.CurrentBuildId ?? deck.LatestBuildId;
+            // The latest attempt (not the served build) is the reference: a deck whose rebuilds keep failing on the
+            // current builder has already been tried and must not be re-queued on every check.
+            var referenceId = deck.LatestBuildId ?? deck.CurrentBuildId;
             if (referenceId is null) continue;
             var reference = await builds.GetAsync(deck.Slug, referenceId, ct);
             if (reference is null || string.Equals(reference.BuilderVersion, current, StringComparison.Ordinal)) continue;
