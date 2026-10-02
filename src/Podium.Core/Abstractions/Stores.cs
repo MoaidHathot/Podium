@@ -24,6 +24,7 @@ public interface IBuildStore
     Task<IReadOnlyList<Build>> ListForDeckAsync(string deckSlug, int take = 20, CancellationToken ct = default);
     Task<IReadOnlyList<Build>> ListActiveAsync(CancellationToken ct = default);
     Task UpsertAsync(Build build, CancellationToken ct = default);
+    Task DeleteAsync(string deckSlug, string buildId, CancellationToken ct = default);
 }
 
 public interface IGrantStore

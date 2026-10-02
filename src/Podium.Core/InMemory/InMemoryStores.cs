@@ -34,6 +34,7 @@ public sealed class InMemoryBuildStore : IBuildStore
     public Task<IReadOnlyList<Build>> ListActiveAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Build>>(_items.Values.Where(b => b.Status is BuildStatus.Queued or BuildStatus.Running).ToList());
     public Task UpsertAsync(Build build, CancellationToken ct = default) { _items[(build.DeckSlug, build.Id)] = build; return Task.CompletedTask; }
+    public Task DeleteAsync(string deckSlug, string buildId, CancellationToken ct = default) { _items.TryRemove((deckSlug, buildId), out _); return Task.CompletedTask; }
 }
 
 public sealed class InMemoryGrantStore : IGrantStore

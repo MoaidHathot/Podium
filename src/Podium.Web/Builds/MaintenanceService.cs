@@ -24,6 +24,7 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
         }, stoppingToken);
 
         var lastUpgradeCheck = DateTimeOffset.MinValue;
+        var lastRetentionSweep = DateTimeOffset.MinValue;
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
@@ -45,6 +46,30 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
                     var decks = await sp.GetRequiredService<IDeckStore>().ListAsync(includeArchived: false, ct);
                     var sources = sp.GetRequiredService<ISourceStore>();
                     await sp.GetRequiredService<BuildService>().RebuildOutdatedAsync(decks, id => sources.GetAsync(id, ct), ct);
+                }, stoppingToken);
+            }
+
+            // Storage hygiene, once a day: trim build history/artifacts per deck and purge decks archived long ago.
+            if (DateTimeOffset.UtcNow - lastRetentionSweep > TimeSpan.FromHours(24))
+            {
+                lastRetentionSweep = DateTimeOffset.UtcNow;
+                await RunSafely("retention sweep", async ct =>
+                {
+                    using var scope = scopes.CreateScope();
+                    var sp = scope.ServiceProvider;
+                    var buildService = sp.GetRequiredService<BuildService>();
+                    var buildOptions = sp.GetRequiredService<IOptions<BuildOptions>>().Value;
+                    var deckStore = sp.GetRequiredService<IDeckStore>();
+                    foreach (var deck in await deckStore.ListAsync(includeArchived: true, ct))
+                    {
+                        if (deck.Archived && DateTimeOffset.UtcNow - deck.UpdatedAt > buildOptions.ArchivedPurgeAfter)
+                        {
+                            await buildService.PurgeDeckAsync(deck, ct);
+                            await deckStore.UpsertAsync(deck with { CurrentBuildId = null, LatestSuccessfulBuildId = null, PinnedBuildId = null, CurrentHasPdf = false, CurrentHasPptx = false, CurrentHasThumbnail = false }, ct);
+                        }
+                        else if (!deck.Archived)
+                            await buildService.ApplyRetentionAsync(deck, ct);
+                    }
                 }, stoppingToken);
             }
 

@@ -124,6 +124,25 @@ public static class ApiEndpoints
             return log is null ? Results.NotFound() : Results.Stream(log.Content, "text/plain; charset=utf-8");
         });
 
+        // Serve a specific successful build (rollback / promote); optionally freeze on it.
+        owner.MapPost("/decks/{slug}/builds/{buildId}/serve", async (string slug, string buildId, [FromQuery] bool freeze, BuildService builds, DeckAccessService access, CancellationToken ct) =>
+        {
+            if (!Podium.Core.Slug.IsValid(slug) || buildId.Length > 40) return Results.BadRequest();
+            var deck = await builds.ServeBuildAsync(slug, buildId, freeze, ct);
+            if (deck is null) return Results.NotFound(new { error = "Build not found, not successful, or its artifacts were cleaned up" });
+            access.Invalidate(slug);
+            return Results.Ok(deck);
+        });
+
+        // Freeze: keep serving the current build while new pushes keep building in the background. Unfreeze catches up.
+        owner.MapPost("/decks/{slug}/freeze", async (string slug, [FromQuery] bool frozen, BuildService builds, DeckAccessService access, CancellationToken ct) =>
+        {
+            var deck = await builds.SetFrozenAsync(slug, frozen, ct);
+            if (deck is null) return Results.NotFound();
+            access.Invalidate(slug);
+            return Results.Ok(deck);
+        });
+
         owner.MapPost("/decks/{slug}/grants", async (string slug, GrantRequest req, IDeckStore decks, IGrantStore grants, GitHubAppAuth gh, ISourceStore sources, CancellationToken ct) =>
         {
             var deck = await decks.GetAsync(slug, ct);

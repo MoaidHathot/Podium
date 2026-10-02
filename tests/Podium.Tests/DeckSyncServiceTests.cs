@@ -241,7 +241,7 @@ public class DeckSyncServiceTests
         Assert.Equal(b1, deck.CurrentBuildId);
         Assert.Equal(["w1"], (await _builds.GetAsync("slides-agents", b1))!.Warnings);
 
-        // two more successful builds => the first one gets deleted, the second kept for rollback
+        // two more successful builds => the first one loses its artifacts, the second is kept as the rollback target
         var src = await _sources.GetAsync(_source.Id) ?? _source;
         var b2 = (await _buildService.QueueAsync(deck, src, "f000000000000000000000000000000000000002", "test", [], default)).Id;
         Assert.True(await _buildService.CompleteAsync("slides-agents", b2, $"tok:slides-agents:{b2}", new BuildReport(true, true, false, false, null, null)));
@@ -250,6 +250,70 @@ public class DeckSyncServiceTests
         Assert.True(await _buildService.CompleteAsync("slides-agents", b3, $"tok:slides-agents:{b3}", new BuildReport(true, true, false, false, null, null)));
         Assert.Equal([("slides-agents", b1)], _artifacts.Deleted);
         Assert.Equal(b3, (await _decks.GetAsync("slides-agents"))!.CurrentBuildId);
+        Assert.False((await _builds.GetAsync("slides-agents", b1))!.HasSite, "artifact-less build must be marked so the UI does not offer to serve it");
+        Assert.True((await _builds.GetAsync("slides-agents", b2))!.HasSite);
+    }
+
+    [Fact]
+    public async Task Frozen_deck_keeps_serving_pinned_build_until_unfrozen_and_rollback_serves_older_build()
+    {
+        await _sync.SyncAsync(_source);
+        var req = _runner.Started.Single(s => s.Deck.Slug == "slides-agents");
+        Assert.True(await _buildService.CompleteAsync("slides-agents", req.Build.Id, req.CallbackToken, new BuildReport(true, true, true, false, null, null)));
+        var b1 = req.Build.Id;
+        var src = await _sources.GetAsync(_source.Id) ?? _source;
+
+        // Freeze on b1, then a new build b2 succeeds: still serving b1, b2 recorded as latest success.
+        var frozen = await _buildService.SetFrozenAsync("slides-agents", true);
+        Assert.Equal(b1, frozen!.PinnedBuildId);
+        var b2 = (await _buildService.QueueAsync(frozen, src, "f000000000000000000000000000000000000002", "test", [], default)).Id;
+        Assert.True(await _buildService.CompleteAsync("slides-agents", b2, $"tok:slides-agents:{b2}", new BuildReport(true, true, false, false, null, null)));
+        var deck = (await _decks.GetAsync("slides-agents"))!;
+        Assert.Equal(b1, deck.CurrentBuildId);
+        Assert.True(deck.CurrentHasPdf);
+        Assert.Equal(b2, deck.LatestSuccessfulBuildId);
+        Assert.Empty(_artifacts.Deleted); // both builds retained: pinned + latest
+
+        // Unfreeze: catches up to b2.
+        deck = (await _buildService.SetFrozenAsync("slides-agents", false))!;
+        Assert.Null(deck.PinnedBuildId);
+        Assert.Equal(b2, deck.CurrentBuildId);
+        Assert.False(deck.CurrentHasPdf);
+
+        // Rollback to b1 (not frozen): served now, but the next success replaces it again.
+        deck = (await _buildService.ServeBuildAsync("slides-agents", b1, freeze: false))!;
+        Assert.Equal(b1, deck.CurrentBuildId);
+        var b3 = (await _buildService.QueueAsync(deck, src, "f000000000000000000000000000000000000003", "test", [], default)).Id;
+        Assert.True(await _buildService.CompleteAsync("slides-agents", b3, $"tok:slides-agents:{b3}", new BuildReport(true, true, false, false, null, null)));
+        Assert.Equal(b3, (await _decks.GetAsync("slides-agents"))!.CurrentBuildId);
+
+        // Serving a failed or artifact-less build is refused.
+        Assert.Null(await _buildService.ServeBuildAsync("slides-agents", "does-not-exist", false));
+    }
+
+    [Fact]
+    public async Task Retention_caps_build_records_and_keeps_served_pinned_and_rollback_artifacts()
+    {
+        await _sync.SyncAsync(_source);
+        var req = _runner.Started.Single(s => s.Deck.Slug == "slides-agents");
+        Assert.True(await _buildService.CompleteAsync("slides-agents", req.Build.Id, req.CallbackToken, new BuildReport(true, true, false, false, null, null)));
+        var src = await _sources.GetAsync(_source.Id) ?? _source;
+        var ids = new List<string> { req.Build.Id };
+        for (var i = 2; i <= 30; i++)
+        {
+            var deck = (await _decks.GetAsync("slides-agents"))!;
+            var id = (await _buildService.QueueAsync(deck, src, $"f{i:D39}", "test", [], default)).Id;
+            Assert.True(await _buildService.CompleteAsync("slides-agents", id, $"tok:slides-agents:{id}", new BuildReport(i % 7 != 0, i % 7 != 0, false, false, i % 7 == 0 ? "boom" : null, null)));
+            ids.Add(id);
+        }
+        var history = await _builds.ListForDeckAsync("slides-agents", 500);
+        Assert.Equal(25, history.Count);
+        Assert.Equal(ids.Skip(5), history.Select(b => b.Id).Reverse()); // newest-first ordering follows creation order
+        var final = (await _decks.GetAsync("slides-agents"))!;
+        var withArtifacts = history.Where(b => b.HasSite).Select(b => b.Id).ToList();
+        Assert.Equal(2, withArtifacts.Count); // served + rollback
+        Assert.Contains(final.CurrentBuildId, withArtifacts);
+        Assert.DoesNotContain(_artifacts.Deleted, d => d.Build == final.CurrentBuildId);
     }
 
     [Fact]

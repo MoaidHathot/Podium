@@ -16,6 +16,10 @@ public sealed class BuildOptions
     public TimeSpan UntrustedTimeout { get; set; } = TimeSpan.FromMinutes(8);
     /// <summary>Builds older than this that still report Running are marked failed.</summary>
     public TimeSpan StaleAfter { get; set; } = TimeSpan.FromMinutes(30);
+    /// <summary>Build records kept per deck (artifacts are retained only for the served, pinned and rollback builds).</summary>
+    public int KeepBuildRecords { get; set; } = 25;
+    /// <summary>Archived decks (removed from the repository) lose their artifacts after this long.</summary>
+    public TimeSpan ArchivedPurgeAfter { get; set; } = TimeSpan.FromDays(30);
 }
 
 /// <summary>Report posted by the builder when it finishes.</summary>
@@ -119,33 +123,116 @@ public sealed class BuildService(
         var deck = await decks.GetAsync(deckSlug, ct);
         if (deck is not null)
         {
-            var previous = deck.CurrentBuildId;
             var succeeded = build.Status == BuildStatus.Succeeded;
+            // A frozen deck keeps serving its pinned build; the new build is recorded as the latest success only.
+            var serveIt = succeeded && deck.PinnedBuildId is null;
             deck = deck with
             {
                 LatestBuildStatus = build.Status,
-                CurrentBuildId = succeeded ? build.Id : deck.CurrentBuildId,
-                CurrentHasPdf = succeeded ? build.HasPdf : deck.CurrentHasPdf,
-                CurrentHasPptx = succeeded ? build.HasPptx : deck.CurrentHasPptx,
-                CurrentHasThumbnail = succeeded ? build.HasThumbnail : deck.CurrentHasThumbnail,
+                LatestSuccessfulBuildId = succeeded ? build.Id : deck.LatestSuccessfulBuildId,
+                CurrentBuildId = serveIt ? build.Id : deck.CurrentBuildId,
+                CurrentHasPdf = serveIt ? build.HasPdf : deck.CurrentHasPdf,
+                CurrentHasPptx = serveIt ? build.HasPptx : deck.CurrentHasPptx,
+                CurrentHasThumbnail = serveIt ? build.HasThumbnail : deck.CurrentHasThumbnail,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await decks.UpsertAsync(deck, ct);
 
-            if (build.Status == BuildStatus.Succeeded && previous is not null && previous != build.Id)
-            {
-                // Keep exactly one older build for quick rollback; delete anything before that.
-                var history = await builds.ListForDeckAsync(deckSlug, 50, ct);
-                foreach (var old in history.Where(b => b.Status == BuildStatus.Succeeded && b.Id != build.Id && b.Id != previous))
-                {
-                    try { await artifacts.DeleteBuildAsync(deckSlug, old.Id, ct); }
-                    catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Cleanup of build {Build} failed", old.Id); }
-                }
-            }
+            await ApplyRetentionAsync(deck, ct);
         }
 
         log.LogInformation("Build {Build} for {Deck} finished: {Status} {Error}", buildId, deckSlug, build.Status, build.Error);
         return true;
+    }
+
+    /// <summary>
+    /// Retention: artifacts are kept for the served build, the pinned build (if any) and the most recent other successful
+    /// build (rollback target); everything else loses its blobs. Build records are capped at <see cref="BuildOptions.KeepBuildRecords"/>
+    /// so history stays browsable without growing forever. Never touches active builds.
+    /// </summary>
+    public async Task ApplyRetentionAsync(Deck deck, CancellationToken ct = default)
+    {
+        var history = await builds.ListForDeckAsync(deck.Slug, 200, ct); // newest first
+        var keepArtifacts = new HashSet<string>(StringComparer.Ordinal);
+        if (deck.CurrentBuildId is not null) keepArtifacts.Add(deck.CurrentBuildId);
+        if (deck.PinnedBuildId is not null) keepArtifacts.Add(deck.PinnedBuildId);
+        var rollback = history.FirstOrDefault(b => b.Status == BuildStatus.Succeeded && !keepArtifacts.Contains(b.Id));
+        if (rollback is not null) keepArtifacts.Add(rollback.Id);
+
+        var index = 0;
+        foreach (var b in history)
+        {
+            index++;
+            if (b.Status is BuildStatus.Queued or BuildStatus.Running) continue;
+            var keepRecord = index <= options.Value.KeepBuildRecords || keepArtifacts.Contains(b.Id);
+            if (b.Status == BuildStatus.Succeeded && !keepArtifacts.Contains(b.Id) && (b.HasSite || b.HasPdf || b.HasPptx))
+            {
+                try
+                {
+                    await artifacts.DeleteBuildAsync(deck.Slug, b.Id, ct);
+                    // Record that the artifacts are gone so the UI does not offer to serve this build.
+                    await builds.UpsertAsync(b with { HasSite = false, HasPdf = false, HasPptx = false, HasThumbnail = false }, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Cleanup of build {Build} failed", b.Id); }
+            }
+            if (!keepRecord)
+            {
+                try { await builds.DeleteAsync(deck.Slug, b.Id, ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Deleting build record {Build} failed", b.Id); }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Serves a specific successful build (rollback or promote). With <paramref name="freeze"/> the deck stays on that
+    /// build until unfrozen; otherwise newer successful builds resume replacing it.
+    /// </summary>
+    public async Task<Deck?> ServeBuildAsync(string deckSlug, string buildId, bool freeze, CancellationToken ct = default)
+    {
+        var deck = await decks.GetAsync(deckSlug, ct);
+        var build = await builds.GetAsync(deckSlug, buildId, ct);
+        if (deck is null || build is null || build.Status != BuildStatus.Succeeded || !build.HasSite) return null;
+        deck = deck with
+        {
+            CurrentBuildId = build.Id,
+            CurrentHasPdf = build.HasPdf,
+            CurrentHasPptx = build.HasPptx,
+            CurrentHasThumbnail = build.HasThumbnail,
+            PinnedBuildId = freeze ? build.Id : null,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        await decks.UpsertAsync(deck, ct);
+        log.LogInformation("Deck {Deck} now serves build {Build} (frozen: {Frozen})", deckSlug, buildId, freeze);
+        return deck;
+    }
+
+    /// <summary>Freezes on the currently served build, or unfreezes (and catches up to the latest success).</summary>
+    public async Task<Deck?> SetFrozenAsync(string deckSlug, bool frozen, CancellationToken ct = default)
+    {
+        var deck = await decks.GetAsync(deckSlug, ct);
+        if (deck is null) return null;
+        if (frozen)
+        {
+            if (deck.CurrentBuildId is null) return deck;
+            deck = deck with { PinnedBuildId = deck.CurrentBuildId, UpdatedAt = DateTimeOffset.UtcNow };
+            await decks.UpsertAsync(deck, ct);
+            return deck;
+        }
+        deck = deck with { PinnedBuildId = null, UpdatedAt = DateTimeOffset.UtcNow };
+        await decks.UpsertAsync(deck, ct);
+        if (deck.LatestSuccessfulBuildId is { } latest && latest != deck.CurrentBuildId)
+            return await ServeBuildAsync(deckSlug, latest, freeze: false, ct) ?? deck;
+        return deck;
+    }
+    /// <summary>Removes all artifacts and build records of a deck (archived long enough, or deleted).</summary>
+    public async Task PurgeDeckAsync(Deck deck, CancellationToken ct = default)
+    {
+        foreach (var b in await builds.ListForDeckAsync(deck.Slug, 500, ct))
+        {
+            try { await artifacts.DeleteBuildAsync(deck.Slug, b.Id, ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Purge of build {Build} failed", b.Id); }
+            try { await builds.DeleteAsync(deck.Slug, b.Id, ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Purge of build record {Build} failed", b.Id); }
+        }
+        log.LogInformation("Purged artifacts and build history of {Deck}", deck.Slug);
     }
 
     private async Task<string?> SafeBuilderVersionAsync(CancellationToken ct)
@@ -203,14 +290,35 @@ public sealed class BuildService(
         }
     }
 
+    private static long _lastIdTicks;
+
     private static string NewBuildId()
     {
-        // Time-sortable, URL-safe: yyyyMMddHHmmss + 6 random base32 chars.
-        var ts = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
-        const string alphabet = "abcdefghijklmnopqrstuvwxyz234567";
-        Span<byte> rnd = stackalloc byte[6];
+        // Time-sortable, URL-safe: yyyyMMddHHmmss + 3 chars of sub-second sequence + 3 random base32 chars.
+        // Ids created in the same second sort in creation order (the retention logic relies on "newest first").
+        var now = DateTimeOffset.UtcNow;
+        long ticks;
+        while (true)
+        {
+            var last = Interlocked.Read(ref _lastIdTicks);
+            ticks = Math.Max(now.UtcTicks, last + 1);
+            if (Interlocked.CompareExchange(ref _lastIdTicks, ticks, last) == last) break;
+        }
+        var stamped = new DateTimeOffset(ticks, TimeSpan.Zero);
+        var ts = stamped.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        // Ordinal-sorted alphabet (digits before letters in ASCII) so string comparison of ids follows creation order.
+        const string alphabet = "0123456789abcdefghijklmnopqrstuv";
+        // 5 base32 chars encode the tick within the second exactly (10,000,000 < 32^5), so ordering is preserved; the
+        // last char is random to separate ids minted on different machines in the same tick.
+        var sub = ticks % TimeSpan.TicksPerSecond;
+        Span<byte> rnd = stackalloc byte[1];
         RandomNumberGenerator.Fill(rnd);
-        var tail = string.Create(6, rnd.ToArray(), (span, bytes) => { for (var i = 0; i < span.Length; i++) span[i] = alphabet[bytes[i] % 32]; });
+        var tail = string.Create(6, (sub, rnd[0]), (span, s) =>
+        {
+            var v = s.sub;
+            for (var i = 4; i >= 0; i--) { span[i] = alphabet[(int)(v % 32)]; v /= 32; }
+            span[5] = alphabet[s.Item2 % 32];
+        });
         return ts + tail;
     }
 }

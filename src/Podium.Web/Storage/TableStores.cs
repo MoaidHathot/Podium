@@ -179,28 +179,52 @@ public sealed class TableBuildStore(TableClients tables) : IBuildStore
         return list.OrderByDescending(b => b.Id, StringComparer.Ordinal).Take(take).ToList();
     }
 
+    // Active builds are mirrored into a small "activebuilds" table keyed by (deck, build), so the once-a-minute reaper
+    // and every queue operation read a handful of rows instead of scanning the whole build history.
+    private const string ActiveTable = "activebuilds";
+
     public async Task<IReadOnlyList<Build>> ListActiveAsync(CancellationToken ct = default)
     {
-        var t = await tables.GetAsync(Table, ct);
+        var active = await tables.GetAsync(ActiveTable, ct);
         var list = new List<Build>();
-        await foreach (var e in t.QueryAsync<TableEntity>(x => x.GetBoolean("Active") == true, cancellationToken: ct))
+        var stale = new List<TableEntity>();
+        await foreach (var e in active.QueryAsync<TableEntity>(cancellationToken: ct))
         {
             var b = TableJson.Deserialize<Build>(e);
-            if (b is not null) list.Add(b);
+            if (b is null) { stale.Add(e); continue; }
+            if (b.Status is BuildStatus.Queued or BuildStatus.Running) list.Add(b); else stale.Add(e);
         }
+        foreach (var e in stale) { try { await active.DeleteEntityAsync(e.PartitionKey, e.RowKey, cancellationToken: ct); } catch (RequestFailedException) { } }
         return list;
     }
 
     public async Task UpsertAsync(Build build, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
+        var isActive = build.Status is BuildStatus.Queued or BuildStatus.Running;
         var e = new TableEntity(build.DeckSlug, build.Id)
         {
             ["Json"] = TableJson.Serialize(build),
-            ["Active"] = build.Status is BuildStatus.Queued or BuildStatus.Running,
+            ["Active"] = isActive,
             ["Status"] = build.Status.ToString(),
         };
         await t.UpsertEntityAsync(e, TableUpdateMode.Replace, ct);
+
+        var active = await tables.GetAsync(ActiveTable, ct);
+        if (isActive)
+            await active.UpsertEntityAsync(new TableEntity(build.DeckSlug, build.Id) { ["Json"] = TableJson.Serialize(build) }, TableUpdateMode.Replace, ct);
+        else
+        {
+            try { await active.DeleteEntityAsync(build.DeckSlug, build.Id, cancellationToken: ct); }
+            catch (RequestFailedException ex) when (ex.Status == 404) { }
+        }
+    }
+
+    public async Task DeleteAsync(string deckSlug, string buildId, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try { await t.DeleteEntityAsync(deckSlug, buildId, cancellationToken: ct); }
+        catch (RequestFailedException ex) when (ex.Status == 404) { }
     }
 }
 

@@ -53,8 +53,12 @@ public sealed record Deck
     /// <summary>Commit SHA the deck content was last changed at.</summary>
     public string? LastCommitSha { get; init; }
     public DateTimeOffset? LastCommitAt { get; init; }
-    /// <summary>Id of the most recent successful build, if any.</summary>
+    /// <summary>Id of the build being served (normally the most recent successful one; see <see cref="PinnedBuildId"/>).</summary>
     public string? CurrentBuildId { get; init; }
+    /// <summary>When set, the deck is frozen: new successful builds do not replace the served build until the owner promotes one.</summary>
+    public string? PinnedBuildId { get; init; }
+    /// <summary>Id of the newest successful build (may differ from <see cref="CurrentBuildId"/> while frozen or after a rollback).</summary>
+    public string? LatestSuccessfulBuildId { get; init; }
     /// <summary>Artifacts available in the current build (denormalised for the library view).</summary>
     public bool CurrentHasPdf { get; init; }
     public bool CurrentHasPptx { get; init; }

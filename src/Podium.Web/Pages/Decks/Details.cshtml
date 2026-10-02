@@ -33,6 +33,10 @@
     </div>
     <div class="row">
         <button class="btn" id="pin" aria-pressed="@(d.Pinned ? "true" : "false")">@(d.Pinned ? "Unpin" : "Pin")</button>
+        <button class="btn @(d.PinnedBuildId is not null ? "btn-frozen" : "")" id="freeze" aria-pressed="@(d.PinnedBuildId is not null ? "true" : "false")" title="While frozen, new pushes still build but the served version does not change until you unfreeze or promote a build" @(servable ? "" : "disabled")>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2v20M4.9 6l14.2 12M4.9 18 19.1 6M2 12h20"/></svg>
+            @(d.PinnedBuildId is not null ? "Frozen" : "Freeze")
+        </button>
         <button class="btn" id="rebuild" @(building ? "disabled" : "")>@(building ? "Building…" : "Rebuild")</button>
     </div>
 </div>
@@ -43,6 +47,10 @@
 }
 </div>
 
+@if (d.PinnedBuildId is not null)
+{
+    <div class="alert alert-info"><strong>Frozen.</strong> Serving build <span class="mono">@d.PinnedBuildId.Substring(0, Math.Min(14, d.PinnedBuildId.Length))</span>@(d.LatestSuccessfulBuildId is not null && d.LatestSuccessfulBuildId != d.CurrentBuildId ? "; a newer successful build is waiting" : ""). New pushes keep building in the background; unfreeze to catch up, or use <em>Serve</em> on a build below.</div>
+}
 @if (Model.NotBuilt && !servable)
 {
     <div class="alert alert-warn">This deck has no successful build yet, so it cannot be presented. @(building ? "A build is in progress." : "Check the latest build below or trigger a rebuild.")</div>
@@ -215,12 +223,13 @@
     <h3>Builds</h3>
     <table class="table">
         <thead><tr><th>Build</th><th>Commit</th><th>Status</th><th>Started</th><th>Duration</th><th>Artifacts</th><th>Trigger</th><th></th></tr></thead>
+        <caption class="faint" style="caption-side:bottom; text-align:left; padding-top:.5rem; font-size:.8rem">★ served now &nbsp; ❄ frozen on &nbsp; Artifacts of older builds are removed automatically; the served build and one rollback build are always kept.</caption>
         <tbody>
         @foreach (var b in Model.Builds)
         {
             var dur = b.StartedAt is { } s && b.FinishedAt is { } f ? (f - s) : (TimeSpan?)null;
             <tr>
-                <td class="mono">@b.Id.Substring(0, Math.Min(14, b.Id.Length))@(b.Id == d.CurrentBuildId ? " ★" : "")</td>
+                <td class="mono">@b.Id.Substring(0, Math.Min(14, b.Id.Length))@(b.Id == d.CurrentBuildId ? " ★" : "")@(b.Id == d.PinnedBuildId ? " ❄" : "")</td>
                 <td class="mono">@if (Model.Source is not null) { <a href="https://github.com/@Model.Source.FullName/commit/@b.Sha" rel="noreferrer" target="_blank">@b.Sha[..7]</a> } else { @b.Sha[..7] }</td>
                 <td>
                     <span class="dot @(b.Status switch { BuildStatus.Succeeded => "dot-ok", BuildStatus.Failed => "dot-bad", BuildStatus.Running or BuildStatus.Queued => "dot-busy", _ => "" })"></span>
@@ -231,7 +240,13 @@
                 <td>@(dur is { } dd ? $"{(int)dd.TotalMinutes}m {dd.Seconds:00}s" : "—")</td>
                 <td>@(string.Join(" ", new[] { b.HasSite ? "site" : null, b.HasPdf ? "pdf" : null, b.HasPptx ? "pptx" : null }.Where(x => x is not null)))</td>
                 <td class="muted">@b.TriggeredBy</td>
-                <td><button class="btn btn-ghost btn-sm" data-log="@b.Id">Log</button></td>
+                <td class="row" style="gap:.3rem; justify-content:flex-end">
+                    @if (b.Status == BuildStatus.Succeeded && b.HasSite && b.Id != d.CurrentBuildId)
+                    {
+                        <button class="btn btn-sm" data-serve="@b.Id" title="Serve this build (rollback / promote)">Serve</button>
+                    }
+                    <button class="btn btn-ghost btn-sm" data-log="@b.Id">Log</button>
+                </td>
             </tr>
             <tr class="hidden" data-log-row="@b.Id"><td colspan="8"><pre class="log">Loading…</pre></td></tr>
         }
@@ -264,6 +279,14 @@
     pin.setAttribute('aria-pressed', String(next)); pin.textContent = next ? 'Unpin' : 'Pin';
   });
 
+  const freezeBtn = document.getElementById('freeze');
+  freezeBtn.addEventListener('click', async () => {
+    const next = freezeBtn.getAttribute('aria-pressed') !== 'true';
+    freezeBtn.disabled = true;
+    try { await api('POST', `/api/decks/${slug}/freeze?frozen=${next}`); toast(next ? 'Frozen on the current build' : 'Unfrozen', 'ok'); location.reload(); }
+    catch (err) { toast(err.message, 'error'); freezeBtn.disabled = false; }
+  });
+
   document.getElementById('rebuild').addEventListener('click', async (e) => {
     e.target.disabled = true; e.target.textContent = 'Queuing…';
     try { await api('POST', `/api/decks/${slug}/rebuild`); toast('Build queued', 'ok'); setTimeout(() => location.reload(), 1200); }
@@ -285,6 +308,16 @@
     if (g) { try { await api('DELETE', `/api/decks/${slug}/grants/${encodeURIComponent(g.dataset.revokeGrant)}`); g.closest('tr').remove(); toast('Removed', 'ok'); } catch (err) { toast(err.message, 'error'); } }
     const l = e.target.closest('[data-revoke-link]');
     if (l) { try { await api('POST', `/api/decks/${slug}/links/${l.dataset.revokeLink}/revoke`); l.closest('tr').remove(); toast('Link revoked', 'ok'); } catch (err) { toast(err.message, 'error'); } }
+    const sv = e.target.closest('[data-serve]');
+    if (sv) {
+      // While frozen, serving another build moves the freeze onto it; otherwise it is a plain rollback/promote that the
+      // next successful build will replace again.
+      const frozen = @(d.PinnedBuildId is not null ? "true" : "false");
+      if (!confirm(frozen ? 'Serve this build and keep the deck frozen on it?' : 'Serve this build now? The next successful build will replace it again.')) return;
+      sv.disabled = true;
+      try { await api('POST', `/api/decks/${slug}/builds/${sv.dataset.serve}/serve?freeze=${frozen}`); toast('Now serving that build', 'ok'); location.reload(); }
+      catch (err) { toast(err.message, 'error'); sv.disabled = false; }
+    }
     const lg = e.target.closest('[data-log]');
     if (lg) {
       const row = document.querySelector(`[data-log-row="${lg.dataset.log}"]`);
