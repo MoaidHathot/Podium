@@ -121,6 +121,11 @@
         <p class="hint">Generated on every build by the Slidev exporter (headless Chromium).</p>
         <label class="row" style="gap:.5rem"><input type="checkbox" id="exportPdf" @(d.ExportPdf ? "checked" : "") /> Export PDF</label>
         <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="exportPptx" @(d.ExportPptx ? "checked" : "") /> Export PowerPoint (PPTX)</label>
+        @if (d.Kind == DeckKind.Slidev)
+        {
+            <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="stripNotes" @(d.StripNotesForViewers ? "checked" : "") /> Hide speaker notes from viewers</label>
+            <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Builds a second copy without notes for everyone except you and people granted <em>Present</em>. Notes are otherwise part of the deck bundle and visible in its presenter view.@(d.StripNotesForViewers && !d.CurrentHasPublicSite ? " The current build has no notes-free copy yet; rebuild to apply." : "")</p>
+        }
         <p class="faint" style="margin-top:.6rem; font-size:.85rem">Changes apply to the next build.</p>
     </section>
 </div>
@@ -156,13 +161,13 @@
         <h3>People with access</h3>
         <p class="hint">Applies when an artifact is set to <strong>Shared</strong>. People sign in with GitHub.</p>
         <table class="table" id="grants">
-            <thead><tr><th>GitHub user</th><th>Deck</th><th>PDF</th><th>PPTX</th><th></th></tr></thead>
+            <thead><tr><th>GitHub user</th><th>Deck</th><th>PDF</th><th>PPTX</th><th title="Presenter view with notes; may drive the live sync">Present</th><th></th></tr></thead>
             <tbody>
                 @foreach (var g in Model.Grants)
                 {
                     <tr data-principal="@g.Principal">
                         <td>@(g.DisplayName ?? g.Principal)</td>
-                        <td>@(g.Site ? "✓" : "–")</td><td>@(g.Pdf ? "✓" : "–")</td><td>@(g.Pptx ? "✓" : "–")</td>
+                        <td>@(g.Site ? "✓" : "–")</td><td>@(g.Pdf ? "✓" : "–")</td><td>@(g.Pptx ? "✓" : "–")</td><td>@(g.Present ? "✓" : "–")</td>
                         <td><button class="btn btn-ghost btn-sm" data-revoke-grant="@g.Principal">Remove</button></td>
                     </tr>
                 }
@@ -173,6 +178,7 @@
             <label class="row" style="gap:.3rem"><input type="checkbox" id="grant-site" checked /> Deck</label>
             <label class="row" style="gap:.3rem"><input type="checkbox" id="grant-pdf" /> PDF</label>
             <label class="row" style="gap:.3rem"><input type="checkbox" id="grant-pptx" /> PPTX</label>
+            <label class="row" style="gap:.3rem" title="Co-presenter: presenter view with notes, may drive the live sync"><input type="checkbox" id="grant-present" /> Present</label>
             <button class="btn btn-sm" type="submit">Add</button>
         </form>
     </section>
@@ -271,6 +277,7 @@
   document.querySelectorAll('[data-pptx-viewer]').forEach((r) => r.addEventListener('change', () => patch({ pptxViewer: r.value }, Viewer: ${r.value === 'Office' ? 'PowerPoint Online' : 'PDF'})));
   document.getElementById('exportPdf').addEventListener('change', (e) => patch({ exportPdf: e.target.checked }));
   document.getElementById('exportPptx').addEventListener('change', (e) => patch({ exportPptx: e.target.checked }));
+  document.getElementById('stripNotes')?.addEventListener('change', (e) => patch({ stripNotesForViewers: e.target.checked }, e.target.checked ? 'Viewers will get a notes-free copy from the next build' : 'Viewers will see the full build'));
 
   const pin = document.getElementById('pin');
   pin.addEventListener('click', async () => {
@@ -297,7 +304,7 @@
     e.preventDefault();
     const login = document.getElementById('grant-login').value.trim();
     try {
-      await api('POST', `/api/decks/${slug}/grants`, { login, site: grantSite.checked, pdf: grantPdf.checked, pptx: grantPptx.checked });
+      await api('POST', `/api/decks/${slug}/grants`, { login, site: grantSite.checked, pdf: grantPdf.checked, pptx: grantPptx.checked, present: document.getElementById('grant-present').checked });
       toast(`Added ${login}`, 'ok'); location.reload();
     } catch (err) { toast(err.message, 'error'); }
   });

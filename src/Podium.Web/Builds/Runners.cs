@@ -32,6 +32,7 @@ public static class BuilderEnvironment
         ["PODIUM_EXPORT_PDF"] = r.Deck.ExportPdf ? "1" : "0",
         ["PODIUM_EXPORT_PPTX"] = r.Deck.ExportPptx ? "1" : "0",
         ["PODIUM_TRUSTED"] = r.Source.Trusted ? "1" : "0",
+        ["PODIUM_STRIP_NOTES"] = r.Deck.StripNotesForViewers ? "1" : "0",
         ["PODIUM_DECK_TITLE"] = r.Deck.Title,
     };
 }

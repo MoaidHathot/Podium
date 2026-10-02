@@ -19,8 +19,8 @@ public sealed class LocalArtifactStore(IConfiguration config, IHostEnvironment e
         return Path.Combine(_root, BlobArtifactStore.ContainerName(slug, buildId));
     }
 
-    public Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default)
-        => Open(Path.Combine(BuildDir(deckSlug, buildId), "site", relativePath.Replace('/', Path.DirectorySeparatorChar)), BuildDir(deckSlug, buildId));
+    public Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default, string variant = "site")
+        => Open(Path.Combine(BuildDir(deckSlug, buildId), variant, relativePath.Replace('/', Path.DirectorySeparatorChar)), BuildDir(deckSlug, buildId));
 
     public Task<ArtifactObject?> OpenArtifactAsync(string deckSlug, string buildId, ArtifactKind kind, CancellationToken ct = default)
     {

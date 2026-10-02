@@ -96,6 +96,7 @@ public static class ApiEndpoints
                 ExportPdf = patch.ExportPdf ?? deck.ExportPdf,
                 ExportPptx = patch.ExportPptx ?? deck.ExportPptx,
                 PptxViewer = patch.PptxViewer ?? deck.PptxViewer,
+                StripNotesForViewers = patch.StripNotesForViewers ?? deck.StripNotesForViewers,
                 Title = string.IsNullOrWhiteSpace(patch.Title) ? deck.Title : patch.Title.Trim(),
                 Tags = patch.Tags ?? deck.Tags,
                 UpdatedAt = DateTimeOffset.UtcNow,
@@ -154,7 +155,8 @@ public static class ApiEndpoints
             Octokit.User user;
             try { user = await client.User.Get(login).WaitAsync(ct); }
             catch (Octokit.NotFoundException) { return Results.NotFound(new { error = $"GitHub user '{login}' not found" }); }
-            var grant = new Grant { DeckSlug = slug, Principal = $"github:{user.Id}", DisplayName = user.Login, Site = req.Site, Pdf = req.Pdf, Pptx = req.Pptx };
+            // Presenting implies viewing the deck.
+            var grant = new Grant { DeckSlug = slug, Principal = $"github:{user.Id}", DisplayName = user.Login, Site = req.Site || req.Present, Pdf = req.Pdf, Pptx = req.Pptx, Present = req.Present };
             await grants.UpsertAsync(grant, ct);
             return Results.Ok(grant);
         });
@@ -267,8 +269,8 @@ public static class ApiEndpoints
     private static bool IsValidGitHubName(string s) => s.Length is > 0 and <= 100 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.') && s != "." && s != "..";
 }
 
-public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null);
-public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false);
+public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null);
+public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label);
 public sealed record SourceRequest(string Owner, string Repo, string? Ref);
 

@@ -105,5 +105,5 @@ dotnet run --project src/Podium.Web      # http://localhost:5187, /dev-login sig
 
 - Code that needs a server at runtime (custom runners, server-side execution) is not available; Monaco runs in the browser and works.
 - presenterm PDF export requires weasyprint, which the builder does not ship; commit the PDF next to the deck to serve it.
-- Public decks expose the presenter view (and therefore speaker notes) to anyone, since notes are part of the Slidev bundle. Use Link/Shared visibility for decks with sensitive notes.
+- Speaker notes: by default viewers receive a second build made with `--without-notes`; only you and grantees with the *Present* right get the full bundle. Per-deck toggle under *Manage → Exports*.
 - Cross-device sync relays only Slidev shared state (slide, clicks, drawings, presenter cursor); it does not stream video.

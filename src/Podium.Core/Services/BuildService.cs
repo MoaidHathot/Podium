@@ -23,7 +23,7 @@ public sealed class BuildOptions
 }
 
 /// <summary>Report posted by the builder when it finishes.</summary>
-public sealed record BuildReport(bool Success, bool HasSite, bool HasPdf, bool HasPptx, string? Error, IReadOnlyList<string>? Warnings, bool HasThumbnail = false);
+public sealed record BuildReport(bool Success, bool HasSite, bool HasPdf, bool HasPptx, string? Error, IReadOnlyList<string>? Warnings, bool HasThumbnail = false, bool HasPublicSite = false);
 
 public sealed class BuildService(
     IBuildStore builds,
@@ -115,6 +115,7 @@ public sealed class BuildService(
             HasPdf = report.HasPdf,
             HasPptx = report.HasPptx,
             HasThumbnail = report.HasThumbnail,
+            HasPublicSite = report.HasPublicSite,
             Error = report.Success && report.HasSite ? null : (report.Error ?? "Builder reported failure"),
             Warnings = warnings,
         };
@@ -134,6 +135,7 @@ public sealed class BuildService(
                 CurrentHasPdf = serveIt ? build.HasPdf : deck.CurrentHasPdf,
                 CurrentHasPptx = serveIt ? build.HasPptx : deck.CurrentHasPptx,
                 CurrentHasThumbnail = serveIt ? build.HasThumbnail : deck.CurrentHasThumbnail,
+                CurrentHasPublicSite = serveIt ? build.HasPublicSite : deck.CurrentHasPublicSite,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await decks.UpsertAsync(deck, ct);
@@ -198,6 +200,7 @@ public sealed class BuildService(
             CurrentHasPdf = build.HasPdf,
             CurrentHasPptx = build.HasPptx,
             CurrentHasThumbnail = build.HasThumbnail,
+            CurrentHasPublicSite = build.HasPublicSite,
             PinnedBuildId = freeze ? build.Id : null,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

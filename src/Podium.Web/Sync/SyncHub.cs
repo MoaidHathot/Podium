@@ -25,7 +25,7 @@ public sealed class SyncHub(ILogger<SyncHub> log)
         public readonly ConcurrentDictionary<string, string> LastState = new(StringComparer.Ordinal);
     }
 
-    public async Task HandleAsync(HttpContext http, string slug, Caller caller, CancellationToken ct)
+    public async Task HandleAsync(HttpContext http, string slug, Caller caller, bool canPresent, CancellationToken ct)
     {
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
         var room = _rooms.GetOrAdd(slug, _ => new Room());
@@ -36,7 +36,7 @@ public sealed class SyncHub(ILogger<SyncHub> log)
         }
 
         var id = Guid.NewGuid();
-        var canSend = caller.IsOwner;
+        var canSend = canPresent;
         var entry = (socket, canSend, new SemaphoreSlim(1, 1));
         room.Sockets[id] = entry;
         log.LogDebug("Sync join {Slug} by {Principal} (send={CanSend}); {Count} in room", slug, caller.Principal ?? "anonymous", canSend, room.Sockets.Count);
@@ -141,7 +141,7 @@ public static class SyncEndpoints
             var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
             if (result.Deck is null || result.Decision != AccessDecision.Allow) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-            await hub.HandleAsync(http, slug, caller, http.RequestAborted);
+            await hub.HandleAsync(http, slug, caller, result.CanPresent, http.RequestAborted);
             return Results.Empty;
         });
         return app;

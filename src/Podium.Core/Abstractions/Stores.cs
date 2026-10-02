@@ -62,7 +62,8 @@ public sealed record ArtifactObject(Stream Content, string ContentType, long? Le
 public interface IArtifactStore
 {
     /// <summary>Opens a file from a build's site artifact, e.g. "index.html" or "assets/x.js". Returns null when not found.</summary>
-    Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default);
+    /// <param name="variant">"site" (full) or "site-public" (speaker notes stripped).</param>
+    Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default, string variant = "site");
     Task<ArtifactObject?> OpenArtifactAsync(string deckSlug, string buildId, ArtifactKind kind, CancellationToken ct = default);
     /// <summary>Creates a scoped, time-limited write URL the builder uses to upload results for one build.</summary>
     Task<Uri> CreateUploadUriAsync(string deckSlug, string buildId, TimeSpan lifetime, CancellationToken ct = default);

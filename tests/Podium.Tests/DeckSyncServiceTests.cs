@@ -43,7 +43,7 @@ internal sealed class FakeRunner : IBuildRunner
 internal sealed class FakeArtifacts : IArtifactStore
 {
     public List<(string Slug, string Build)> Deleted { get; } = [];
-    public Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default) => Task.FromResult<ArtifactObject?>(null);
+    public Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default, string variant = "site") => Task.FromResult<ArtifactObject?>(null);
     public Task<ArtifactObject?> OpenArtifactAsync(string deckSlug, string buildId, ArtifactKind kind, CancellationToken ct = default) => Task.FromResult<ArtifactObject?>(null);
     public Task<Uri> CreateUploadUriAsync(string deckSlug, string buildId, TimeSpan lifetime, CancellationToken ct = default) => Task.FromResult(new Uri($"https://blob/{deckSlug}/{buildId}?sig=x"));
     public Task DeleteBuildAsync(string deckSlug, string buildId, CancellationToken ct = default) { Deleted.Add((deckSlug, buildId)); return Task.CompletedTask; }

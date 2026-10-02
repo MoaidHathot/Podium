@@ -25,8 +25,8 @@ public sealed class BlobArtifactStore(BlobServiceClient service, ILogger<BlobArt
         return $"b-{buildId.ToLowerInvariant()}-{hash}";
     }
 
-    public async Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default)
-        => await OpenAsync(deckSlug, buildId, "site/" + relativePath.TrimStart('/'), ct);
+    public async Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default, string variant = "site")
+        => await OpenAsync(deckSlug, buildId, variant + "/" + relativePath.TrimStart('/'), ct);
 
     public async Task<ArtifactObject?> OpenArtifactAsync(string deckSlug, string buildId, ArtifactKind kind, CancellationToken ct = default)
     {

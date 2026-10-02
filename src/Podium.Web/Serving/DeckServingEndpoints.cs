@@ -114,14 +114,18 @@ public static class DeckServingEndpoints
         // Never allow path tricks; blob names are exact so ".." has no meaning there, but keep the contract explicit.
         if (relative.Contains("..", StringComparison.Ordinal) || relative.Contains('\\')) return Results.NotFound();
 
-        var file = await artifacts.OpenSiteFileAsync(slug, deck.CurrentBuildId, relative, ct);
+        // Speaker notes are part of the Slidev bundle. Unless the viewer may present (owner or a grantee with the
+        // presenter right), serve the variant built without notes when the deck asks for it and the build has one.
+        var variant = deck.StripNotesForViewers && deck.CurrentHasPublicSite && !result.CanPresent ? "site-public" : "site";
+
+        var file = await artifacts.OpenSiteFileAsync(slug, deck.CurrentBuildId, relative, ct, variant);
         if (file is null)
         {
             var lastSegment = relative[(relative.LastIndexOf('/') + 1)..];
             if (lastSegment.Contains('.')) return Results.NotFound();
             // SPA route (/5, /presenter/3, /overview, /notes ...): fall back to index.html
             isIndex = true;
-            file = await artifacts.OpenSiteFileAsync(slug, deck.CurrentBuildId, "index.html", ct);
+            file = await artifacts.OpenSiteFileAsync(slug, deck.CurrentBuildId, "index.html", ct, variant);
             if (file is null) return Results.NotFound();
         }
 
@@ -129,6 +133,9 @@ public static class DeckServingEndpoints
         headers[HeaderNames.XContentTypeOptions] = "nosniff";
         headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
         headers["X-Podium-Build"] = deck.CurrentBuildId;
+        headers["X-Podium-Variant"] = variant;
+        // Variants differ per viewer: never let a shared cache serve one viewer's copy to another.
+        headers[HeaderNames.Vary] = "Cookie";
 
         if (isIndex)
         {

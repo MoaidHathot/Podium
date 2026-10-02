@@ -50,6 +50,7 @@ const timeoutSec = Number(env.PODIUM_TIMEOUT_SEC || 900);
 const exportPdf = env.PODIUM_EXPORT_PDF === '1';
 const exportPptx = env.PODIUM_EXPORT_PPTX === '1';
 const trusted = env.PODIUM_TRUSTED === '1';
+const stripNotes = env.PODIUM_STRIP_NOTES === '1';
 const workRoot = env.PODIUM_WORKDIR || '/work';
 
 // Anything that must never appear in logs.
@@ -249,6 +250,15 @@ async function buildSlidev(deckDir, outDir, result) {
   if (!existsSync(join(site, 'index.html'))) throw new Error('Slidev build produced no index.html');
   result.hasSite = true;
   injectPodiumMeta(join(site, 'index.html'));
+
+  if (stripNotes) {
+    // Second variant for viewers: identical build with speaker notes emptied at compile time (`--without-notes`), so
+    // the notes never reach a browser that is not the presenter's. Served from site-public/ by the web app.
+    const publicSite = join(outDir, 'site-public');
+    const r = await run(process.execPath, [slidevBin, 'build', entry, '--base', basePath, '--out', publicSite, '--without-notes'], { cwd: deckDir, allowFail: true, envExtra: { NODE_OPTIONS: '--max-old-space-size=1536' }, timeoutMs: Math.min(remainingMs(), 6 * 60 * 1000) });
+    if (r.code === 0 && existsSync(join(publicSite, 'index.html'))) { injectPodiumMeta(join(publicSite, 'index.html')); result.hasPublicSite = true; }
+    else result.warnings.push('Notes-free copy for viewers could not be built; viewers get the full build (see build log)');
+  }
 
   if (exportPdf || exportPptx) {
     const browserOk = await ensurePlaywrightBrowser(deckDir);
@@ -569,7 +579,7 @@ async function report(body) {
 // Main
 // ---------------------------------------------------------------------------------------------------------------
 async function main() {
-  const result = { success: false, hasSite: false, hasPdf: false, hasPptx: false, hasThumbnail: false, error: null, warnings: [] };
+  const result = { success: false, hasSite: false, hasPdf: false, hasPptx: false, hasThumbnail: false, hasPublicSite: false, error: null, warnings: [] };
   const repoDir = join(workRoot, 'repo');
   const outDir = join(workRoot, 'out');
   rmSync(repoDir, { recursive: true, force: true });

@@ -50,6 +50,8 @@ public sealed record Deck
     public bool ExportPptx { get; init; }
     /// <summary>PowerPoint decks only: in-browser viewer to use.</summary>
     public PptxViewer PptxViewer { get; init; } = PptxViewer.Pdf;
+    /// <summary>Slidev decks: serve viewers (anyone but the owner) a build variant without speaker notes.</summary>
+    public bool StripNotesForViewers { get; init; } = true;
     /// <summary>Commit SHA the deck content was last changed at.</summary>
     public string? LastCommitSha { get; init; }
     public DateTimeOffset? LastCommitAt { get; init; }
@@ -63,6 +65,7 @@ public sealed record Deck
     public bool CurrentHasPdf { get; init; }
     public bool CurrentHasPptx { get; init; }
     public bool CurrentHasThumbnail { get; init; }
+    public bool CurrentHasPublicSite { get; init; }
     public string? LatestBuildId { get; init; }
     public BuildStatus? LatestBuildStatus { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -89,6 +92,8 @@ public sealed record Build
     public bool HasPdf { get; init; }
     public bool HasPptx { get; init; }
     public bool HasThumbnail { get; init; }
+    /// <summary>A second site variant without speaker notes exists (site-public/).</summary>
+    public bool HasPublicSite { get; init; }
     /// <summary>Features the deck uses that are not supported remotely (reported by the builder).</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
     public string? TriggeredBy { get; init; }
@@ -106,6 +111,8 @@ public sealed record Grant
     public bool Site { get; init; } = true;
     public bool Pdf { get; init; }
     public bool Pptx { get; init; }
+    /// <summary>May open the presenter view with notes and drive the cross-device sync (co-presenter).</summary>
+    public bool Present { get; init; }
     public DateTimeOffset GrantedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
