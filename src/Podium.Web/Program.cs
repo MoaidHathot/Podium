@@ -107,6 +107,7 @@ builder.Services.AddSingleton<HmacTokenService>();
 builder.Services.AddSingleton<IBuildTokenService>(sp => sp.GetRequiredService<HmacTokenService>());
 builder.Services.AddSingleton<GitHubAppAuth>();
 builder.Services.AddSingleton<IRepositoryClient, GitHubRepositoryClient>();
+builder.Services.AddSingleton<Podium.Core.Abstractions.IBuildObserver, GitHubChecksObserver>();
 builder.Services.AddScoped<BuildService>();
 builder.Services.AddScoped<DeckSyncService>();
 builder.Services.AddSingleton<SyncQueue>();

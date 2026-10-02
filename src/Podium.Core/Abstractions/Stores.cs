@@ -83,6 +83,14 @@ public sealed record BuildRequest(
     string CallbackToken,
     TimeSpan Timeout);
 
+/// <summary>Notified about build lifecycle events (e.g. to mirror them as GitHub check runs). Failures are logged and ignored.</summary>
+public interface IBuildObserver
+{
+    /// <summary>Called after the build has been handed to the runner. May return a provider reference stored on the build.</summary>
+    Task<string?> OnStartedAsync(Build build, Deck deck, Source source, CancellationToken ct = default);
+    Task OnFinishedAsync(Build build, Deck deck, Source source, CancellationToken ct = default);
+}
+
 public interface IBuildRunner
 {
     /// <summary>Starts the build somewhere isolated and returns a runner execution id.</summary>

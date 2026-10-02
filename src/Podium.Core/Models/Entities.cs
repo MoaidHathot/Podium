@@ -99,6 +99,8 @@ public sealed record Build
     public string? TriggeredBy { get; init; }
     /// <summary>Identity of the builder that produced this build (image digest or script hash); used to rebuild after builder upgrades.</summary>
     public string? BuilderVersion { get; init; }
+    /// <summary>External reference created by a build observer (e.g. GitHub check run id).</summary>
+    public string? ExternalRef { get; init; }
 }
 
 /// <summary>Explicit access grant for a deck.</summary>

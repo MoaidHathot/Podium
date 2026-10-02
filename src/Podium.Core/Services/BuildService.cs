@@ -33,8 +33,11 @@ public sealed class BuildService(
     IBuildRunner runner,
     IBuildTokenService tokens,
     IOptions<BuildOptions> options,
-    ILogger<BuildService> log)
+    ILogger<BuildService> log,
+    ISourceStore? sources = null,
+    IEnumerable<IBuildObserver>? observers = null)
 {
+    private readonly IReadOnlyList<IBuildObserver> _observers = observers?.ToList() ?? [];
     public async Task<Build> QueueAsync(Deck deck, Source source, string sha, string triggeredBy, IReadOnlyList<string> warnings, CancellationToken ct = default, bool supersedeActive = false)
     {
         // Collapse duplicates: an active build for the same deck+sha is reused, unless the caller explicitly wants a
@@ -87,6 +90,21 @@ public sealed class BuildService(
                 await builds.UpsertAsync(build, ct);
             }
             log.LogInformation("Build {Build} for {Deck}@{Sha} started as {Exec}", build.Id, deck.Slug, sha[..7], execId);
+
+            foreach (var observer in _observers)
+            {
+                try
+                {
+                    var reference = await observer.OnStartedAsync(build, deck, source, ct);
+                    if (reference is not null)
+                    {
+                        var latest = await builds.GetAsync(deck.Slug, build.Id, ct) ?? build;
+                        build = latest with { ExternalRef = reference };
+                        await builds.UpsertAsync(build, ct);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Build observer {Observer} failed on start", observer.GetType().Name); }
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -144,6 +162,15 @@ public sealed class BuildService(
         }
 
         log.LogInformation("Build {Build} for {Deck} finished: {Status} {Error}", buildId, deckSlug, build.Status, build.Error);
+
+        if (_observers.Count > 0 && deck is not null && sources is not null && await sources.GetAsync(deck.SourceId, ct) is { } src)
+        {
+            foreach (var observer in _observers)
+            {
+                try { await observer.OnFinishedAsync(build, deck, src, ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Build observer {Observer} failed on finish", observer.GetType().Name); }
+            }
+        }
         return true;
     }
 
