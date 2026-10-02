@@ -82,6 +82,21 @@
             <label>Deck URL</label>
             <div class="url-box"><code>@Model.Origin/d/@d.Slug/</code><button class="btn btn-sm" data-copy="@Model.Origin/d/@d.Slug/">Copy</button></div>
         </div>
+        <div style="margin-top:.75rem" class="field">
+            <label for="alias">Short alias <span class="faint">(optional; <code>@Model.Origin/d/&lt;alias&gt;/</code> redirects here)</span></label>
+            <div class="row" style="gap:.4rem">
+                <input class="input" id="alias" value="@d.Alias" placeholder="e.g. agents" style="max-width:16rem" maxlength="60" />
+                <button class="btn btn-sm" id="alias-save">Save</button>
+                @if (!string.IsNullOrEmpty(d.Alias)) { <button class="btn btn-sm" data-copy="@Model.Origin/d/@(d.Alias)/">Copy alias URL</button> }
+            </div>
+        </div>
+        <div style="margin-top:.75rem" class="field">
+            <label for="tags">Tags <span class="faint">(comma-separated; searchable and filterable in the library)</span></label>
+            <div class="row" style="gap:.4rem">
+                <input class="input" id="tags" value="@string.Join(", ", d.Tags)" placeholder="ai, agents, conference" style="max-width:28rem" />
+                <button class="btn btn-sm" id="tags-save">Save</button>
+            </div>
+        </div>
         @if (servable)
         {
             <div class="row" style="margin-top:1rem; align-items:flex-start; gap:1.25rem">
@@ -299,6 +314,16 @@
     const next = pin.getAttribute('aria-pressed') !== 'true';
     await patch({ pinned: next }, next ? 'Pinned' : 'Unpinned');
     pin.setAttribute('aria-pressed', String(next)); pin.textContent = next ? 'Unpin' : 'Pin';
+  });
+
+  document.getElementById('alias-save').addEventListener('click', async () => {
+    try { const r = await api('PATCH', `/api/decks/${slug}`, { alias: document.getElementById('alias').value }); toast(r.alias ? `Alias: /d/${r.alias}/` : 'Alias removed', 'ok'); setTimeout(() => location.reload(), 600); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+  document.getElementById('tags-save').addEventListener('click', async () => {
+    const tags = document.getElementById('tags').value.split(',').map((t) => t.trim()).filter(Boolean);
+    try { const r = await api('PATCH', `/api/decks/${slug}`, { tags }); toast(`Tags saved (${r.tags.length})`, 'ok'); }
+    catch (e) { toast(e.message, 'error'); }
   });
 
   const freezeBtn = document.getElementById('freeze');

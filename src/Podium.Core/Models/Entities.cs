@@ -31,6 +31,8 @@ public sealed record Deck
 {
     /// <summary>URL-safe, globally unique slug used in /d/{slug}/.</summary>
     public required string Slug { get; init; }
+    /// <summary>Optional short alias (also unique across decks); /d/{alias}/ redirects to the canonical slug.</summary>
+    public string? Alias { get; init; }
     public required string SourceId { get; init; }
     /// <summary>Directory of the deck relative to repo root, forward slashes, no leading/trailing slash. Empty for repo root.</summary>
     public required string Path { get; init; }

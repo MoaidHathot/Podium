@@ -55,7 +55,13 @@ public static class DeckServingEndpoints
         var onExternalHost = viewTokens.IsExternalHost(http.Request);
         var caller = callers.Resolve(http.User);
         var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
-        if (result.Deck is null) return Results.NotFound();
+        if (result.Deck is null)
+        {
+            // Short aliases redirect to the canonical slug (the built site's base path is the slug).
+            if (Podium.Core.Slug.IsValid(slug) && await access.GetDeckByAliasAsync(slug, ct) is { } aliased)
+                return Results.Redirect($"/d/{aliased.Slug}/{path}{http.Request.QueryString}", permanent: false);
+            return Results.NotFound();
+        }
 
         switch (result.Decision)
         {

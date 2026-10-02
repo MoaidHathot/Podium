@@ -169,6 +169,53 @@ public class DeckSyncServiceTests
     }
 
     [Fact]
+    public async Task Podium_yml_seeds_visibility_once_but_reapplies_declarative_fields_and_alias()
+    {
+        _repo.Tree.AddRange(["Talks/Agents/.podium.yml"]);
+        _repo.Files["Talks/Agents/.podium.yml"] = "title: Agents (config)\nalias: agents\ntags: [ai]\nvisibility: public\nexportPptx: true\nstripNotes: false\n";
+        await _sync.SyncAsync(_source);
+        var deck = (await _decks.GetAsync("slides-agents"))!;
+        Assert.Equal("Agents (config)", deck.Title);
+        Assert.Equal("agents", deck.Alias);
+        Assert.Equal(["ai"], deck.Tags);
+        Assert.Equal(Visibility.Public, deck.Visibility);
+        Assert.True(deck.ExportPptx);
+        Assert.False(deck.StripNotesForViewers);
+        Assert.Same(deck, await _decks.GetByAliasAsync("agents"));
+
+        // Owner flips visibility in the UI; the next sync (file unchanged but deck touched) must not undo it, while
+        // declarative fields keep following the file.
+        await _decks.UpsertAsync(deck with { Visibility = Visibility.Private });
+        _repo.Sha = "abcabca0000000000000000000000000000000002";
+        _repo.Changed.Add("Talks/Agents/.podium.yml");
+        _repo.Files["Talks/Agents/.podium.yml"] = "title: Agents v2\nalias: agents\nvisibility: public\n";
+        await _sync.SyncAsync(await _sources.GetAsync(_source.Id) ?? _source);
+        deck = (await _decks.GetAsync("slides-agents"))!;
+        Assert.Equal("Agents v2", deck.Title);
+        Assert.Equal(Visibility.Private, deck.Visibility);
+    }
+
+    [Fact]
+    public async Task Alias_that_clashes_with_another_deck_slug_is_ignored()
+    {
+        _repo.Tree.AddRange(["Talks/Agents/.podium.yml"]);
+        _repo.Files["Talks/Agents/.podium.yml"] = "alias: slides-intro\n"; // another deck's slug
+        await _sync.SyncAsync(_source);
+        Assert.Null((await _decks.GetAsync("slides-agents"))!.Alias);
+    }
+
+    [Fact]
+    public async Task Untrusted_sources_ignore_podium_yml()
+    {
+        _repo.Tree.AddRange(["Talks/Agents/.podium.yml"]);
+        _repo.Files["Talks/Agents/.podium.yml"] = "visibility: public\nalias: agents\n";
+        await _sync.SyncAsync(_source with { Trusted = false });
+        var deck = (await _decks.GetAsync("slides-agents"))!;
+        Assert.Equal(Visibility.Private, deck.Visibility);
+        Assert.Null(deck.Alias);
+    }
+
+    [Fact]
     public async Task Same_folder_names_get_unique_slugs()
     {
         _repo.Tree.AddRange(["A/intro/slides.md", "B/intro/slides.md"]);

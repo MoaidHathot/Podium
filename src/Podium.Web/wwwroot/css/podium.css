@@ -288,6 +288,11 @@ body[data-group="repo"] .card .repo { display: none; }
 .card-sub { color: var(--text-muted); font-size: .85rem; display: flex; gap: .35rem; align-items: center; min-width: 0; }
 .card-sub .path { font-family: var(--mono); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; font-size: .82rem; color: var(--text-muted); }
+.card-tags { display: flex; gap: .3rem; flex-wrap: wrap; }
+.tag { font: inherit; font-size: .75rem; padding: .05rem .45rem; border-radius: 999px; border: 1px solid transparent; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); cursor: pointer; }
+.tag:hover { border-color: var(--accent); }
+.chip-tag { color: var(--accent); }
+body[data-density="list"] .cards-grid .card-tags { display: none; }
 .card-actions { display: flex; gap: .35rem; margin-top: .25rem; align-items: center; flex-wrap: wrap; }
 .card-actions .spacer { flex: 1; }
 .card-actions .btn-icon { padding: .3rem .5rem; gap: .3rem; }

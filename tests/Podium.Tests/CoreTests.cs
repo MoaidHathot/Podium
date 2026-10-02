@@ -106,6 +106,40 @@ public class DeckMetadataReaderTests
     }
 }
 
+public class DeckConfigTests
+{
+    [Fact]
+    public void Parses_all_fields_and_normalises_alias_and_tags()
+    {
+        var cfg = DeckConfig.Parse("""
+            title: My Talk
+            alias: "My Talk 2026!"
+            tags: [AI, agents, AI]
+            exportPdf: false
+            export_pptx: true
+            stripNotes: no
+            visibility: public
+            npmScripts: true
+            """);
+        Assert.NotNull(cfg);
+        Assert.Equal("My Talk", cfg!.Title);
+        Assert.Equal("my-talk-2026", cfg.Alias);
+        Assert.Equal(["ai", "agents"], cfg.Tags);
+        Assert.False(cfg.ExportPdf);
+        Assert.True(cfg.ExportPptx);
+        Assert.False(cfg.StripNotes);
+        Assert.Equal(Visibility.Public, cfg.Visibility);
+        Assert.True(cfg.NpmScripts);
+    }
+
+    [Fact]
+    public void Invalid_or_non_mapping_yaml_yields_null()
+    {
+        Assert.Null(DeckConfig.Parse("- just\n- a list"));
+        Assert.Null(DeckConfig.Parse("title: [unclosed"));
+    }
+}
+
 public class SlugTests
 {
     [Theory]

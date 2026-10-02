@@ -93,8 +93,25 @@ public static class ApiEndpoints
         {
             var deck = await decks.GetAsync(slug, ct);
             if (deck is null) return Results.NotFound();
+            string? alias = deck.Alias;
+            if (patch.Alias is not null)
+            {
+                var wanted = patch.Alias.Trim();
+                if (wanted.Length == 0) alias = null;
+                else
+                {
+                    var normalized = Podium.Core.Slug.Normalize(wanted);
+                    if (normalized.Length < 2) return Results.BadRequest(new { error = "Alias too short" });
+                    if (await decks.GetAsync(normalized, ct) is not null) return Results.Conflict(new { error = "That alias is another deck''s address" });
+                    var other = await decks.GetByAliasAsync(normalized, ct);
+                    if (other is not null && other.Slug != slug) return Results.Conflict(new { error = "Alias already in use" });
+                    alias = normalized;
+                }
+            }
+            var tags = patch.Tags?.Select(t => t.Trim().ToLowerInvariant()).Where(t => t.Length is > 0 and <= 40).Distinct(StringComparer.Ordinal).Take(20).ToList();
             deck = deck with
             {
+                Alias = alias,
                 Visibility = patch.Visibility ?? deck.Visibility,
                 PdfVisibility = patch.PdfVisibility ?? deck.PdfVisibility,
                 PptxVisibility = patch.PptxVisibility ?? deck.PptxVisibility,
@@ -104,7 +121,7 @@ public static class ApiEndpoints
                 PptxViewer = patch.PptxViewer ?? deck.PptxViewer,
                 StripNotesForViewers = patch.StripNotesForViewers ?? deck.StripNotesForViewers,
                 Title = string.IsNullOrWhiteSpace(patch.Title) ? deck.Title : patch.Title.Trim(),
-                Tags = patch.Tags ?? deck.Tags,
+                Tags = tags ?? deck.Tags,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await decks.UpsertAsync(deck, ct);
@@ -278,7 +295,7 @@ public static class ApiEndpoints
     private static bool IsValidGitHubName(string s) => s.Length is > 0 and <= 100 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.') && s != "." && s != "..";
 }
 
-public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null);
+public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label);
 public sealed record SourceRequest(string Owner, string Repo, string? Ref);

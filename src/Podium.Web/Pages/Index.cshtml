@@ -78,6 +78,13 @@ else
         <span class="chips-label">Status</span>
         <button class="chip" data-filter="status" data-value="failed" aria-pressed="false">Build failed</button>
         <button class="chip" data-filter="status" data-value="building" aria-pressed="false">Building</button>
+        @{ var allTags = Model.Decks.SelectMany(r => r.Deck.Tags).GroupBy(t => t, StringComparer.Ordinal).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => g.Key).Take(12).ToList(); }
+        @if (allTags.Count > 0)
+        {
+            <span class="chips-sep"></span>
+            <span class="chips-label">Tags</span>
+            @foreach (var tag in allTags) { <button class="chip chip-tag" data-filter="tag" data-value="@tag" aria-pressed="false">#@tag</button> }
+        }
         <button class="chip chip-clear hidden" id="clear-filters">Clear</button>
     </div>
 
@@ -140,7 +147,7 @@ else
   const cards = [...document.querySelectorAll('#pool > .card')];
 
   const KEY = 'podium.library.v1';
-  const state = Object.assign({ group: 'repo', sort: 'updated', density: 'grid', collapsed: {}, kind: null, vis: null, status: null }, load());
+  const state = Object.assign({ group: 'repo', sort: 'updated', density: 'grid', collapsed: {}, kind: null, vis: null, status: null, tag: null }, load());
   function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } }
   function save() { localStorage.setItem(KEY, JSON.stringify({ group: state.group, sort: state.sort, density: state.density, collapsed: state.collapsed })); }
 
@@ -166,11 +173,12 @@ else
     return (!q || c.dataset.search.includes(q))
       && (!state.kind || c.dataset.kind === state.kind)
       && (!state.vis || c.dataset.vis === state.vis)
-      && (!state.status || c.dataset.status === state.status);
+      && (!state.status || c.dataset.status === state.status)
+      && (!state.tag || (c.dataset.tags || '').split(' ').includes(state.tag));
   }
 
   function render() {
-    const filtering = search.value.trim().length > 0 || state.kind || state.vis || state.status;
+    const filtering = search.value.trim().length > 0 || state.kind || state.vis || state.status || state.tag;
     // Shelves step aside while searching/filtering; an emptied shelf (all recents dismissed) stays hidden.
     shelves.forEach((s) => s.classList.toggle('hidden', !!filtering || s.querySelectorAll('.card').length === 0));
     clearBtn.classList.toggle('hidden', !filtering);
@@ -219,7 +227,17 @@ else
     chips.forEach((c) => { if (c.dataset.filter === f) c.setAttribute('aria-pressed', String(state[f] === c.dataset.value)); });
     render();
   }));
-  clearBtn.addEventListener('click', () => { state.kind = state.vis = state.status = null; search.value = ''; chips.forEach((c) => c.setAttribute('aria-pressed', 'false')); render(); });
+  clearBtn.addEventListener('click', () => { state.kind = state.vis = state.status = state.tag = null; search.value = ''; chips.forEach((c) => c.setAttribute('aria-pressed', 'false')); render(); });
+
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('.card .tag[data-tag]');
+    if (!t) return;
+    e.preventDefault();
+    state.tag = state.tag === t.dataset.tag ? null : t.dataset.tag;
+    chips.forEach((c) => { if (c.dataset.filter === 'tag') c.setAttribute('aria-pressed', String(state.tag === c.dataset.value)); });
+    render();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
 
   // Shelves (Pinned, Recently presented) are server-rendered but behave like any other group: collapsible, remembered.
   for (const shelf of shelves) {

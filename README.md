@@ -54,7 +54,18 @@ Create a folder anywhere in a connected repository and push:
 
 New decks appear in the library within a couple of minutes (webhook) as **Private**; open *Manage* to change visibility or share.
 
-Optional per-deck `.podium.yml` (trusted repositories only): `npmScripts: true` allows lifecycle scripts during install.
+Optional per-deck `.podium.yml` (trusted repositories only), next to the deck entry:
+
+```yaml
+title: How I ended up with 75+ AI agents   # overrides the headmatter title
+alias: agents                               # /d/agents/ redirects to the deck
+tags: [ai, agents, conference]
+exportPdf: true
+exportPptx: false
+stripNotes: true                            # notes-free copy for viewers
+visibility: private                         # seeds a *new* deck only; later changes in the UI win
+npmScripts: false                           # allow npm lifecycle scripts during install
+```
 
 ## Deploying (Azure, ~$1-5/month)
 

@@ -28,6 +28,13 @@ public sealed class DeckAccessService(IDeckStore decks, ISourceStore sources, IG
         });
     }
 
+    public async Task<Deck?> GetDeckByAliasAsync(string alias, CancellationToken ct)
+        => await cache.GetOrCreateAsync("alias:" + alias, async e =>
+        {
+            e.AbsoluteExpirationRelativeToNow = DeckCacheTtl;
+            return await decks.GetByAliasAsync(alias, ct);
+        });
+
     public async Task<Source?> GetSourceAsync(string sourceId, CancellationToken ct)
         => await cache.GetOrCreateAsync("source:" + sourceId, async e =>
         {

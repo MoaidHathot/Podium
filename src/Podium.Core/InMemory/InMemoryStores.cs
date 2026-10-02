@@ -18,6 +18,7 @@ public sealed class InMemoryDeckStore : IDeckStore
 {
     private readonly ConcurrentDictionary<string, Deck> _items = new(StringComparer.Ordinal);
     public Task<Deck?> GetAsync(string slug, CancellationToken ct = default) => Task.FromResult(_items.GetValueOrDefault(slug));
+    public Task<Deck?> GetByAliasAsync(string alias, CancellationToken ct = default) => Task.FromResult(_items.Values.FirstOrDefault(d => string.Equals(d.Alias, alias, StringComparison.Ordinal)));
     public Task<IReadOnlyList<Deck>> ListAsync(bool includeArchived = false, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Deck>>(_items.Values.Where(d => includeArchived || !d.Archived).OrderBy(d => d.Slug, StringComparer.Ordinal).ToList());
     public Task<IReadOnlyList<Deck>> ListBySourceAsync(string sourceId, CancellationToken ct = default)

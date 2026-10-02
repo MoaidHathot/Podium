@@ -20,6 +20,7 @@ public sealed class DeckSyncService(
     {
         var (sha, committedAt) = await repos.GetHeadAsync(source, ct);
         var tree = await repos.ListTreeAsync(source, sha, ct);
+        var treeSet = tree.Select(p => p.Replace('\\', '/').TrimStart('/')).ToHashSet(StringComparer.Ordinal);
         var candidates = DeckDetector.Detect(tree);
         // Directory-based decks are keyed by their directory; file-based ones (PowerPoint, PDF) by their full entry path.
         var existing = (await decks.ListBySourceAsync(source.Id, ct)).ToDictionary(d => DeckKey(d.Kind, d.Path, d.Entry), StringComparer.Ordinal);
@@ -50,6 +51,18 @@ public sealed class DeckSyncService(
         var result = new SyncResult();
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
 
+        // Aliases live in the slug namespace. Reserve every existing alias and assign all slugs up front, so an alias
+        // declared by one deck can never collide with a slug minted for another deck later in the same pass.
+        foreach (var a in allDecks.Select(d => d.Alias).Where(a => a is not null)) takenSlugs.Add(a!);
+        var slugs = new Dictionary<DeckCandidate, string>();
+        foreach (var c in candidates)
+        {
+            existing.TryGetValue(DeckKey(c.Kind, c.Path, c.Entry), out var prevForSlug);
+            var s = prevForSlug?.Slug ?? UniqueSlug(DeckDetector.IsFileBased(c.Kind) ? Slug.ForFile(source.Repo, c.Entry) : Slug.ForDeck(source.Repo, c.Path), takenSlugs);
+            takenSlugs.Add(s);
+            slugs[c] = s;
+        }
+
         foreach (var c in candidates)
         {
             var key = DeckKey(c.Kind, c.Path, c.Entry);
@@ -61,10 +74,12 @@ public sealed class DeckSyncService(
                 || effectiveChanged.Any(p => fileBased ? PathIsFile(p, c.EntryPath) : PathTouchesDeck(p, c.Path));
             var metadata = touched ? await ReadMetadataAsync(source, sha, c, ct) : null;
 
-            var slug = prev?.Slug ?? UniqueSlug(fileBased ? Slug.ForFile(source.Repo, c.Entry) : Slug.ForDeck(source.Repo, c.Path), takenSlugs);
-            takenSlugs.Add(slug);
+            var slug = slugs[c];
 
             var last = touched ? await repos.LastCommitForPathAsync(source, sha, fileBased ? c.EntryPath : c.Path, ct) : null;
+
+            // Repository-managed settings (.podium.yml next to the deck); honoured for trusted sources only.
+            var config = touched && source.Trusted && !fileBased ? await ReadConfigAsync(source, sha, c, treeSet, ct) : null;
 
             var deck = (prev ?? new Deck
             {
@@ -73,21 +88,30 @@ public sealed class DeckSyncService(
                 Path = c.Path,
                 Entry = c.Entry,
                 Kind = c.Kind,
-                Visibility = Visibility.Private,
+                Visibility = config?.Visibility ?? Visibility.Private, // seeds new decks only; the UI wins afterwards
                 ExportPdf = c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf,
             }) with
             {
                 Entry = c.Entry,
                 Kind = c.Kind,
                 Archived = false,
-                Title = metadata?.Title ?? prev?.Title ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
+                Title = config?.Title ?? metadata?.Title ?? prev?.Title ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
                 Author = metadata?.Author ?? prev?.Author,
                 Description = metadata?.Description ?? prev?.Description,
-                Tags = metadata?.Tags ?? prev?.Tags ?? [],
+                Tags = config?.Tags ?? metadata?.Tags ?? prev?.Tags ?? [],
+                ExportPdf = config?.ExportPdf ?? prev?.ExportPdf ?? (c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf),
+                ExportPptx = config?.ExportPptx ?? prev?.ExportPptx ?? false,
+                StripNotesForViewers = config?.StripNotes ?? prev?.StripNotesForViewers ?? true,
                 LastCommitSha = last?.Sha ?? prev?.LastCommitSha ?? sha,
                 LastCommitAt = last?.CommittedAt ?? prev?.LastCommitAt ?? committedAt,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
+            if (config?.Alias is { } alias && alias != deck.Alias)
+            {
+                // A clash with any slug or another deck's alias is logged and skipped rather than hijacking a deck.
+                if (takenSlugs.Contains(alias)) log.LogWarning("Alias '{Alias}' for {Deck} is already in use; ignoring", alias, deck.Slug);
+                else { deck = deck with { Alias = alias }; takenSlugs.Add(alias); }
+            }
 
             await decks.UpsertAsync(deck, ct);
             if (prev is null) result.Added.Add(deck.Slug);
@@ -135,6 +159,25 @@ public sealed class DeckSyncService(
             log.LogWarning(ex, "Failed reading metadata for {Path}", c.Path);
             return null;
         }
+    }
+
+    private async Task<DeckConfig?> ReadConfigAsync(Source source, string sha, DeckCandidate c, IReadOnlySet<string> tree, CancellationToken ct)
+    {
+        foreach (var name in DeckConfig.FileNames)
+        {
+            var path = string.IsNullOrEmpty(c.Path) ? name : $"{c.Path}/{name}";
+            if (!tree.Contains(path)) continue; // no API call for the common case of no config file
+            try
+            {
+                var text = await repos.ReadTextFileAsync(source, sha, path, ct);
+                if (text is null) continue;
+                var cfg = DeckConfig.Parse(text);
+                if (cfg is null) log.LogWarning("Ignoring invalid {File} in {Deck}", name, c.Path);
+                return cfg;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Failed reading {File} for {Deck}", name, c.Path); }
+        }
+        return null;
     }
 
     private static string DeckKey(DeckKind kind, string path, string entry)

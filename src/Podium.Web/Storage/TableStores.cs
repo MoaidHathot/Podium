@@ -113,6 +113,14 @@ public sealed class TableDeckStore(TableClients tables) : IDeckStore
         catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
     }
 
+    public async Task<Deck?> GetByAliasAsync(string alias, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey == "deck" && x.GetString("Alias") == alias, maxPerPage: 1, cancellationToken: ct))
+            return TableJson.Deserialize<Deck>(e);
+        return null;
+    }
+
     public async Task<IReadOnlyList<Deck>> ListAsync(bool includeArchived = false, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
@@ -146,6 +154,7 @@ public sealed class TableDeckStore(TableClients tables) : IDeckStore
             ["SourceId"] = deck.SourceId,
             ["Archived"] = deck.Archived,
             ["Visibility"] = deck.Visibility.ToString(),
+            ["Alias"] = deck.Alias ?? "",
         };
         await t.UpsertEntityAsync(e, TableUpdateMode.Replace, ct);
     }

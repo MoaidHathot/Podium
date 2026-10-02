@@ -13,6 +13,8 @@ public interface ISourceStore
 public interface IDeckStore
 {
     Task<Deck?> GetAsync(string slug, CancellationToken ct = default);
+    /// <summary>Resolves an alias to its deck, or null.</summary>
+    Task<Deck?> GetByAliasAsync(string alias, CancellationToken ct = default);
     Task<IReadOnlyList<Deck>> ListAsync(bool includeArchived = false, CancellationToken ct = default);
     Task<IReadOnlyList<Deck>> ListBySourceAsync(string sourceId, CancellationToken ct = default);
     Task UpsertAsync(Deck deck, CancellationToken ct = default);
