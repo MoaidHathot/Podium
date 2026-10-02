@@ -4,7 +4,7 @@
 // (see BuilderEnvironment in Podium.Web). All secrets are removed from process.env before any deck code can run.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, readdirSync, statSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, readdirSync, statSync, lstatSync, copyFileSync } from 'node:fs';
 import { join, resolve, extname, relative, dirname, basename, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -109,19 +109,35 @@ function run(cmd, args, { cwd, envExtra = {}, allowFail = false, timeoutMs, echo
       env: childEnv(envExtra),
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd),
+      // Own process group on POSIX so a timeout can take the whole tree down (git -> git-remote-https, npm -> node).
+      detached: process.platform !== 'win32',
     });
     let out = '';
     const onData = (d) => { const s = d.toString(); out += s; for (const l of s.split(/\r?\n/)) if (l.trim()) log(`  ${l}`); };
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
-    const t = setTimeout(() => { log(`Timeout after ${Math.round((timeoutMs ?? remainingMs()) / 1000)}s, killing ${cmd}`); child.kill('SIGKILL'); }, timeoutMs ?? remainingMs());
-    child.on('error', (e) => { clearTimeout(t); reject(e); });
-    child.on('close', (code) => {
+    let settled = false;
+    const settle = (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(t);
       if (code === 0 || allowFail) resolvePromise({ code, out });
       else reject(new Error(`${cmd} exited with code ${code}`));
-    });
+    };
+    const t = setTimeout(() => { log(`Timeout after ${Math.round((timeoutMs ?? remainingMs()) / 1000)}s, killing ${cmd}`); killTree(child); }, timeoutMs ?? remainingMs());
+    child.on('error', (e) => { if (!settled) { settled = true; clearTimeout(t); reject(e); } });
+    // 'close' waits for the stdio pipes, which grandchildren that outlived a kill may still hold; 'exit' is the
+    // authoritative end of the command, so settle shortly after it if the pipes have not drained by then.
+    child.on('close', (code) => settle(code));
+    child.on('exit', (code, signal) => setTimeout(() => settle(code ?? (signal ? 137 : 1)), 1000));
   });
+}
+
+function killTree(child) {
+  try {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' });
+    else process.kill(-child.pid, 'SIGKILL');
+  } catch { try { child.kill('SIGKILL'); } catch { } }
 }
 
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -158,12 +174,14 @@ async function checkout(repoDir) {
   const gitAuth = authHeader ? ['-c', `http.extraHeader=${authHeader}`] : [];
   secrets.push(...(authHeader ? [authHeader.slice('Authorization: Basic '.length)] : []));
 
-  await run('git', ['init', '-q'], { cwd: repoDir });
-  await run('git', ['remote', 'add', 'origin', cleanUrl], { cwd: repoDir });
   // Fetch exactly the requested commit; the credential lives only on this command line, never in .git/config.
   // A transfer that stalls below 1 KB/s for 45 s is aborted and retried once rather than hanging until the build timeout.
   const fetchArgs = [...gitAuth, '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=45', '-c', 'credential.helper=', 'fetch', '-q', '--depth', '1', 'origin', sha];
   for (let attempt = 1; ; attempt++) {
+    // A killed fetch leaves lock files behind (shallow.lock, FETCH_HEAD.lock): every attempt starts from a fresh repo.
+    if (attempt > 1) { rmSync(repoDir, { recursive: true, force: true }); mkdirForDeck(repoDir); }
+    await run('git', ['init', '-q'], { cwd: repoDir, echo: attempt === 1 });
+    await run('git', ['remote', 'add', 'origin', cleanUrl], { cwd: repoDir, echo: attempt === 1 });
     log(`$ git fetch --depth 1 origin ${sha.slice(0, 7)}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
     const r = await run('git', fetchArgs, { cwd: repoDir, echo: false, allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { GCM_INTERACTIVE: 'never' } });
     if (r.code === 0) break;
@@ -534,9 +552,27 @@ const contentTypes = {
 function* walk(dir, base = dir) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) yield* walk(p, base);
-    else yield { path: p, rel: relative(base, p).split(sep).join('/') };
+    // Deck code wrote this tree: never follow symlinks (loops, or links pointing outside the output).
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) yield* walk(p, base);
+    else if (st.isFile()) yield { path: p, rel: relative(base, p).split(sep).join('/'), size: st.size };
   }
+}
+
+// Output budget: a deck cannot fill the storage account. Over budget, only the build log is uploaded and the build fails.
+const maxOutputBytes = (Number(env.PODIUM_MAX_OUTPUT_MB) || (trusted ? 1024 : 256)) * 1024 * 1024;
+const maxOutputFiles = Number(env.PODIUM_MAX_OUTPUT_FILES) || 20000;
+
+function enforceOutputBudget(outDir, result) {
+  const files = [...walk(outDir)].filter((f) => f.rel !== 'build.log');
+  const bytes = files.reduce((n, f) => n + f.size, 0);
+  if (bytes <= maxOutputBytes && files.length <= maxOutputFiles) return;
+  const mb = (bytes / 1024 / 1024).toFixed(1);
+  result.success = false; result.hasSite = false; result.hasPdf = false; result.hasPptx = false; result.hasThumbnail = false; result.hasPublicSite = false;
+  result.error = `Output too large: ${files.length} files, ${mb} MB (limit ${maxOutputFiles} files, ${Math.round(maxOutputBytes / 1024 / 1024)} MB)`;
+  log(`FAILED: ${result.error}`);
+  for (const name of readdirSync(outDir)) if (name !== 'build.log') rmSync(join(outDir, name), { recursive: true, force: true });
 }
 
 async function upload(outDir) {
@@ -638,8 +674,9 @@ async function finish(outDir, result) {
   if (finished) return;
   finished = true;
   try {
-    log(`Result: success=${result.success} site=${result.hasSite} pdf=${result.hasPdf} pptx=${result.hasPptx}`);
     mkdirSync(outDir, { recursive: true });
+    enforceOutputBudget(outDir, result);
+    log(`Result: success=${result.success} site=${result.hasSite} pdf=${result.hasPdf} pptx=${result.hasPptx}`);
     writeFileSync(join(outDir, 'build.log'), logLines.join('\n') + '\n');
     await upload(outDir);
   } catch (e) {

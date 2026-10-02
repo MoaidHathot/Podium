@@ -20,6 +20,14 @@ public sealed class BuildOptions
     public int KeepBuildRecords { get; set; } = 25;
     /// <summary>Archived decks (removed from the repository) lose their artifacts after this long.</summary>
     public TimeSpan ArchivedPurgeAfter { get; set; } = TimeSpan.FromDays(30);
+    /// <summary>
+    /// Builds running at the same time. Beyond this, builds wait in the queue and start as others finish (webhook
+    /// bursts and builder upgrades no longer fan out into one job execution per deck). 0 = unlimited.
+    /// </summary>
+    public int MaxConcurrentBuilds { get; set; } = 3;
+    /// <summary>Upload budget per build (site + exports + thumbnail) for repositories you own / for external ones.</summary>
+    public int TrustedMaxOutputMegabytes { get; set; } = 1024;
+    public int UntrustedMaxOutputMegabytes { get; set; } = 256;
 }
 
 /// <summary>Report posted by the builder when it finishes.</summary>
@@ -64,6 +72,48 @@ public sealed class BuildService(
         await builds.UpsertAsync(build, ct);
         await decks.UpsertAsync(deck with { LatestBuildId = build.Id, LatestBuildStatus = BuildStatus.Queued, UpdatedAt = DateTimeOffset.UtcNow }, ct);
 
+        var max = options.Value.MaxConcurrentBuilds;
+        if (max > 0 && active.Count(b => b.Status == BuildStatus.Running && b.Id != dup?.Id) >= max)
+        {
+            log.LogInformation("Build {Build} for {Deck} waits for a free slot ({Max} running)", build.Id, deck.Slug, max);
+            return build;
+        }
+        return await StartAsync(build, deck, source, ct);
+    }
+
+    /// <summary>
+    /// Starts builds that are waiting for a slot, oldest first, up to <see cref="BuildOptions.MaxConcurrentBuilds"/>.
+    /// Called when a build finishes and on every maintenance tick (so nothing is left behind if a callback is lost).
+    /// </summary>
+    public async Task<int> DispatchPendingAsync(CancellationToken ct = default)
+    {
+        if (sources is null) return 0;
+        var active = await builds.ListActiveAsync(ct);
+        var running = active.Count(b => b.Status == BuildStatus.Running);
+        var max = options.Value.MaxConcurrentBuilds;
+        var started = 0;
+        foreach (var pending in active.Where(b => b.Status == BuildStatus.Queued && b.RunnerExecutionId is null).OrderBy(b => b.Id, StringComparer.Ordinal))
+        {
+            if (max > 0 && running + started >= max) break;
+            // Re-read: another replica or a manual rebuild may have taken care of it meanwhile.
+            var fresh = await builds.GetAsync(pending.DeckSlug, pending.Id, ct);
+            if (fresh is null || fresh.Status != BuildStatus.Queued || fresh.RunnerExecutionId is not null) continue;
+            var deck = await decks.GetAsync(pending.DeckSlug, ct);
+            var source = deck is null ? null : await sources.GetAsync(deck.SourceId, ct);
+            if (deck is null || source is null || deck.Archived)
+            {
+                await builds.UpsertAsync(fresh with { Status = BuildStatus.Cancelled, FinishedAt = DateTimeOffset.UtcNow, Error = "Deck or source no longer exists" }, ct);
+                continue;
+            }
+            var result = await StartAsync(fresh, deck, source, ct);
+            if (result.Status == BuildStatus.Running) started++;
+        }
+        return started;
+    }
+
+    private async Task<Build> StartAsync(Build build, Deck deck, Source source, CancellationToken ct)
+    {
+        var sha = build.Sha;
         try
         {
             var timeout = source.Trusted ? options.Value.TrustedTimeout : options.Value.UntrustedTimeout;
@@ -72,7 +122,8 @@ public sealed class BuildService(
             var callbackToken = tokens.Issue(deck.Slug, build.Id, timeout + TimeSpan.FromMinutes(10));
             var callback = new Uri(options.Value.CallbackBaseUrl ?? options.Value.PublicBaseUrl, $"/api/builds/{Uri.EscapeDataString(deck.Slug)}/{build.Id}/report");
 
-            var execId = await runner.StartAsync(new BuildRequest(build, deck, source, cloneUrl, upload, callback, callbackToken, timeout), ct);
+            var maxOutput = source.Trusted ? options.Value.TrustedMaxOutputMegabytes : options.Value.UntrustedMaxOutputMegabytes;
+            var execId = await runner.StartAsync(new BuildRequest(build, deck, source, cloneUrl, upload, callback, callbackToken, timeout, maxOutput), ct);
 
             // The builder may (in theory) have reported completion already; never regress a terminal status.
             var current = await builds.GetAsync(deck.Slug, build.Id, ct) ?? build;
@@ -171,6 +222,10 @@ public sealed class BuildService(
                 catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Build observer {Observer} failed on finish", observer.GetType().Name); }
             }
         }
+
+        // A slot just freed up.
+        try { await DispatchPendingAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Dispatching pending builds failed"); }
         return true;
     }
 
@@ -311,6 +366,8 @@ public sealed class BuildService(
         var cutoff = DateTimeOffset.UtcNow - options.Value.StaleAfter;
         foreach (var b in await builds.ListActiveAsync(ct))
         {
+            // Builds waiting for a slot are not stale; they have not started. Only runs that never reported back are.
+            if (b.Status == BuildStatus.Queued && b.RunnerExecutionId is null && b.StartedAt is null) continue;
             var started = b.StartedAt ?? b.QueuedAt;
             if (started > cutoff) continue;
             var failed = b with { Status = BuildStatus.Failed, FinishedAt = DateTimeOffset.UtcNow, Error = "Timed out waiting for the builder to report" };

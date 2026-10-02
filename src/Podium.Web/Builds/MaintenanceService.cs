@@ -34,6 +34,14 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
                 await scope.ServiceProvider.GetRequiredService<BuildService>().ReapStaleAsync(ct);
             }, stoppingToken);
 
+            // Builds waiting for a free slot (see BuildOptions.MaxConcurrentBuilds); normally dispatched as builds
+            // finish, this is the safety net for lost callbacks and restarts.
+            await RunSafely("dispatch", async ct =>
+            {
+                using var scope = scopes.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<BuildService>().DispatchPendingAsync(ct);
+            }, stoppingToken);
+
             // Builder upgrades roll out automatically: decks built by an older builder are rebuilt. Checked at start
             // (after the first tick, so discovery has had a chance to register sources) and hourly thereafter.
             if (builderOptions.Value.AutoRebuildOnUpgrade && DateTimeOffset.UtcNow - lastUpgradeCheck > TimeSpan.FromHours(1))

@@ -79,6 +79,7 @@ public interface IArtifactStore
 /// <summary>Everything the builder needs; contains short-lived secrets and must never be persisted.</summary>
 /// <param name="CloneUrl">HTTPS clone URL including a short-lived token when needed.</param>
 /// <param name="CallbackUri">Where the builder posts its completion report.</param>
+/// <param name="MaxOutputMegabytes">Upper bound for everything the build may upload; 0 lets the builder apply its default.</param>
 public sealed record BuildRequest(
     Build Build,
     Deck Deck,
@@ -87,7 +88,8 @@ public sealed record BuildRequest(
     Uri UploadUri,
     Uri CallbackUri,
     string CallbackToken,
-    TimeSpan Timeout);
+    TimeSpan Timeout,
+    int MaxOutputMegabytes = 0);
 
 /// <summary>Notified about build lifecycle events (e.g. to mirror them as GitHub check runs). Failures are logged and ignored.</summary>
 public interface IBuildObserver

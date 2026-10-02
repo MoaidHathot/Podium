@@ -2,7 +2,10 @@
 # Usage: pwsh scripts/dev-restart.ps1 [-Port 5187] [-Build]
 param(
     [int] $Port = 5187,
-    [switch] $Build
+    [switch] $Build,
+    # Extra environment for the server, e.g. @{ Builder__MaxConcurrentBuilds = 1 } (the process is created through
+    # WMI and does not inherit the caller's environment).
+    [hashtable] $Env = @{}
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -54,7 +57,8 @@ while ((Get-Date) -lt $logDeadline) {
 }
 if ((Get-Date) -ge $logDeadline) { $log = "$log.$((Get-Date).ToString('HHmmss'))"; Write-Warning "log still locked; using $log" }
 # Environment is passed through a small cmd wrapper so nothing needs to live in a config file.
-$cmd = "cmd.exe /c `"set GitHub__Token=$token&& set ASPNETCORE_ENVIRONMENT=Development&& set ASPNETCORE_URLS=http://localhost:$Port&& cd /d `"$cwd`" && `"$exe`" > `"$log`" 2>&1`""
+$extra = ($Env.GetEnumerator() | ForEach-Object { "set $($_.Key)=$($_.Value)&& " }) -join ''
+$cmd = "cmd.exe /c `"set GitHub__Token=$token&& set ASPNETCORE_ENVIRONMENT=Development&& set ASPNETCORE_URLS=http://localhost:$Port&& ${extra}cd /d `"$cwd`" && `"$exe`" > `"$log`" 2>&1`""
 # ShowWindow = 0 (SW_HIDE): no console window that could be closed by accident, killing the server with it.
 $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $startup }

@@ -70,7 +70,7 @@ public class DeckSyncServiceTests
     public DeckSyncServiceTests()
     {
         _buildService = new BuildService(_builds, _decks, _artifacts, _repo, _runner, new FakeTokens(),
-            Options.Create(new BuildOptions { PublicBaseUrl = new Uri("https://slides.example.test") }), NullLogger<BuildService>.Instance);
+            Options.Create(new BuildOptions { PublicBaseUrl = new Uri("https://slides.example.test") }), NullLogger<BuildService>.Instance, _sources);
         _sync = new DeckSyncService(_sources, _decks, _repo, _buildService, NullLogger<DeckSyncService>.Instance);
         _repo.Tree.AddRange(["Talks/Agents/slides.md", "Talks/Agents/package.json", "Talks/Intro/main.md", "Talks/Intro/config.yaml", "Old/Async/PITCHME.md"]);
         _repo.Files["Talks/Agents/slides.md"] = "---\ntitle: Agents\n---\n# x";
@@ -421,6 +421,40 @@ public class DeckSyncServiceTests
         await svc.ReapStaleAsync();
         Assert.Empty(await _builds.ListActiveAsync());
         Assert.Equal(BuildStatus.Failed, (await _decks.GetAsync("slides-agents"))!.LatestBuildStatus);
+    }
+
+    [Fact]
+    public async Task Concurrency_cap_holds_builds_in_the_queue_and_dispatches_as_slots_free_up()
+    {
+        var opts = new BuildOptions { PublicBaseUrl = new Uri("https://x.test"), MaxConcurrentBuilds = 1 };
+        var svc = new BuildService(_builds, _decks, _artifacts, _repo, _runner, new FakeTokens(), Options.Create(opts), NullLogger<BuildService>.Instance, _sources);
+        await _sources.UpsertAsync(_source);
+        var a = new Deck { Slug = "cap-a", SourceId = _source.Id, Path = "a", Entry = "slides.md", Kind = DeckKind.Slidev };
+        var b = new Deck { Slug = "cap-b", SourceId = _source.Id, Path = "b", Entry = "slides.md", Kind = DeckKind.Slidev };
+        await _decks.UpsertAsync(a); await _decks.UpsertAsync(b);
+
+        var first = await svc.QueueAsync(a, _source, "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "test", []);
+        var second = await svc.QueueAsync(b, _source, "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "test", []);
+        Assert.Equal(BuildStatus.Running, first.Status);
+        Assert.Equal(BuildStatus.Queued, second.Status);
+        Assert.Null(second.RunnerExecutionId);
+        Assert.Single(_runner.Started);
+
+        // A tick while the slot is taken changes nothing; a build that has waited a long time is not "stale" either
+        // (only runs that never reported back are), so a long queue is never reaped.
+        Assert.Equal(0, await svc.DispatchPendingAsync());
+        await _builds.UpsertAsync(second with { QueuedAt = DateTimeOffset.UtcNow.AddHours(-3) });
+        var reaper = new BuildService(_builds, _decks, _artifacts, _repo, _runner, new FakeTokens(), Options.Create(new BuildOptions { PublicBaseUrl = new Uri("https://x.test"), StaleAfter = TimeSpan.FromHours(1), MaxConcurrentBuilds = 1 }), NullLogger<BuildService>.Instance, _sources);
+        await reaper.ReapStaleAsync();
+        Assert.Equal(BuildStatus.Queued, (await _builds.GetAsync("cap-b", second.Id))!.Status);
+        Assert.Equal(BuildStatus.Running, (await _builds.GetAsync("cap-a", first.Id))!.Status);
+
+        // Finishing the first build starts the second.
+        var started = _runner.Started.Single();
+        Assert.True(await svc.CompleteAsync("cap-a", first.Id, started.CallbackToken, new BuildReport(true, true, false, false, null, null)));
+        Assert.Equal(2, _runner.Started.Count);
+        Assert.Equal(BuildStatus.Running, (await _builds.GetAsync("cap-b", second.Id))!.Status);
+        Assert.Equal(BuildStatus.Running, (await _decks.GetAsync("cap-b"))!.LatestBuildStatus);
     }
 
     [Fact]

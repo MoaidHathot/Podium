@@ -127,6 +127,8 @@ dotnet run --project src/Podium.Web      # http://localhost:5187, /dev-login sig
 | `GitHub:Token` | development only: PAT used instead of installation tokens |
 | `Storage:AccountName` / `Storage:ConnectionString` | managed identity (prod) / Azurite or `memory` (dev) |
 | `Builder:Mode` | `ContainerAppsJob` or `LocalProcess`; `Builder:JobResourceId`, `Builder:LocalScriptPath` |
+| `Builder:MaxConcurrentBuilds` | builds running at once (default 3); the rest wait in the queue and start as slots free up |
+| `Builder:TrustedMaxOutputMegabytes` / `Builder:UntrustedMaxOutputMegabytes` | upload budget per build (defaults 1024 / 256 MB); oversized builds fail and the served build stays |
 
 ## Remote limitations
 

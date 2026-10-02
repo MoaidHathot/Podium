@@ -15,26 +15,31 @@ namespace Podium.Web.Builds;
 /// <summary>Environment contract shared by every runner and consumed by builder/build.mjs.</summary>
 public static class BuilderEnvironment
 {
-    public static Dictionary<string, string> For(BuildRequest r) => new(StringComparer.Ordinal)
+    public static Dictionary<string, string> For(BuildRequest r)
     {
-        ["PODIUM_BUILD_ID"] = r.Build.Id,
-        ["PODIUM_DECK_SLUG"] = r.Deck.Slug,
-        ["PODIUM_DECK_KIND"] = r.Deck.Kind.ToString().ToLowerInvariant(),
-        ["PODIUM_DECK_PATH"] = r.Deck.Path,
-        ["PODIUM_DECK_ENTRY"] = r.Deck.Entry,
-        ["PODIUM_BASE_PATH"] = $"/d/{r.Deck.Slug}/",
-        ["PODIUM_CLONE_URL"] = r.CloneUrl.ToString(),
-        ["PODIUM_SHA"] = r.Build.Sha,
-        ["PODIUM_UPLOAD_URL"] = r.UploadUri.ToString(),
-        ["PODIUM_CALLBACK_URL"] = r.CallbackUri.ToString(),
-        ["PODIUM_CALLBACK_TOKEN"] = r.CallbackToken,
-        ["PODIUM_TIMEOUT_SEC"] = ((int)r.Timeout.TotalSeconds).ToString(CultureInfo.InvariantCulture),
-        ["PODIUM_EXPORT_PDF"] = r.Deck.ExportPdf ? "1" : "0",
-        ["PODIUM_EXPORT_PPTX"] = r.Deck.ExportPptx ? "1" : "0",
-        ["PODIUM_TRUSTED"] = r.Source.Trusted ? "1" : "0",
-        ["PODIUM_STRIP_NOTES"] = r.Deck.StripNotesForViewers ? "1" : "0",
-        ["PODIUM_DECK_TITLE"] = r.Deck.Title,
-    };
+        var env = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["PODIUM_BUILD_ID"] = r.Build.Id,
+            ["PODIUM_DECK_SLUG"] = r.Deck.Slug,
+            ["PODIUM_DECK_KIND"] = r.Deck.Kind.ToString().ToLowerInvariant(),
+            ["PODIUM_DECK_PATH"] = r.Deck.Path,
+            ["PODIUM_DECK_ENTRY"] = r.Deck.Entry,
+            ["PODIUM_BASE_PATH"] = $"/d/{r.Deck.Slug}/",
+            ["PODIUM_CLONE_URL"] = r.CloneUrl.ToString(),
+            ["PODIUM_SHA"] = r.Build.Sha,
+            ["PODIUM_UPLOAD_URL"] = r.UploadUri.ToString(),
+            ["PODIUM_CALLBACK_URL"] = r.CallbackUri.ToString(),
+            ["PODIUM_CALLBACK_TOKEN"] = r.CallbackToken,
+            ["PODIUM_TIMEOUT_SEC"] = ((int)r.Timeout.TotalSeconds).ToString(CultureInfo.InvariantCulture),
+            ["PODIUM_EXPORT_PDF"] = r.Deck.ExportPdf ? "1" : "0",
+            ["PODIUM_EXPORT_PPTX"] = r.Deck.ExportPptx ? "1" : "0",
+            ["PODIUM_TRUSTED"] = r.Source.Trusted ? "1" : "0",
+            ["PODIUM_STRIP_NOTES"] = r.Deck.StripNotesForViewers ? "1" : "0",
+            ["PODIUM_DECK_TITLE"] = r.Deck.Title,
+        };
+        if (r.MaxOutputMegabytes > 0) env["PODIUM_MAX_OUTPUT_MB"] = r.MaxOutputMegabytes.ToString(CultureInfo.InvariantCulture);
+        return env;
+    }
 }
 
 /// <summary>Starts an execution of the pre-provisioned Container Apps Job, overriding only env vars and resources.</summary>
