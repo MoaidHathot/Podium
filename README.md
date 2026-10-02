@@ -43,7 +43,7 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 | Kind | Detected by | Build |
 |---|---|---|
 | Slidev | `slides.md` in a directory | `npm ci` (if `package.json`) + `slidev build --base /d/<slug>/` + `slidev export` |
-| presenterm | `config.yaml` + a `.md` (prefers `main.md`) | `presenterm --export-html`; PDF served if one is committed next to the deck |
+| presenterm | `config.yaml` + a `.md` (prefers `main.md`) | `presenterm --export-html` + `--export-pdf` (weasyprint); a committed PDF is the fallback |
 | PowerPoint | any `.pptx` file (one deck per file) | converted to PDF with LibreOffice for in-browser viewing; original offered for download. A committed `.pdf` with the same name is used instead of converting |
 | PDF | any standalone `.pdf` | served in the browser's PDF viewer |
 | Static HTML | committed `.html` with no source deck | copied as-is |
@@ -123,6 +123,6 @@ dotnet run --project src/Podium.Web      # http://localhost:5187, /dev-login sig
 ## Remote limitations
 
 - Code that needs a server at runtime (custom runners, server-side execution) is not available; Monaco runs in the browser and works.
-- presenterm PDF export requires weasyprint, which the builder does not ship; commit the PDF next to the deck to serve it.
+- presenterm PDF exports are rendered with weasyprint (shipped in the builder image, so the output is text-based rather than terminal screenshots); if the export fails, a PDF committed next to the deck is served instead.
 - Speaker notes: by default viewers receive a second build made with `--without-notes`; only you and grantees with the *Present* right get the full bundle. Per-deck toggle under *Manage → Exports*.
 - Cross-device sync relays only Slidev shared state (slide, clicks, drawings, presenter cursor); it does not stream video.

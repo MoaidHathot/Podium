@@ -1,4 +1,4 @@
-# Podium builder image: Node 22 + Chromium (Playwright) + presenterm + LibreOffice (pptx -> pdf) + poppler + git.
+# Podium builder image: Node 22 + Chromium (Playwright) + presenterm (+ weasyprint for PDF) + LibreOffice (pptx -> pdf) + poppler + git.
 # Runs one build per container execution and exits. See build.mjs for the contract.
 FROM mcr.microsoft.com/playwright:v1.63.0-noble
 
@@ -18,13 +18,14 @@ RUN apt-get update \
       git ca-certificates curl \
       poppler-utils \
       libreoffice-impress \
+      weasyprint \
       fonts-liberation fonts-dejavu-core fonts-noto-core fonts-crosextra-carlito fonts-crosextra-caladea \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL "https://github.com/mfontanini/presenterm/releases/download/v${PRESENTERM_VERSION}/presenterm-${PRESENTERM_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
       | tar -xz -C /tmp \
  && install -m 0755 "$(find /tmp -type f -name presenterm | head -n1)" /usr/local/bin/presenterm \
  && rm -rf /tmp/presenterm* \
- && presenterm --version && soffice --version && pdftoppm -v 2>&1 | head -n1
+ && presenterm --version && weasyprint --version && soffice --version && pdftoppm -v 2>&1 | head -n1
 
 # The builder's own tooling lives outside the workspace so deck code cannot tamper with it.
 WORKDIR /opt/podium

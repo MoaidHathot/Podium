@@ -362,9 +362,15 @@ async function buildPresenterm(deckDir, outDir, result) {
     else throw new Error('presenterm HTML export failed and no committed .html export exists');
   }
   if (exportPdf) {
+    // A fresh export tracks the source; presenterm drives weasyprint (shipped in the builder image) for the PDF.
+    // A PDF committed next to the deck is the fallback when the export fails or weasyprint is missing (local dev).
+    const pdf = join(outDir, 'deck.pdf');
+    const p = await run('presenterm', ['--export-pdf', entry, '--output', pdf, '--config-file', configPath, '--image-protocol', 'ascii-blocks'],
+      { cwd: deckDir, allowFail: true, envExtra: { TERM: 'xterm-256color', COLUMNS: '120', LINES: '30' }, timeoutMs: Math.min(remainingMs(), 5 * 60 * 1000) });
     const committedPdf = findSibling(deckDir, base, '.pdf');
-    if (committedPdf) { copyFileSync(committedPdf, join(outDir, 'deck.pdf')); result.hasPdf = true; }
-    else result.warnings.push('No PDF: presenterm PDF export needs weasyprint; commit an exported PDF next to the deck to serve one');
+    if (p.code === 0 && existsSync(pdf) && statSync(pdf).size > 0) result.hasPdf = true;
+    else if (committedPdf) { copyFileSync(committedPdf, pdf); result.hasPdf = true; result.warnings.push('presenterm PDF export failed; served the committed PDF instead'); }
+    else { rmSync(pdf, { force: true }); result.warnings.push('No PDF: presenterm PDF export failed (see build log); commit an exported PDF next to the deck to serve one'); }
   }
 }
 
