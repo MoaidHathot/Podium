@@ -78,5 +78,8 @@ public sealed class BuilderOptions
 
     /// <summary>LocalProcess mode: path to builder/build.mjs.</summary>
     public string? LocalScriptPath { get; set; }
+
+    /// <summary>Rebuild every deck when the builder image/script changes. On in production; off locally, where every edit to build.mjs would otherwise trigger a storm.</summary>
+    public bool AutoRebuildOnUpgrade { get; set; } = true;
     public string NodeExecutable { get; set; } = "node";
 }

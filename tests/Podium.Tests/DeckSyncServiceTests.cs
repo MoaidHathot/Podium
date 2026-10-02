@@ -282,6 +282,24 @@ public class DeckSyncServiceTests
     }
 
     [Fact]
+    public async Task Manual_rebuild_supersedes_a_stuck_active_build()
+    {
+        await _sync.SyncAsync(_source);
+        var deck = (await _decks.GetAsync("slides-agents"))!;
+        var src = await _sources.GetAsync(_source.Id) ?? _source;
+        var stuck = deck.LatestBuildId!;
+
+        var fresh = await _buildService.QueueAsync(deck, src, _repo.Sha, "manual", [], default, supersedeActive: true);
+        Assert.NotEqual(stuck, fresh.Id);
+        Assert.Equal(BuildStatus.Cancelled, (await _builds.GetAsync("slides-agents", stuck))!.Status);
+        Assert.Equal(3, _runner.Started.Count);
+        // The cancelled build must not be able to report over the new one.
+        var old = _runner.Started.Single(s => s.Build.Id == stuck);
+        Assert.False(await _buildService.CompleteAsync("slides-agents", stuck, old.CallbackToken, new BuildReport(true, true, false, false, null, null)));
+        Assert.Equal(fresh.Id, (await _decks.GetAsync("slides-agents"))!.LatestBuildId);
+    }
+
+    [Fact]
     public async Task Stale_running_builds_are_reaped()
     {
         var opts = new BuildOptions { PublicBaseUrl = new Uri("https://x.test"), StaleAfter = TimeSpan.Zero };

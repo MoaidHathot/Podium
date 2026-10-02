@@ -15,8 +15,8 @@ if (Test-Path $pidFile) {
     Stop-Process -Id (Get-Content $pidFile) -Force -ErrorAction SilentlyContinue
 }
 # Also stop any stray instance holding the build output (e.g. started from another console).
-Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
-    Where-Object { $_.CommandLine -like '*Podium.Web.dll*' } |
+Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe' or Name = 'Podium.Web.exe'" |
+    Where-Object { $_.CommandLine -like '*Podium.Web*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 800
 
@@ -41,10 +41,20 @@ if (-not (Get-NetTCPConnection -LocalPort 10000 -State Listen -ErrorAction Silen
 }
 
 $token = (gh auth token)
-$dll = Join-Path $root 'src\Podium.Web\bin\Debug\net10.0\Podium.Web.dll'
+# The apphost (Podium.Web.exe) rather than "dotnet Podium.Web.dll": other tooling on this machine has been observed
+# killing dotnet.exe processes by name, which took the dev server down mid-test.
+$exe = Join-Path $root 'src\Podium.Web\bin\Debug\net10.0\Podium.Web.exe'
 $cwd = Join-Path $root 'src\Podium.Web'
+# The previous cmd wrapper may still hold the log open for a moment after its child died; a failed redirect would
+# silently skip the launch, so wait until the file is writable (or rotate it).
+$logDeadline = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $logDeadline) {
+    try { $fs = [IO.File]::Open($log, 'OpenOrCreate', 'Write', 'None'); $fs.SetLength(0); $fs.Dispose(); break }
+    catch { Start-Sleep -Milliseconds 300 }
+}
+if ((Get-Date) -ge $logDeadline) { $log = "$log.$((Get-Date).ToString('HHmmss'))"; Write-Warning "log still locked; using $log" }
 # Environment is passed through a small cmd wrapper so nothing needs to live in a config file.
-$cmd = "cmd.exe /c `"set GitHub__Token=$token&& set ASPNETCORE_ENVIRONMENT=Development&& set ASPNETCORE_URLS=http://localhost:$Port&& cd /d `"$cwd`" && dotnet `"$dll`" > `"$log`" 2>&1`""
+$cmd = "cmd.exe /c `"set GitHub__Token=$token&& set ASPNETCORE_ENVIRONMENT=Development&& set ASPNETCORE_URLS=http://localhost:$Port&& cd /d `"$cwd`" && `"$exe`" > `"$log`" 2>&1`""
 # ShowWindow = 0 (SW_HIDE): no console window that could be closed by accident, killing the server with it.
 $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $startup }

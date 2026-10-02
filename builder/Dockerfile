@@ -29,16 +29,20 @@ RUN apt-get update \
 # The builder's own tooling lives outside the workspace so deck code cannot tamper with it.
 WORKDIR /opt/podium
 COPY package.json package-lock.json* ./
+# /opt/podium stays root-owned and read-only for the deck user: the orchestrator loads code from here (upload SDK)
+# after deck steps have run, so deck code must not be able to tamper with it. Browsers are owned by the deck user.
 RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund --loglevel error \
- && chown -R pwuser:pwuser /opt/podium /ms-playwright
-COPY build.mjs ./
+ && chown -R pwuser:pwuser /ms-playwright \
+ && chmod -R go-w /opt/podium
+COPY build.mjs thumb.mjs entrypoint.sh ./
 COPY addon ./addon
+RUN chmod 0755 entrypoint.sh && setpriv --version >/dev/null
 
-# Workspace for clone + output. Ephemeral per execution.
+# Workspace for clone + output. Ephemeral per execution. Owned by the unprivileged deck user: every step that runs
+# deck-controlled code (git, npm, slidev, presenterm, soffice, chromium) executes as pwuser via setpriv, while the
+# orchestrator stays root so its secrets (clone token, upload SAS, callback token) are unreadable to deck code.
 RUN mkdir -p /work && chown pwuser:pwuser /work
-USER pwuser
 ENV PODIUM_WORKDIR=/work \
-    HOME=/home/pwuser \
     GIT_TERMINAL_PROMPT=0
 
-ENTRYPOINT ["node", "/opt/podium/build.mjs"]
+ENTRYPOINT ["/opt/podium/entrypoint.sh"]

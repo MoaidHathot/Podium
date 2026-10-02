@@ -74,7 +74,7 @@ public sealed class GitHubRepositoryClient(GitHubAppAuth auth, ISourceStore sour
     {
         string? token = null;
         if (source.InstallationId is { } id && auth.Options.AppConfigured)
-            token = await auth.GetInstallationTokenAsync(id, ct);
+            token = await auth.CreateRepositoryScopedTokenAsync(id, source.Repo, ct); // contents:read on this repo only
         else if (source.IsPrivateRepo)
             token = auth.GetDevToken() ?? throw new InvalidOperationException($"No credentials available to clone private repository {source.FullName}.");
 

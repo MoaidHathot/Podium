@@ -46,6 +46,18 @@ public sealed class GitHubAppAuth(IOptions<GitHubOptions> options, ILogger<GitHu
         => new GitHubClient(Product) { Credentials = new Credentials(await GetInstallationTokenAsync(installationId, ct)) };
 
     /// <summary>
+    /// Mints a token that can only read the contents of one repository. Handed to the builder for cloning, so even if
+    /// deck code captured it, it could not reach any other repository the App is installed on.
+    /// </summary>
+    public async Task<string> CreateRepositoryScopedTokenAsync(long installationId, string repositoryName, CancellationToken ct)
+    {
+        var app = CreateAppClient();
+        var body = new { repositories = new[] { repositoryName }, permissions = new { contents = "read" } };
+        var token = await app.Connection.Post<AccessToken>(new Uri($"app/installations/{installationId}/access_tokens", UriKind.Relative), body, "application/vnd.github+json", "application/json", TimeSpan.FromSeconds(30), ct);
+        return token.Body.Token;
+    }
+
+    /// <summary>
     /// Client for repositories without an installation (public repos). Prefers a dev PAT, then any installation token
     /// (valid for public content), then anonymous.
     /// </summary>

@@ -31,12 +31,18 @@ public sealed class BuildService(
     IOptions<BuildOptions> options,
     ILogger<BuildService> log)
 {
-    public async Task<Build> QueueAsync(Deck deck, Source source, string sha, string triggeredBy, IReadOnlyList<string> warnings, CancellationToken ct = default)
+    public async Task<Build> QueueAsync(Deck deck, Source source, string sha, string triggeredBy, IReadOnlyList<string> warnings, CancellationToken ct = default, bool supersedeActive = false)
     {
-        // Collapse duplicates: an active build for the same deck+sha is reused.
+        // Collapse duplicates: an active build for the same deck+sha is reused, unless the caller explicitly wants a
+        // fresh run (manual rebuild), in which case the stale one is cancelled so it cannot report over the new build.
         var active = await builds.ListActiveAsync(ct);
         var dup = active.FirstOrDefault(b => b.DeckSlug == deck.Slug && b.Sha == sha);
-        if (dup is not null) return dup;
+        if (dup is not null)
+        {
+            if (!supersedeActive) return dup;
+            await builds.UpsertAsync(dup with { Status = BuildStatus.Cancelled, FinishedAt = DateTimeOffset.UtcNow, Error = "Superseded by a manual rebuild" }, ct);
+            log.LogInformation("Cancelled active build {Build} for {Deck} (superseded)", dup.Id, deck.Slug);
+        }
 
         var build = new Build
         {

@@ -112,7 +112,7 @@ public static class ApiEndpoints
             var source = await sources.GetAsync(deck.SourceId, ct);
             if (source is null) return Results.Problem("Source no longer exists", statusCode: 409);
             var (sha, _) = await repos.GetHeadAsync(source, ct);
-            var build = await builds.QueueAsync(deck, source, sha, "manual", [], ct);
+            var build = await builds.QueueAsync(deck, source, sha, "manual", [], ct, supersedeActive: true);
             access.Invalidate(slug);
             return Results.Ok(build);
         });

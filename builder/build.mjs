@@ -3,7 +3,7 @@
 // into static artifacts, then uploads them and reports back. Configuration comes exclusively from PODIUM_* env vars
 // (see BuilderEnvironment in Podium.Web). All secrets are removed from process.env before any deck code can run.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, readdirSync, statSync, copyFileSync } from 'node:fs';
 import { join, resolve, extname, relative, dirname, basename, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -13,15 +13,27 @@ const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------------------------------------------
-// Inputs (read once, then scrubbed from the environment)
+// Inputs
+// In the container, entrypoint.sh copies the PODIUM_* variables into a root-only file and re-executes node with an
+// empty environment, so nothing sensitive is left in /proc/*/environ. The file is deleted as soon as it is read.
+// In development (LocalProcess runner) the variables arrive directly in the environment.
 // ---------------------------------------------------------------------------------------------------------------
 const env = {};
+if (process.env.PODIUM_CONFIG_FILE) {
+  Object.assign(env, JSON.parse(readFileSync(process.env.PODIUM_CONFIG_FILE, 'utf8')));
+  rmSync(process.env.PODIUM_CONFIG_FILE, { force: true });
+}
 for (const [k, v] of Object.entries(process.env)) {
   if (k.startsWith('PODIUM_')) { env[k] = v; delete process.env[k]; }
 }
 // A production NODE_ENV makes npm skip devDependencies and breaks Slidev's exporter; builds always run in dev mode.
 delete process.env.NODE_ENV;
 const need = (k) => { if (!env[k]) throw new Error(`Missing ${k}`); return env[k]; };
+
+// Deck-controlled steps run as this unprivileged user when the orchestrator itself is root (container). Deck code then
+// cannot read the orchestrator's files or memory, where the clone token, upload SAS and callback token live.
+const deckUser = env.PODIUM_DECK_USER || null;
+const dropPrivileges = process.platform !== 'win32' && typeof process.getuid === 'function' && process.getuid() === 0 && !!deckUser;
 
 const buildId = need('PODIUM_BUILD_ID');
 const slug = need('PODIUM_DECK_SLUG');
@@ -66,13 +78,34 @@ function log(msg) {
 const deadline = Date.now() + Math.max(60, timeoutSec - 30) * 1000;
 const remainingMs = () => Math.max(1000, deadline - Date.now());
 
-function run(cmd, args, { cwd, envExtra = {}, allowFail = false, timeoutMs, echo = true } = {}) {
+/** Environment handed to deck-controlled child processes: a curated allow-list, never the orchestrator's own. */
+function childEnv(extra) {
+  const base = {
+    PATH: process.env.PATH, HOME: dropPrivileges ? `/home/${deckUser}` : process.env.HOME, LANG: process.env.LANG || 'C.UTF-8',
+    TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP,
+    PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
+    NPM_CONFIG_UPDATE_NOTIFIER: 'false', NPM_CONFIG_FUND: 'false', NPM_CONFIG_AUDIT: 'false',
+    CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0',
+  };
+  // Windows (development only, no isolation goal): tools need the whole machine environment.
+  const merged = process.platform === 'win32' ? { ...process.env, ...base, ...extra } : { ...base, ...extra };
+  for (const k of Object.keys(merged)) if (merged[k] === undefined || merged[k] === null) delete merged[k];
+  return merged;
+}
+
+/** Runs a deck-controlled command; as root it is re-launched under the unprivileged deck user. */
+function run(cmd, args, { cwd, envExtra = {}, allowFail = false, timeoutMs, echo = true, privileged = false } = {}) {
   return new Promise((resolvePromise, reject) => {
     const display = `${cmd} ${args.map((a) => (a.includes(' ') ? JSON.stringify(a) : a)).join(' ')}`;
     if (echo) log(`$ ${display}`);
-    const child = spawn(cmd, args, {
+    let file = cmd, argv = args;
+    if (dropPrivileges && !privileged) {
+      file = 'setpriv';
+      argv = ['--reuid', deckUser, '--regid', deckUser, '--init-groups', '--', cmd, ...args];
+    }
+    const child = spawn(file, argv, {
       cwd,
-      env: { ...process.env, ...envExtra, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0' },
+      env: childEnv(envExtra),
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd),
     });
@@ -93,11 +126,23 @@ function run(cmd, args, { cwd, envExtra = {}, allowFail = false, timeoutMs, echo
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
+/** Creates a directory that deck-controlled steps will write to (owned by the deck user when privileges are dropped). */
+function mkdirForDeck(dir) {
+  mkdirSync(dir, { recursive: true });
+  if (dropPrivileges) spawnSync('chown', ['-R', `${deckUser}:${deckUser}`, dir], { stdio: 'ignore' });
+}
+
+/** Copies a tree so that the deck user owns the copy (Vite writes caches into node_modules). */
+async function copyTreeForDeck(from, to) {
+  if (dropPrivileges) await run('cp', ['-r', from, to], { echo: false });
+  else cpSync(from, to, { recursive: true, dereference: true });
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Steps
 // ---------------------------------------------------------------------------------------------------------------
 async function checkout(repoDir) {
-  mkdirSync(repoDir, { recursive: true });
+  mkdirForDeck(repoDir);
   const u = new URL(cloneUrl);
   const authHeader = u.username || u.password ? `Authorization: Basic ${Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')}` : null;
   u.username = ''; u.password = '';
@@ -108,8 +153,14 @@ async function checkout(repoDir) {
   await run('git', ['init', '-q'], { cwd: repoDir });
   await run('git', ['remote', 'add', 'origin', cleanUrl], { cwd: repoDir });
   // Fetch exactly the requested commit; the credential lives only on this command line, never in .git/config.
-  await run('git', [...gitAuth, 'fetch', '-q', '--depth', '1', 'origin', sha], { cwd: repoDir, echo: false });
-  log(`$ git fetch --depth 1 origin ${sha.slice(0, 7)}`);
+  // A transfer that stalls below 1 KB/s for 45 s is aborted and retried once rather than hanging until the build timeout.
+  const fetchArgs = [...gitAuth, '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=45', '-c', 'credential.helper=', 'fetch', '-q', '--depth', '1', 'origin', sha];
+  for (let attempt = 1; ; attempt++) {
+    log(`$ git fetch --depth 1 origin ${sha.slice(0, 7)}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+    const r = await run('git', fetchArgs, { cwd: repoDir, echo: false, allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { GCM_INTERACTIVE: 'never' } });
+    if (r.code === 0) break;
+    if (attempt >= 2) throw new Error(`git fetch failed (exit ${r.code})`);
+  }
   await run('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: repoDir });
   // Deck code runs during the build; make sure nothing sensitive is on disk when it does.
   rmSync(join(repoDir, '.git'), { recursive: true, force: true });
@@ -281,7 +332,7 @@ async function buildPresenterm(deckDir, outDir, result) {
   const entryPath = join(deckDir, entry);
   if (!existsSync(entryPath)) throw new Error(`Entry ${entry} not found`);
   const site = join(outDir, 'site');
-  mkdirSync(site, { recursive: true });
+  mkdirForDeck(site); // presenterm (deck user) writes here
   const html = join(site, 'index.html');
   // presenterm's HTML export still probes the terminal (capability query + terminal size) in 0.16. Without a TTY the
   // size lookup fails ("Inappropriate ioctl"), and with a bare pty the query blocks forever. Giving it explicit export
@@ -377,7 +428,7 @@ async function buildPowerPoint(deckDir, outDir, result) {
     if (!soffice) result.warnings.push('LibreOffice not available: the deck can be downloaded but not viewed in the browser');
     else {
       const tmp = join(workRoot, 'soffice-out');
-      rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp, { recursive: true });
+      rmSync(tmp, { recursive: true, force: true }); mkdirForDeck(tmp);
       const r = await run(soffice, ['--headless', '--norestore', '--nologo', `-env:UserInstallation=file://${join(workRoot, 'soffice-profile').replace(/\\/g, '/')}`, '--convert-to', 'pdf', '--outdir', tmp, src],
         { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 6 * 60 * 1000), envExtra: { HOME: workRoot } });
       const produced = existsSync(tmp) ? readdirSync(tmp).find((f) => f.toLowerCase().endsWith('.pdf')) : null;
@@ -434,41 +485,13 @@ async function makeThumbnail(outDir, result) {
       if (r.code === 0 && produced) { copyFileSync(join(workRoot, produced), target); result.hasThumbnail = true; }
       return;
     }
-    await screenshotSite(outDir, target);
-    result.hasThumbnail = existsSync(target);
+    // Chromium must not run as root (and must not run with the orchestrator's privileges at all): delegate to a
+    // child script that executes as the deck user.
+    const r = await run(process.execPath, [join(here, 'thumb.mjs'), join(outDir, 'site'), basePath, kind, target], { allowFail: true, timeoutMs: Math.min(remainingMs(), 90000), envExtra: { NODE_PATH: join(here, 'node_modules') } });
+    result.hasThumbnail = r.code === 0 && existsSync(target);
   } catch (e) {
     log(`Thumbnail skipped: ${e.message}`);
   }
-}
-
-/** Serves out/site at the deck's base path on a loopback port and screenshots the first slide. */
-async function screenshotSite(outDir, target) {
-  const site = join(outDir, 'site');
-  const http = await import('node:http');
-  const server = http.createServer((req, res) => {
-    let p = decodeURIComponent((req.url || '/').split('?')[0]);
-    if (p.startsWith(basePath)) p = p.slice(basePath.length); else p = p.replace(/^\/+/, '');
-    let file = join(site, p);
-    if (!file.startsWith(site) || !existsSync(file) || statSync(file).isDirectory()) file = join(site, 'index.html'); // SPA fallback
-    if (!existsSync(file)) { res.statusCode = 404; res.end(); return; }
-    res.setHeader('content-type', contentTypes[extname(file).toLowerCase()] || 'application/octet-stream');
-    res.end(readFileSync(file));
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const port = server.address().port;
-  try {
-    const { chromium } = require('playwright-chromium');
-    const browser = await chromium.launch();
-    try {
-      const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, colorScheme: 'dark' });
-      const url = `http://127.0.0.1:${port}${basePath}${kind === 'slidev' ? '1' : ''}`;
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 45000 });
-      if (kind === 'slidev') await page.waitForSelector('[data-slidev-no="1"]', { timeout: 20000 }).catch(() => {});
-      await page.waitForTimeout(1200); // fonts, transitions
-      await page.screenshot({ path: target, type: 'jpeg', quality: 80 });
-      log('Thumbnail captured');
-    } finally { await browser.close(); }
-  } finally { server.close(); }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -549,7 +572,7 @@ async function main() {
   const outDir = join(workRoot, 'out');
   rmSync(repoDir, { recursive: true, force: true });
   rmSync(outDir, { recursive: true, force: true });
-  mkdirSync(outDir, { recursive: true });
+  mkdirForDeck(outDir); // slidev build/export (deck user) writes here
 
   const hardStop = setTimeout(async () => {
     log('Hard timeout reached');

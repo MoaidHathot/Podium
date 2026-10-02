@@ -10,7 +10,7 @@ namespace Podium.Web.Builds;
 /// Periodic maintenance: polls sources that cannot deliver webhooks, safety-net polls the rest, reaps stale builds,
 /// and refreshes App installations on startup.
 /// </summary>
-public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue queue, IOptions<PodiumOptions> options, ILogger<MaintenanceService> log) : BackgroundService
+public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue queue, IOptions<PodiumOptions> options, IOptions<BuilderOptions> builderOptions, ILogger<MaintenanceService> log) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -35,7 +35,7 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
 
             // Builder upgrades roll out automatically: decks built by an older builder are rebuilt. Checked at start
             // (after the first tick, so discovery has had a chance to register sources) and hourly thereafter.
-            if (DateTimeOffset.UtcNow - lastUpgradeCheck > TimeSpan.FromHours(1))
+            if (builderOptions.Value.AutoRebuildOnUpgrade && DateTimeOffset.UtcNow - lastUpgradeCheck > TimeSpan.FromHours(1))
             {
                 lastUpgradeCheck = DateTimeOffset.UtcNow;
                 await RunSafely("builder upgrade check", async ct =>
