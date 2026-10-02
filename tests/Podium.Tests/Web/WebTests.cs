@@ -105,6 +105,57 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.True((await c.SendAsync(bad)).StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden);
     }
 
+    [Fact]
+    public async Task Ui_pages_carry_a_nonce_based_csp_and_deck_pages_do_not()
+    {
+        var owner = await app.OwnerClientAsync();
+        var library = await owner.SendAsync(PodiumWebFactory.Navigation("/"));
+        Assert.Equal(HttpStatusCode.OK, library.StatusCode);
+        var csp = library.Headers.GetValues("Content-Security-Policy").Single();
+        var nonce = System.Text.RegularExpressions.Regex.Match(csp, "'nonce-([^']+)'").Groups[1].Value;
+        Assert.False(string.IsNullOrEmpty(nonce));
+        Assert.Contains("frame-ancestors 'none'", csp);
+        Assert.Contains("object-src 'none'", csp);
+        Assert.DoesNotContain("unsafe-eval", csp);
+        var html = await library.Content.ReadAsStringAsync();
+        // Every inline script on the page carries this response's nonce; none is left bare.
+        var inline = System.Text.RegularExpressions.Regex.Matches(html, "<script(?![^>]*\\ssrc=)[^>]*>");
+        Assert.NotEmpty(inline);
+        Assert.All(inline, m => Assert.Contains($"nonce=\"{nonce}\"", m.Value));
+        // A second response gets a different nonce.
+        var again = await owner.SendAsync(PodiumWebFactory.Navigation("/"));
+        Assert.NotEqual(csp, again.Headers.GetValues("Content-Security-Policy").Single());
+
+        var deck = await app.SeedDeckAsync("csp-free-deck", Visibility.Public);
+        var served = await app.Client().SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        Assert.Equal(HttpStatusCode.OK, served.StatusCode);
+        Assert.False(served.Headers.Contains("Content-Security-Policy"));
+        Assert.Equal("SAMEORIGIN", served.Headers.GetValues("X-Frame-Options").Single());
+    }
+
+    [Fact]
+    public async Task Inline_scripts_on_every_owner_page_parse_as_javascript()
+    {
+        // Razor pages carry hand-written scripts; a mangled template literal silently disables a whole page's
+        // controls while the API keeps working (it happened). Parse what the server actually renders.
+        var deck = await app.SeedDeckAsync("js-check-deck", Visibility.Public, alias: "jscheck");
+        var owner = await app.OwnerClientAsync();
+        await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", label = "l", expiresInDays = 7 }));
+        var parser = new Acornima.Parser(new Acornima.ParserOptions { Tolerant = false });
+        foreach (var path in new[] { "/", "/sources", $"/decks/{deck.Slug}", "/login" })
+        {
+            var r = await owner.SendAsync(PodiumWebFactory.Navigation(path));
+            Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+            var html = await r.Content.ReadAsStringAsync();
+            var scripts = System.Text.RegularExpressions.Regex.Matches(html, "<script(?![^>]*\\ssrc=)[^>]*>(.*?)</script>", System.Text.RegularExpressions.RegexOptions.Singleline);
+            foreach (System.Text.RegularExpressions.Match m in scripts)
+            {
+                try { parser.ParseScript(m.Groups[1].Value); }
+                catch (Acornima.ParseErrorException ex) { Assert.Fail($"{path}: inline script does not parse: {ex.Message}"); }
+            }
+        }
+    }
+
     internal static string PathOf(Uri location) => location.IsAbsoluteUri ? location.PathAndQuery : location.ToString();
 }
 

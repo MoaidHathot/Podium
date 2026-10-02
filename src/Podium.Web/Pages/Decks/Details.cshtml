@@ -318,7 +318,7 @@
 </section>
 
 @section Scripts {
-<script>
+<script nonce="@Podium.Web.Security.Csp.Nonce(HttpContext)">
 (function () {
   const slug = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(d.Slug));
   const { api, toast } = Podium;
@@ -331,7 +331,7 @@
   document.querySelectorAll('[data-vis-field]').forEach((r) => r.addEventListener('change', () => {
     const body = {}; body[r.dataset.visField] = r.value; patch(body, `Set to ${r.value}`);
   }));
-  document.querySelectorAll('[data-pptx-viewer]').forEach((r) => r.addEventListener('change', () => patch({ pptxViewer: r.value }, Viewer: ${r.value === 'Office' ? 'PowerPoint Online' : 'PDF'})));
+  document.querySelectorAll('[data-pptx-viewer]').forEach((r) => r.addEventListener('change', () => patch({ pptxViewer: r.value }, `Viewer: ${r.value === 'Office' ? 'PowerPoint Online' : 'PDF'}`)));
   document.getElementById('exportPdf').addEventListener('change', (e) => patch({ exportPdf: e.target.checked }));
   document.getElementById('exportPptx').addEventListener('change', (e) => patch({ exportPptx: e.target.checked }));
   document.getElementById('stripNotes')?.addEventListener('change', (e) => patch({ stripNotesForViewers: e.target.checked }, e.target.checked ? 'Viewers will get a notes-free copy from the next build' : 'Viewers will see the full build'));

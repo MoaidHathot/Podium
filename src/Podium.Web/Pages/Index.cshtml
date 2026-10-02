@@ -160,7 +160,7 @@ else
 }
 
 @section Scripts {
-<script>
+<script nonce="@Podium.Web.Security.Csp.Nonce(HttpContext)">
 (function () {
   const search = document.getElementById('search');
   if (!search) return;

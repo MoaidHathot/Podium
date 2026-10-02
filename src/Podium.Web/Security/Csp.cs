@@ -1,0 +1,30 @@
+using System.Security.Cryptography;
+
+namespace Podium.Web.Security;
+
+/// <summary>
+/// Content-Security-Policy for Podium's own UI (library, deck management, sources, login). Scripts are allowed from
+/// the origin and from inline blocks carrying the per-request nonce only; nothing is fetched from third parties.
+/// Deck pages under /d/ are the deck author's HTML and are deliberately left alone (the external origin isolates
+/// untrusted ones); the sync socket and static assets are not documents.
+/// </summary>
+public static class Csp
+{
+    private const string ItemKey = "podium.cspNonce";
+
+    public static bool AppliesTo(PathString path)
+        => !path.StartsWithSegments("/d") && !path.StartsWithSegments("/_podium") && !path.StartsWithSegments("/ws") && !path.StartsWithSegments("/api");
+
+    /// <summary>The nonce for the current response (created on first use); pages put it on their inline script tags.</summary>
+    public static string Nonce(HttpContext http)
+    {
+        if (http.Items.TryGetValue(ItemKey, out var existing) && existing is string s) return s;
+        var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        http.Items[ItemKey] = nonce;
+        return nonce;
+    }
+
+    public static string HeaderValue(string nonce) =>
+        $"default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+        "font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'";
+}

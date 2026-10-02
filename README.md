@@ -36,7 +36,7 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Link previews**: public decks carry Open Graph / Twitter card tags (title, description, first-slide thumbnail) so links unfurl in chat and social clients; tags the deck already declares are left alone.
 - **Clean-up**: decks that disappear from their repository are archived (artifacts purged after 30 days) and listed in an *Archived* shelf with a *Delete permanently* action for immediate removal of builds, grants and share links.
 - **GitHub check runs** (optional): grant the app *Checks: write* and every build reports back on the commit with a link to the deck.
-- **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; per-IP rate limits on login, webhook and deck entry; secrets in Key Vault, data-protection keys wrapped by a Key Vault key.
+- **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; per-IP rate limits on login, webhook and deck entry; nonce-based Content-Security-Policy on every Podium page (deck pages are the author's HTML and are served from the external origin when untrusted); secrets in Key Vault, data-protection keys wrapped by a Key Vault key.
 
 ## Deck detection
 

@@ -68,7 +68,7 @@
 }
 
 @section Scripts {
-<script>
+<script nonce="@Podium.Web.Security.Csp.Nonce(HttpContext)">
 (function () {
   const { api, toast } = Podium;
   document.getElementById('refresh').addEventListener('click', async (e) => {
