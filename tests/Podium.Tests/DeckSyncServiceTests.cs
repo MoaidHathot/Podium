@@ -172,11 +172,12 @@ public class DeckSyncServiceTests
     public async Task Podium_yml_seeds_visibility_once_but_reapplies_declarative_fields_and_alias()
     {
         _repo.Tree.AddRange(["Talks/Agents/.podium.yml"]);
-        _repo.Files["Talks/Agents/.podium.yml"] = "title: Agents (config)\nalias: agents\ntags: [ai]\nvisibility: public\nexportPptx: true\nstripNotes: false\n";
+        _repo.Files["Talks/Agents/.podium.yml"] = "title: Agents (config)\nalias: agents\ntags: [ai]\nvisibility: public\nexportPptx: true\nstripNotes: false\nnpmScripts: false\n";
         await _sync.SyncAsync(_source);
         var deck = (await _decks.GetAsync("slides-agents"))!;
         Assert.Equal("Agents (config)", deck.Title);
         Assert.Equal("agents", deck.Alias);
+        Assert.False(deck.NpmScripts);
         Assert.Equal(["ai"], deck.Tags);
         Assert.Equal(Visibility.Public, deck.Visibility);
         Assert.True(deck.ExportPptx);
@@ -202,6 +203,25 @@ public class DeckSyncServiceTests
         _repo.Files["Talks/Agents/.podium.yml"] = "alias: slides-intro\n"; // another deck's slug
         await _sync.SyncAsync(_source);
         Assert.Null((await _decks.GetAsync("slides-agents"))!.Alias);
+    }
+
+    [Fact]
+    public async Task Npm_scripts_follow_podium_yml_for_trusted_sources_only_and_reach_the_builder_env()
+    {
+        _repo.Tree.AddRange(["Talks/Agents/.podium.yml"]);
+        _repo.Files["Talks/Agents/.podium.yml"] = "npmScripts: true\n";
+        await _sync.SyncAsync(_source);
+        Assert.True((await _decks.GetAsync("slides-agents"))!.NpmScripts);
+        var req = _runner.Started.Single(s => s.Deck.Slug == "slides-agents");
+        Assert.Equal("1", Podium.Web.Builds.BuilderEnvironment.For(req)["PODIUM_NPM_SCRIPTS"]);
+
+        // The same file in a repository the owner does not control is ignored.
+        var untrusted = _source with { Id = "stranger/talks", Owner = "stranger", Repo = "talks", Trusted = false };
+        await _sources.UpsertAsync(untrusted);
+        await _sync.SyncAsync(untrusted);
+        var foreign = (await _decks.ListBySourceAsync(untrusted.Id)).Single(d => d.Path == "Talks/Agents");
+        Assert.False(foreign.NpmScripts);
+        Assert.Equal("0", Podium.Web.Builds.BuilderEnvironment.For(_runner.Started.Single(s => s.Deck.Slug == foreign.Slug))["PODIUM_NPM_SCRIPTS"]);
     }
 
     [Fact]

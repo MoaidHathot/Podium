@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, rea
 import { join, resolve, extname, relative, dirname, basename, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { normalizeAnnotation, parsePresentermErrors } from './lib/annotations.mjs';
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -237,7 +238,9 @@ async function ensureSlidevProject(deckDir) {
     return;
   }
   const hasLock = existsSync(join(deckDir, 'package-lock.json')) || existsSync(join(deckDir, 'npm-shrinkwrap.json'));
-  const allowScripts = trusted && readPodiumConfig(deckDir).npmScripts === true;
+  // Decided by the web app from .podium.yml (trusted repositories only) and passed down; the builder never reads
+  // deck config itself, so one place owns the policy.
+  const allowScripts = trusted && env.PODIUM_NPM_SCRIPTS === '1';
   const args = [hasLock ? 'ci' : 'install', '--no-audit', '--no-fund', '--loglevel', 'error', '--prefer-offline'];
   if (!allowScripts) args.push('--ignore-scripts');
   await run(npmCmd, args, { cwd: deckDir, envExtra: { PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' } });
@@ -257,15 +260,6 @@ function linkDir(from, to) {
   }
 }
 
-function readPodiumConfig(deckDir) {
-  for (const name of ['.podium.yml', '.podium.yaml', 'podium.yml']) {
-    const p = join(deckDir, name);
-    if (existsSync(p)) {
-      try { return require('js-yaml').load(readFileSync(p, 'utf8')) || {}; } catch (e) { log(`Ignoring invalid ${name}: ${e.message}`); }
-    }
-  }
-  return {};
-}
 
 async function ensurePlaywrightBrowser(deckDir) {
   const cli = join(deckDir, 'node_modules', 'playwright-core', 'cli.js');
@@ -288,6 +282,7 @@ async function buildSlidev(deckDir, outDir, result) {
   if (!existsSync(join(site, 'index.html'))) throw new Error('Slidev build produced no index.html');
   result.hasSite = true;
   injectPodiumMeta(join(site, 'index.html'));
+  await extractNotesAndLint(deckDir, outDir, result);
 
   if (stripNotes) {
     // Second variant for viewers: identical build with speaker notes emptied at compile time (`--without-notes`), so
@@ -326,6 +321,43 @@ async function buildSlidev(deckDir, outDir, result) {
       }
     }
   }
+}
+
+/**
+ * Speaker notes (for the phone remote) and deck-health findings, produced by notes.mjs running as the deck user with
+ * the deck's own @slidev/parser. Notes are a separate artifact served only to presenters; the site itself may be the
+ * notes-free variant for everyone else.
+ */
+async function extractNotesAndLint(deckDir, outDir, result) {
+  const script = join(here, 'notes.mjs');
+  if (!existsSync(join(deckDir, 'node_modules', '@slidev', 'parser'))) { log('No @slidev/parser in the deck; skipping notes'); return; }
+  const notesOut = join(outDir, 'notes.json');
+  const lintOut = join(workRoot, 'lint.json');
+  mkdirForDeck(dirname(lintOut));
+  const r = await run(process.execPath, [script, deckDir, entry, join(workRoot, 'repo'), deckPath, notesOut, lintOut], { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 60000) });
+  if (r.code === 0 && existsSync(notesOut)) {
+    try {
+      const notes = JSON.parse(readFileSync(notesOut, 'utf8'));
+      if (Array.isArray(notes)) { result.hasNotes = true; result.slideCount = result.slideCount || notes.length; }
+    } catch { rmSync(notesOut, { force: true }); }
+  } else result.warnings.push('Speaker notes could not be extracted (see build log)');
+  if (existsSync(lintOut)) {
+    try {
+      const lint = JSON.parse(readFileSync(lintOut, 'utf8'));
+      if (Array.isArray(lint)) for (const a of lint.slice(0, 50)) addAnnotation(a.path, a.line, a.level, a.message);
+    } catch { /* deck-controlled output; ignore garbage */ }
+  }
+}
+
+const result_annotations = [];
+function addAnnotation(path, line, level, message) {
+  const a = normalizeAnnotation({ path, line, level, message });
+  if (a && result_annotations.length < 50) result_annotations.push(a);
+}
+
+/** presenterm reports "error at main.md:34:1: could not load image 'x.png'": turn that into a positioned finding. */
+function annotatePresentermErrors(output) {
+  for (const a of parsePresentermErrors(output, deckPath, entry)) addAnnotation(a.path, a.line, a.level, a.message);
 }
 
 function resolveSlidevBin(deckDir) {
@@ -394,6 +426,7 @@ async function buildPresenterm(deckDir, outDir, result) {
   const base = entry.replace(/\.md$/i, '');
   if (r.code === 0 && existsSync(html)) result.hasSite = true;
   else {
+    annotatePresentermErrors(r.out || '');
     // Fall back to an HTML export committed next to the source.
     const committed = findSibling(deckDir, base, '.html');
     if (committed) { copyFileSync(committed, html); result.hasSite = true; result.warnings.push('presenterm export failed; served the committed HTML export instead'); }
@@ -551,6 +584,101 @@ async function makeThumbnail(outDir, result) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Slide sheet (all pages tiled into one JPEG), per-page text for search, manifest for offline precaching
+// ---------------------------------------------------------------------------------------------------------------
+const SHEET_COLS = 6;
+const SHEET_CELL_W = 320;
+const SHEET_MAX_PAGES = 400;
+
+async function makeSlideSheetAndText(outDir, result) {
+  const pdf = join(outDir, 'deck.pdf');
+  if (!existsSync(pdf)) return; // decks without a PDF (export off, presenterm without weasyprint...) get neither
+  const pdftoppm = which('pdftoppm');
+  const pdftotext = which('pdftotext');
+  const pdfinfo = which('pdfinfo');
+  let pages = 0;
+  if (pdfinfo) {
+    const info = await run(pdfinfo, [pdf], { allowFail: true, echo: false, timeoutMs: 30000 });
+    const m = /Pages:\s+(\d+)/.exec(info.out || '');
+    if (m) pages = Number(m[1]);
+  }
+  if (pages > 0) result.slideCount = pages;
+
+  if (pdftotext) {
+    // One record per page: pdftotext's form-feed separates pages.
+    const r = await run(pdftotext, ['-layout', '-enc', 'UTF-8', pdf, '-'], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 60000) });
+    if (r.code === 0) {
+      const chunks = String(r.out).split('\f');
+      if (chunks.length && !chunks[chunks.length - 1].trim()) chunks.pop();
+      const text = chunks.slice(0, SHEET_MAX_PAGES).map((t, i) => ({ index: i + 1, text: t.replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim().slice(0, 20000) }));
+      writeFileSync(join(outDir, 'text.json'), JSON.stringify(text));
+      result.hasText = true;
+      if (!result.slideCount) result.slideCount = text.length;
+    } else result.warnings.push('Slide text could not be extracted (pdftotext failed)');
+  }
+
+  if (pdftoppm && pages > 0 && pages <= SHEET_MAX_PAGES) {
+    const dir = join(workRoot, 'sheet');
+    rmSync(dir, { recursive: true, force: true });
+    mkdirForDeck(dir);
+    const r = await run(pdftoppm, ['-jpeg', '-jpegopt', 'quality=70', '-scale-to-x', String(SHEET_CELL_W), '-scale-to-y', '-1', pdf, join(dir, 'p')], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 120000) });
+    const tiles = readdirSync(dir).filter((f) => f.endsWith('.jpg')).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (r.code === 0 && tiles.length) {
+      const ffmpeg = which('ffmpeg');
+      const magick = which('montage');
+      const rows = Math.ceil(tiles.length / SHEET_COLS);
+      const out = join(outDir, 'slides.jpg');
+      let ok = false;
+      if (magick) {
+        const m = await run(magick, [...tiles.map((t) => join(dir, t)), '-tile', `${SHEET_COLS}x`, '-geometry', '+0+0', '-background', 'black', out], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 120000) });
+        ok = m.code === 0 && existsSync(out);
+      } else if (ffmpeg) {
+        // ffmpeg tile filter needs a fixed cell size; pad every tile to the first tile's size.
+        const m = await run(ffmpeg, ['-y', '-loglevel', 'error', '-framerate', '1', '-i', join(dir, 'p-%0' + String(tiles[0].match(/\d+/)[0].length) + 'd.jpg'), '-vf', `pad=ceil(iw/2)*2:ceil(ih/2)*2,tile=${SHEET_COLS}x${rows}:color=black`, '-frames:v', '1', '-q:v', '5', out], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 120000) });
+        ok = m.code === 0 && existsSync(out);
+      } else {
+        ok = await tileWithPlaywright(dir, tiles, SHEET_COLS, out);
+      }
+      if (ok) {
+        // Cell height: read from the first tile via its JPEG header (SOF0/SOF2).
+        const { width, height } = jpegSize(readFileSync(join(dir, tiles[0]))) || { width: SHEET_CELL_W, height: Math.round(SHEET_CELL_W * 9 / 16) };
+        writeFileSync(join(outDir, 'slides.json'), JSON.stringify({ count: tiles.length, cols: SHEET_COLS, rows, cellWidth: width, cellHeight: height }));
+        result.hasSlideSheet = true;
+      } else result.warnings.push('Slide sheet could not be composed (see build log)');
+    }
+  }
+}
+
+/** Fallback composer: a headless page draws the tiles on a canvas (runs as the deck user via thumb.mjs' sibling). */
+async function tileWithPlaywright(dir, tiles, cols, out) {
+  const r = await run(process.execPath, [join(here, 'sheet.mjs'), dir, String(cols), out], { allowFail: true, timeoutMs: Math.min(remainingMs(), 120000), envExtra: { NODE_PATH: join(here, 'node_modules') } });
+  return r.code === 0 && existsSync(out);
+}
+
+function jpegSize(buf) {
+  let i = 2;
+  while (i < buf.length) {
+    if (buf[i] !== 0xFF) return null;
+    const marker = buf[i + 1];
+    if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  return null;
+}
+
+/** Lists every site file per variant so a service worker can precache a build; never includes presenter-only data. */
+function writeManifest(outDir, result) {
+  const manifest = { build: buildId, variants: {} };
+  for (const variant of ['site', 'site-public']) {
+    const dir = join(outDir, variant);
+    if (!existsSync(dir)) continue;
+    const files = [...walk(dir)].map((f) => f.rel).filter((rel) => !rel.endsWith('.map')).sort();
+    manifest.variants[variant] = files.slice(0, 5000);
+  }
+  if (Object.keys(manifest.variants).length) writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------------------------------------------
 const contentTypes = {
@@ -583,6 +711,7 @@ function enforceOutputBudget(outDir, result) {
   if (bytes <= maxOutputBytes && files.length <= maxOutputFiles) return;
   const mb = (bytes / 1024 / 1024).toFixed(1);
   result.success = false; result.hasSite = false; result.hasPdf = false; result.hasPptx = false; result.hasThumbnail = false; result.hasPublicSite = false;
+  result.hasNotes = false; result.hasText = false; result.hasSlideSheet = false;
   result.error = `Output too large: ${files.length} files, ${mb} MB (limit ${maxOutputFiles} files, ${Math.round(maxOutputBytes / 1024 / 1024)} MB)`;
   log(`FAILED: ${result.error}`);
   for (const name of readdirSync(outDir)) if (name !== 'build.log') rmSync(join(outDir, name), { recursive: true, force: true });
@@ -641,7 +770,7 @@ async function report(body) {
 // Main
 // ---------------------------------------------------------------------------------------------------------------
 async function main() {
-  const result = { success: false, hasSite: false, hasPdf: false, hasPptx: false, hasThumbnail: false, hasPublicSite: false, error: null, warnings: [] };
+  const result = { success: false, hasSite: false, hasPdf: false, hasPptx: false, hasThumbnail: false, hasPublicSite: false, hasNotes: false, hasText: false, hasSlideSheet: false, slideCount: 0, annotations: result_annotations, error: null, warnings: [] };
   const repoDir = join(workRoot, 'repo');
   const outDir = join(workRoot, 'out');
   rmSync(repoDir, { recursive: true, force: true });
@@ -671,7 +800,11 @@ async function main() {
       default: throw new Error(`Unsupported deck kind ${kind}`);
     }
     result.success = result.hasSite;
-    if (result.hasSite) await makeThumbnail(outDir, result);
+    if (result.hasSite) {
+      await makeThumbnail(outDir, result);
+      await makeSlideSheetAndText(outDir, result);
+      writeManifest(outDir, result);
+    }
   } catch (e) {
     result.error = scrub(e && e.message ? e.message : String(e));
     log(`FAILED: ${result.error}`);

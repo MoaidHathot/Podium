@@ -35,6 +35,7 @@ public static class BuilderEnvironment
             ["PODIUM_EXPORT_PPTX"] = r.Deck.ExportPptx ? "1" : "0",
             ["PODIUM_TRUSTED"] = r.Source.Trusted ? "1" : "0",
             ["PODIUM_STRIP_NOTES"] = r.Deck.StripNotesForViewers ? "1" : "0",
+            ["PODIUM_NPM_SCRIPTS"] = r.Source.Trusted && r.Deck.NpmScripts ? "1" : "0",
             ["PODIUM_DECK_TITLE"] = r.Deck.Title,
         };
         if (r.MaxOutputMegabytes > 0) env["PODIUM_MAX_OUTPUT_MB"] = r.MaxOutputMegabytes.ToString(CultureInfo.InvariantCulture);
