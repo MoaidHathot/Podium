@@ -23,6 +23,7 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
     public const string ExternalOrigin = "http://external.test";
 
     public FakeArtifactStore Artifacts { get; } = new();
+    public RecordingRunner Runner { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -46,6 +47,9 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(MaintenanceService)).ToList())
                 services.Remove(d);
             services.AddSingleton<IArtifactStore>(Artifacts);
+            // Builds "start" instantly and are recorded; nothing is cloned or executed.
+            foreach (var d in services.Where(d => d.ServiceType == typeof(IBuildRunner)).ToList()) services.Remove(d);
+            services.AddSingleton<IBuildRunner>(Runner);
         });
     }
 
@@ -103,6 +107,19 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
     }
 
     private static int _buildSeq;
+}
+
+/// <summary>Records every build request the service hands to the runner.</summary>
+public sealed class RecordingRunner : IBuildRunner
+{
+    private readonly List<BuildRequest> _started = [];
+    public IReadOnlyList<BuildRequest> Started { get { lock (_started) return _started.ToList(); } }
+    public Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
+    {
+        lock (_started) _started.Add(request);
+        return Task.FromResult("exec-" + request.Build.Id);
+    }
+    public Task<string> GetBuilderVersionAsync(CancellationToken ct = default) => Task.FromResult("test-builder");
 }
 
 /// <summary>Artifact store backed by dictionaries; mirrors what the builder uploads per build.</summary>

@@ -103,6 +103,15 @@ The builder image is identified by the git tree hash of `builder/`. A deploy who
 existing image, so web-only deploys do not rebuild decks. When the image does change, every deck is rebuilt (bounded by
 the concurrency limit) on the next hourly check or app start; failures are listed on each deck's page.
 
+## GitHub check runs
+
+Builds are mirrored as check runs (`Podium / <deck title>`) on the commit when the App has **Checks: read & write**
+and the installation has accepted that permission (GitHub → *Settings → Applications → Installed GitHub Apps →
+Podium → Configure* shows the pending request). Without it the first attempt gets a 403 and the observer disables
+itself until the app restarts (`GitHub check runs disabled` in the console log; `GitHub check runs active` once it
+works). Clicking **Re-run** on a check run rebuilds the deck from its current commit; the `check_run` webhook event
+must be subscribed for that. New Apps created with `scripts/github-app-manifest.ps1` have both from the start.
+
 ## Checking on things
 
 ```kusto

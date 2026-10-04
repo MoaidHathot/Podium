@@ -14,6 +14,20 @@ namespace Podium.Web.GitHub;
 public sealed class GitHubChecksObserver(GitHubAppAuth auth, IOptions<PodiumOptions> options, ILogger<GitHubChecksObserver> log) : IBuildObserver
 {
     private volatile bool _disabled;
+    private volatile bool _confirmed;
+
+    /// <summary>External id stored on the check run so a "Re-run" click can be traced back to the deck: "slug/buildId".</summary>
+    public static string ExternalId(Deck deck, Build build) => $"{deck.Slug}/{build.Id}";
+
+    /// <summary>Inverse of <see cref="ExternalId"/>; null for ids Podium did not write.</summary>
+    public static (string Slug, string BuildId)? ParseExternalId(string? externalId)
+    {
+        if (string.IsNullOrEmpty(externalId)) return null;
+        var i = externalId.LastIndexOf('/');
+        if (i <= 0 || i == externalId.Length - 1) return null;
+        var slug = externalId[..i];
+        return Podium.Core.Slug.IsValid(slug) ? (slug, externalId[(i + 1)..]) : null;
+    }
 
     public async Task<string?> OnStartedAsync(Build build, Deck deck, Source source, CancellationToken ct = default)
     {
@@ -26,11 +40,16 @@ public sealed class GitHubChecksObserver(GitHubAppAuth auth, IOptions<PodiumOpti
                 Status = CheckStatus.InProgress,
                 StartedAt = DateTimeOffset.UtcNow,
                 DetailsUrl = DetailsUrl(deck),
-                ExternalId = build.Id,
+                ExternalId = ExternalId(deck, build),
             }).WaitAsync(ct);
+            if (!_confirmed)
+            {
+                _confirmed = true;
+                log.LogInformation("GitHub check runs active (first run {RunId} on {Repo}@{Sha})", run.Id, source.FullName, build.Sha[..7]);
+            }
             return run.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
-        catch (ForbiddenException ex)
+        catch (ApiException ex) when (IsMissingPermission(ex))
         {
             Disable(ex);
             return null;
@@ -71,12 +90,18 @@ public sealed class GitHubChecksObserver(GitHubAppAuth auth, IOptions<PodiumOpti
                     CompletedAt = DateTimeOffset.UtcNow,
                     Output = output,
                     DetailsUrl = DetailsUrl(deck),
-                    ExternalId = build.Id,
+                    ExternalId = ExternalId(deck, build),
                 }).WaitAsync(ct);
             }
         }
-        catch (ForbiddenException ex) { Disable(ex); }
+        catch (ApiException ex) when (IsMissingPermission(ex)) { Disable(ex); }
     }
+
+    // GitHub answers an installation token that lacks a permission with 403 "Resource not accessible by integration"
+    // (a few endpoints use 404 with the same message). Anything else is a per-build problem, not a configuration one.
+    private static bool IsMissingPermission(ApiException ex)
+        => ex.StatusCode == System.Net.HttpStatusCode.Forbidden
+           || (ex.Message?.Contains("not accessible by integration", StringComparison.OrdinalIgnoreCase) ?? false);
 
     private void Disable(Exception ex)
     {

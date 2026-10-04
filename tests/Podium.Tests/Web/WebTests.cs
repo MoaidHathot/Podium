@@ -120,6 +120,51 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
     }
 
     [Fact]
+    public async Task Rerun_of_a_podium_check_run_rebuilds_the_deck_and_ignores_everything_else()
+    {
+        var sources = app.Services.GetRequiredService<ISourceStore>();
+        var decks = app.Services.GetRequiredService<IDeckStore>();
+        await sources.UpsertAsync(new Source { Id = "owner/checks-repo", Owner = "owner", Repo = "checks-repo", RepoId = 555001, Trusted = true, LastSeenSha = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+        await decks.UpsertAsync(new Deck { Slug = "checks-deck", SourceId = "owner/checks-repo", Path = "talk", Entry = "slides.md", Kind = DeckKind.Slidev, Title = "Checks", LastCommitSha = "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+        var externalId = Podium.Web.GitHub.GitHubChecksObserver.ExternalId(new Deck { Slug = "checks-deck", SourceId = "x", Path = "", Entry = "", Kind = DeckKind.Slidev }, new Build { Id = "b0001", DeckSlug = "checks-deck", Sha = "x" });
+        Assert.Equal("checks-deck/b0001", externalId);
+        var before = app.Runner.Started.Count;
+
+        // Echoes of our own runs and foreign check runs do nothing.
+        Assert.True((await Deliver("check_run", CheckRunPayload("created", externalId, 555001))).IsSuccessStatusCode);
+        Assert.True((await Deliver("check_run", CheckRunPayload("rerequested", "some-other-app-id", 555001))).IsSuccessStatusCode);
+        Assert.True((await Deliver("check_run", CheckRunPayload("rerequested", externalId, 999999))).IsSuccessStatusCode); // wrong repository
+        await Task.Delay(500);
+        Assert.Equal(before, app.Runner.Started.Count);
+
+        // A genuine re-run queues a build at the deck's current commit.
+        Assert.True((await Deliver("check_run", CheckRunPayload("rerequested", externalId, 555001))).IsSuccessStatusCode);
+        BuildRequest? started = null;
+        for (var i = 0; i < 100 && started is null; i++) { await Task.Delay(50); started = app.Runner.Started.FirstOrDefault(r => r.Deck.Slug == "checks-deck"); }
+        Assert.NotNull(started);
+        Assert.Equal("2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", started!.Build.Sha);
+        Assert.Equal("check-rerun", started.Build.TriggeredBy);
+        Assert.Equal(BuildStatus.Running, (await decks.GetAsync("checks-deck"))!.LatestBuildStatus);
+    }
+
+    private async Task<HttpResponseMessage> Deliver(string eventName, string body)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        req.Headers.Add("X-GitHub-Event", eventName);
+        req.Headers.Add("X-GitHub-Delivery", Guid.NewGuid().ToString());
+        req.Headers.Add("X-Hub-Signature-256", "sha256=" + Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes("whsec-test"), Encoding.UTF8.GetBytes(body))).ToLowerInvariant());
+        return await app.Client().SendAsync(req);
+    }
+
+    private static string CheckRunPayload(string action, string externalId, long repoId) => JsonSerializer.Serialize(new
+    {
+        action,
+        check_run = new { id = 77, external_id = externalId, head_sha = "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", name = "Podium / Checks", app = new { id = 0 } },
+        repository = new { id = repoId, name = "checks-repo", full_name = "owner/checks-repo", owner = new { login = "owner" } },
+        installation = new { id = 1 },
+    });
+
+    [Fact]
     public async Task Builder_report_requires_a_valid_callback_token()
     {
         var deck = await app.SeedDeckAsync("report-deck");

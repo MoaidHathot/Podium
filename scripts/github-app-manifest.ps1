@@ -33,8 +33,10 @@ $manifest = @{
     setup_url     = "https://$PublicHostname/sources"
     setup_on_update = $false
     hook_attributes = @{ url = "https://$PublicHostname/api/github/webhook"; active = $true }
-    default_permissions = @{ contents = 'read'; metadata = 'read' }
-    default_events = @('push', 'repository')   # installation* events are always delivered and must not be listed
+    # checks:write lets each build report back on the commit as a check run; the check_run event delivers GitHub's
+    # "Re-run" clicks, which Podium turns into rebuilds.
+    default_permissions = @{ contents = 'read'; metadata = 'read'; checks = 'write' }
+    default_events = @('push', 'repository', 'check_run')   # installation* events are always delivered and must not be listed
 } | ConvertTo-Json -Depth 5 -Compress
 
 $state = [Guid]::NewGuid().ToString('N')
