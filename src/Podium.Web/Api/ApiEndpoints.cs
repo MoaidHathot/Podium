@@ -120,6 +120,9 @@ public static partial class ApiEndpoints
                 ExportPptx = patch.ExportPptx ?? deck.ExportPptx,
                 PptxViewer = patch.PptxViewer ?? deck.PptxViewer,
                 StripNotesForViewers = patch.StripNotesForViewers ?? deck.StripNotesForViewers,
+                OfflineCache = patch.OfflineCache ?? deck.OfflineCache,
+                // Embedding only ever applies to Public decks; the flag is kept but ignored otherwise (see CSP/XFO).
+                AllowEmbedding = patch.AllowEmbedding ?? deck.AllowEmbedding,
                 Title = string.IsNullOrWhiteSpace(patch.Title) ? deck.Title : patch.Title.Trim(),
                 Tags = tags ?? deck.Tags,
                 UpdatedAt = DateTimeOffset.UtcNow,
@@ -330,7 +333,7 @@ public static partial class ApiEndpoints
     private static bool IsValidGitHubName(string s) => s.Length is > 0 and <= 100 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.') && s != "." && s != "..";
 }
 
-public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null);
+public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null, bool? OfflineCache = null, bool? AllowEmbedding = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label);
 public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title);

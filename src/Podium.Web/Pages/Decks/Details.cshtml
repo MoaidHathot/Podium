@@ -191,7 +191,9 @@
             <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="stripNotes" @(d.StripNotesForViewers ? "checked" : "") /> Hide speaker notes from viewers</label>
             <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Builds a second copy without notes for everyone except you and people granted <em>Present</em>. Notes are otherwise part of the deck bundle and visible in its presenter view.@(d.StripNotesForViewers && !d.CurrentHasPublicSite ? " The current build has no notes-free copy yet; rebuild to apply." : "")</p>
         }
-        <p class="faint" style="margin-top:.6rem; font-size:.85rem">Changes apply to the next build.</p>
+        <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="offlineCache" @(d.OfflineCache ? "checked" : "") /> Offline cache</label>
+        <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">A service worker keeps the deck available if the venue network drops: your browsers precache the whole build, viewers cache what they visit. Applies on the next page load.</p>
+        <p class="faint" style="margin-top:.6rem; font-size:.85rem">Export changes apply to the next build.</p>
     </section>
 </div>
 
@@ -396,6 +398,7 @@
   document.querySelectorAll('[data-pptx-viewer]').forEach((r) => r.addEventListener('change', () => patch({ pptxViewer: r.value }, `Viewer: ${r.value === 'Office' ? 'PowerPoint Online' : 'PDF'}`)));
   document.getElementById('exportPdf').addEventListener('change', (e) => patch({ exportPdf: e.target.checked }));
   document.getElementById('exportPptx').addEventListener('change', (e) => patch({ exportPptx: e.target.checked }));
+  document.getElementById('offlineCache')?.addEventListener('change', (e) => patch({ offlineCache: e.target.checked }, e.target.checked ? 'Offline cache on' : 'Offline cache off (existing caches clear on the next visit)'));
   document.getElementById('stripNotes')?.addEventListener('change', (e) => patch({ stripNotesForViewers: e.target.checked }, e.target.checked ? 'Viewers will get a notes-free copy from the next build' : 'Viewers will see the full build'));
 
   const pin = document.getElementById('pin');

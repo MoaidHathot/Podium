@@ -80,4 +80,35 @@
   }
   function schedule() { if (failures > 10) return; setTimeout(check, Math.min(interval * (1 + failures), 180000)); }
   schedule();
+
+  // Offline cache (per-deck setting, secure contexts only). The worker is scoped to this deck; presenters precache
+  // the whole build from the manifest, everyone else caches what they visit. See /_podium/sw.js.
+  var offline = script.getAttribute('data-offline') === '1';
+  var presenterSession = script.getAttribute('data-presenter') === '1';
+  if (offline && !isPrint && 'serviceWorker' in navigator && window.isSecureContext) {
+    var scope = '/d/' + slug + '/';
+    navigator.serviceWorker.register(scope + '_podium/sw.js', { scope: scope }).then(function (reg) {
+      var post = function (msg) { var w = reg.active || reg.waiting || reg.installing; if (w) w.postMessage(msg); };
+      var ready = navigator.serviceWorker.ready;
+      ready.then(function () {
+        post({ type: 'activate-build', build: build });
+        if (!presenterSession) return;
+        fetch(scope + '_podium/manifest.json', { credentials: 'same-origin' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (m) {
+            if (!m || !m.variants) return;
+            var files = m.variants.site || m.variants['site-public'] || [];
+            post({ type: 'precache', build: m.build || build, files: files });
+          })
+          .catch(function () {});
+      });
+    }).catch(function () {});
+  } else if (!isPrint && 'serviceWorker' in navigator && window.isSecureContext) {
+    // Setting turned off (or no longer allowed): drop this deck's worker and its caches.
+    navigator.serviceWorker.getRegistration('/d/' + slug + '/').then(function (reg) {
+      if (!reg || new URL(reg.scope).pathname !== '/d/' + slug + '/') return;
+      reg.unregister();
+      if (window.caches) caches.keys().then(function (keys) { keys.filter(function (k) { return k.indexOf('podium-' + slug + '-') === 0; }).forEach(function (k) { caches.delete(k); }); });
+    }).catch(function () {});
+  }
 })();

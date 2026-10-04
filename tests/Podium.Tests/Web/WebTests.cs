@@ -438,6 +438,36 @@ public sealed class ServingTests(PodiumWebFactory app)
         Assert.NotEqual(HttpStatusCode.OK, (await anon.GetAsync($"/d/{priv.Slug}/slides.json")).StatusCode);
     }
 
+    [Fact]
+    public async Task Offline_worker_is_scoped_to_the_deck_and_follows_the_setting_and_the_deck_access()
+    {
+        var deck = await app.SeedDeckAsync("offline-deck", Visibility.Public);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.Manifest, "application/json", "{\"build\":\"x\",\"variants\":{\"site\":[\"index.html\"]}}"u8.ToArray());
+        var c = app.Client();
+        var sw = await c.GetAsync($"/d/{deck.Slug}/_podium/sw.js");
+        Assert.Equal(HttpStatusCode.OK, sw.StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/", sw.Headers.GetValues("Service-Worker-Allowed").Single());
+        Assert.Equal("text/javascript", sw.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/d/{deck.Slug}/_podium/manifest.json")).StatusCode);
+        var page = await c.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        var html = await page.Content.ReadAsStringAsync();
+        Assert.Contains("data-offline=\"1\"", html);
+        Assert.DoesNotContain("data-presenter=\"1\"", html); // anonymous viewer: runtime caching only
+
+        var owner = await app.OwnerClientAsync();
+        Assert.Contains("data-presenter=\"1\"", await (await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).Content.ReadAsStringAsync());
+
+        // Turned off: no worker, no flag.
+        Assert.Equal(HttpStatusCode.OK, (await owner.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { offlineCache = false }))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/d/{deck.Slug}/_podium/sw.js")).StatusCode);
+        Assert.DoesNotContain("data-offline", await (await c.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).Content.ReadAsStringAsync());
+
+        // Private deck: the worker and manifest follow the deck's access.
+        var priv = await app.SeedDeckAsync("offline-private");
+        Assert.NotEqual(HttpStatusCode.OK, (await c.GetAsync($"/d/{priv.Slug}/_podium/sw.js")).StatusCode);
+        Assert.NotEqual(HttpStatusCode.OK, (await c.GetAsync($"/d/{priv.Slug}/_podium/manifest.json")).StatusCode);
+    }
+
     private static int CountOf(string haystack, string needle)
     {
         int count = 0, i = 0;
