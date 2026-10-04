@@ -207,6 +207,22 @@ public static partial class ApiEndpoints
 
         owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
 
+        // Access requests from signed-in visitors: approve (= grant) or decline.
+        owner.MapGet("/access-requests", async (IAccessRequestStore requests, CancellationToken ct) => Results.Ok(await requests.ListPendingAsync(ct)));
+        owner.MapPost("/decks/{slug}/access-requests/{principal}/decide", async (string slug, string principal, AccessDecisionRequest req, IDeckStore decks, IGrantStore grants, IAccessRequestStore requests, DeckAccessService access, CancellationToken ct) =>
+        {
+            var deck = await decks.GetAsync(slug, ct);
+            var request = await requests.GetAsync(slug, principal, ct);
+            if (deck is null || request is null) return Results.NotFound();
+            if (req.Grant)
+            {
+                await grants.UpsertAsync(new Grant { DeckSlug = slug, Principal = principal, DisplayName = request.DisplayName, Site = true, Pdf = req.Pdf, Pptx = req.Pptx, Present = req.Present }, ct);
+                access.Invalidate(slug);
+            }
+            await requests.UpsertAsync(request with { Status = req.Grant ? AccessRequestStatus.Granted : AccessRequestStatus.Declined, DecidedAt = DateTimeOffset.UtcNow }, ct);
+            return Results.Ok(new { granted = req.Grant });
+        });
+
         owner.MapPost("/decks/{slug}/grants", async (string slug, GrantRequest req, IDeckStore decks, IGrantStore grants, GitHubAppAuth gh, ISourceStore sources, CancellationToken ct) =>
         {
             var deck = await decks.GetAsync(slug, ct);
@@ -341,6 +357,7 @@ public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label, string? Passcode = null, int? MaxUses = null);
 public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title);
+public sealed record AccessDecisionRequest(bool Grant, bool Pdf = false, bool Pptx = false, bool Present = false);
 
 public static partial class ApiEndpoints
 {

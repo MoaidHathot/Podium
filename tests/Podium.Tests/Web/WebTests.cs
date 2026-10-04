@@ -196,6 +196,52 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { holdDeploys = true }))).StatusCode);
     }
 
+    [Fact]
+    public async Task Access_requests_never_reveal_whether_a_deck_exists_and_approval_grants_access()
+    {
+        var deck = await app.SeedDeckAsync("asked-deck", Visibility.Shared);
+        var guest = await app.GuestClientAsync(880001);
+
+        // Existing-but-denied and unknown slugs produce the same redirect and the same page.
+        var denied = await guest.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        var unknown = await guest.SendAsync(PodiumWebFactory.Navigation("/d/no-such-deck-here/"));
+        Assert.Equal(HttpStatusCode.Redirect, denied.StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, unknown.StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/request-access", denied.Headers.Location!.ToString());
+        Assert.Equal("/d/no-such-deck-here/request-access", unknown.Headers.Location!.ToString());
+        var pageA = await guest.GetAsync($"/d/{deck.Slug}/request-access");
+        var pageB = await guest.GetAsync("/d/no-such-deck-here/request-access");
+        Assert.Equal(HttpStatusCode.OK, pageA.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, pageB.StatusCode);
+        static string Normalise(string html) => System.Text.RegularExpressions.Regex.Replace(System.Text.RegularExpressions.Regex.Replace(html, "value=\"[^\"]+\"", "value=\"\""), "/d/[a-z0-9-]+/", "/d/X/");
+        Assert.Equal(Normalise(await pageA.Content.ReadAsStringAsync()), Normalise(await pageB.Content.ReadAsStringAsync()));
+
+        // Submit for both; only the real deck gets a stored request, both answer the same way.
+        var token = System.Text.RegularExpressions.Regex.Match(await (await guest.GetAsync($"/d/{deck.Slug}/request-access")).Content.ReadAsStringAsync(), "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value;
+        var sentA = await guest.PostAsync($"/d/{deck.Slug}/request-access", new FormUrlEncodedContent(new Dictionary<string, string> { ["message"] = "Met you at the meetup", ["__RequestVerificationToken"] = token }));
+        var sentB = await guest.PostAsync("/d/no-such-deck-here/request-access", new FormUrlEncodedContent(new Dictionary<string, string> { ["message"] = "x", ["__RequestVerificationToken"] = token }));
+        Assert.Equal(HttpStatusCode.Redirect, sentA.StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, sentB.StatusCode);
+        var store = app.Services.GetRequiredService<IAccessRequestStore>();
+        Assert.NotNull(await store.GetAsync(deck.Slug, "github:880001"));
+        Assert.Null(await store.GetAsync("no-such-deck-here", "github:880001"));
+        Assert.Contains("waiting for the owner", await (await guest.GetAsync($"/d/{deck.Slug}/request-access")).Content.ReadAsStringAsync());
+
+        // Owner sees it and approves; the guest can now open the deck.
+        var owner = await app.OwnerClientAsync();
+        var pending = await owner.GetFromJsonAsync<JsonElement>("/api/access-requests");
+        Assert.Contains(pending.EnumerateArray(), r => r.GetProperty("deckSlug").GetString() == deck.Slug);
+        Assert.Contains("access request", await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync());
+        var decide = await owner.PostAsync($"/api/decks/{deck.Slug}/access-requests/github:880001/decide", JsonContent.Create(new { grant = true, pdf = true }));
+        Assert.Equal(HttpStatusCode.OK, decide.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await guest.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).StatusCode);
+        Assert.Equal(AccessRequestStatus.Granted, (await store.GetAsync(deck.Slug, "github:880001"))!.Status);
+
+        // Anonymous visitors are still sent to login, not to the request page.
+        var anon = await app.Client().SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        Assert.StartsWith("/login", PathOf(anon.Headers.Location!));
+    }
+
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
@@ -289,9 +335,11 @@ public sealed class ServingTests(PodiumWebFactory app)
         var anon = await app.Client().SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
         Assert.Equal(HttpStatusCode.Redirect, anon.StatusCode);
         Assert.StartsWith("/login", AuthAndApiTests.PathOf(anon.Headers.Location!));
+        // Signed-in non-owners are offered the request-access page (identical for unknown slugs), never the deck.
         var guest = await (await app.GuestClientAsync()).SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
-        Assert.True(guest.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound or HttpStatusCode.Redirect);
-        if (guest.StatusCode == HttpStatusCode.Redirect) Assert.DoesNotContain(deck.Slug, guest.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.Redirect, guest.StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/request-access", guest.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.NotFound, (await (await app.GuestClientAsync()).GetAsync($"/d/{deck.Slug}/assets/app.js")).StatusCode); // sub-resources: plain 404
 
         var owner = await (await app.OwnerClientAsync()).SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
         Assert.Equal(HttpStatusCode.OK, owner.StatusCode);

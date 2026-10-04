@@ -85,6 +85,9 @@ public static class DeckServingEndpoints
             // Short aliases redirect to the canonical slug (the built site's base path is the slug).
             if (Podium.Core.Slug.IsValid(slug) && await access.GetDeckByAliasAsync(slug, ct) is { } aliased)
                 return Results.Redirect($"/d/{aliased.Slug}/{path}{http.Request.QueryString}", permanent: false);
+            // Same shape as a denied existing deck for signed-in visitors, so the response never reveals whether a slug exists.
+            if (Podium.Core.Slug.IsValid(slug) && caller.IsAuthenticated && !caller.IsOwner && IsNavigation(http) && !onExternalHost)
+                return Results.Redirect($"/d/{slug}/request-access");
             return Results.NotFound();
         }
 
@@ -101,6 +104,9 @@ public static class DeckServingEndpoints
                 }
                 return IsNavigation(http) ? Results.Redirect(LoginUrl(http)) : Results.Unauthorized();
             case AccessDecision.Deny:
+                // Signed-in people get a place to ask; the page is identical for unknown slugs (no existence oracle).
+                if (caller.IsAuthenticated && !caller.IsOwner && IsNavigation(http) && !onExternalHost)
+                    return Results.Redirect($"/d/{slug}/request-access");
                 return Results.NotFound();
         }
 

@@ -90,6 +90,42 @@ public static class PresenterToolsEndpoints
             return Results.Content(UnlockPage(deck, share, next, wrong: true, antiforgery.GetAndStoreTokens(http)), "text/html; charset=utf-8");
         }).RequireRateLimiting("auth");
 
+        // Access requests. A signed-in visitor who cannot open a deck lands here. The page looks exactly the same
+        // whether the deck exists or not, so it never reveals which slugs are real; a request is only stored for a
+        // real Shared/Private deck the caller lacks access to.
+        app.MapGet("/d/{slug}/request-access", async (string slug, HttpContext http, DeckAccessService access, CallerResolver callers, IAccessRequestStore requests, IAntiforgery antiforgery, CancellationToken ct) =>
+        {
+            if (!Podium.Core.Slug.IsValid(slug)) return Results.NotFound();
+            var caller = callers.Resolve(http.User);
+            if (!caller.IsAuthenticated) return Results.Redirect("/login?returnUrl=" + Uri.EscapeDataString(http.Request.Path));
+            if (caller.IsOwner) return Results.Redirect($"/decks/{slug}");
+            var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
+            if (result.Decision == AccessDecision.Allow) return Results.Redirect($"/d/{slug}/");
+            var existing = await requests.GetAsync(slug, caller.Principal!, ct);
+            http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            return Results.Content(RequestAccessPage(slug, caller, existing?.Status, antiforgery.GetAndStoreTokens(http)), "text/html; charset=utf-8");
+        }).RequireRateLimiting("auth");
+
+        app.MapPost("/d/{slug}/request-access", async (string slug, HttpContext http, DeckAccessService access, CallerResolver callers, IAccessRequestStore requests, IAntiforgery antiforgery, CancellationToken ct) =>
+        {
+            if (!Podium.Core.Slug.IsValid(slug)) return Results.NotFound();
+            var caller = callers.Resolve(http.User);
+            if (!caller.IsAuthenticated || caller.IsOwner) return Results.Forbid();
+            if (!await antiforgery.IsRequestValidAsync(http)) return Results.BadRequest();
+            var form = await http.Request.ReadFormAsync(ct);
+            var message = form["message"].ToString().Trim();
+            if (message.Length > 500) message = message[..500];
+            var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
+            // Store only when there is something to grant; otherwise behave identically (constant response).
+            if (result.Deck is { Archived: false } deck && result.Decision != AccessDecision.Allow && deck.Visibility is Visibility.Shared or Visibility.Private)
+            {
+                var existing = await requests.GetAsync(slug, caller.Principal!, ct);
+                if (existing is null || existing.Status != AccessRequestStatus.Pending)
+                    await requests.UpsertAsync(new AccessRequest { DeckSlug = slug, Principal = caller.Principal!, DisplayName = caller.DisplayName, Message = string.IsNullOrEmpty(message) ? null : message }, ct);
+            }
+            return Results.Redirect($"/d/{slug}/request-access?sent=1");
+        }).RequireRateLimiting("auth");
+
         app.MapGet("/d/{slug}/slides.jpg", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct)
             => ServeSheet(slug, ArtifactKind.SlideSheet, "image/jpeg", http, access, artifacts, callers, ct)).RequireRateLimiting("probe");
         app.MapGet("/d/{slug}/slides.json", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct)
@@ -136,6 +172,38 @@ public static class PresenterToolsEndpoints
               <input class="input" id="passcode" name="passcode" type="password" autocomplete="one-time-code" autofocus required maxlength="200" style="width:100%; margin:.3rem 0 .8rem">
               <button class="btn btn-primary" type="submit">Open deck</button>
             </form></main></body></html>
+            """;
+    }
+
+    private static string RequestAccessPage(string slug, Caller caller, AccessRequestStatus? status, AntiforgeryTokenSet tokens)
+    {
+        var who = System.Net.WebUtility.HtmlEncode(caller.DisplayName ?? caller.Principal ?? "");
+        var antiforgery = $"<input type=\"hidden\" name=\"{tokens.FormFieldName}\" value=\"{System.Net.WebUtility.HtmlEncode(tokens.RequestToken)}\">";
+        var body = status switch
+        {
+            AccessRequestStatus.Pending => "<p class=\"muted\">Your request is waiting for the owner. You will be able to open the deck once it is approved.</p>",
+            AccessRequestStatus.Declined => "<p class=\"muted\">Your request was declined.</p>",
+            AccessRequestStatus.Granted => "<p class=\"muted\">Access was granted; <a href=\"/d/" + slug + "/\">open the deck</a>.</p>",
+            _ => $$"""
+                <p class="muted">If this deck exists and is shared on request, the owner will see who asked.</p>
+                <form method="post" action="/d/{{slug}}/request-access">
+                  {{antiforgery}}
+                  <label for="message" class="faint">Message (optional)</label>
+                  <textarea class="input" id="message" name="message" rows="3" maxlength="500" style="width:100%; margin:.3rem 0 .8rem" placeholder="Hi, I attended your talk at ..."></textarea>
+                  <button class="btn btn-primary" type="submit">Request access</button>
+                </form>
+                """,
+        };
+        return $$"""
+            <!doctype html>
+            <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+            <title>Not available</title><link rel="stylesheet" href="/css/podium.css"></head>
+            <body class="centered"><main class="card" style="max-width:28rem; margin:10vh auto; padding:1.5rem">
+            <h1 style="font-size:1.2rem; margin:0 0 .4rem">This deck is not available to you</h1>
+            <p class="faint" style="margin:0 0 1rem">Signed in as {{who}}.</p>
+            {{body}}
+            <p style="margin-top:1rem"><a href="/shared">Decks shared with me</a></p>
+            </main></body></html>
             """;
     }
 

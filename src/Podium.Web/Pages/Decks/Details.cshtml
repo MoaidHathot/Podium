@@ -240,6 +240,33 @@
     </table>
 </section>
 
+@if (Model.PendingRequests.Count > 0)
+{
+<section class="panel" style="margin-top:1rem" id="access-requests">
+    <h3>Access requests</h3>
+    <p class="hint">Signed-in visitors who asked to see this deck. Approving adds them under <em>People with access</em>.</p>
+    <table class="table">
+        <thead><tr><th>Who</th><th>Message</th><th>When</th><th></th></tr></thead>
+        <tbody>
+        @foreach (var r in Model.PendingRequests)
+        {
+            <tr data-request="@r.Principal">
+                <td>@(r.DisplayName ?? r.Principal) <span class="faint mono" style="font-size:.78rem">@r.Principal</span></td>
+                <td>@(r.Message ?? "-")</td>
+                <td><time datetime="@r.RequestedAt.UtcDateTime.ToString("o")">@r.RequestedAt.ToString("g")</time></td>
+                <td class="row" style="gap:.3rem; justify-content:flex-end">
+                    <label class="row" style="gap:.2rem; font-size:.8rem"><input type="checkbox" data-req-pdf /> PDF</label>
+                    <label class="row" style="gap:.2rem; font-size:.8rem"><input type="checkbox" data-req-present /> Present</label>
+                    <button class="btn btn-primary btn-sm" data-decide="grant">Approve</button>
+                    <button class="btn btn-ghost btn-sm" data-decide="decline">Decline</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+}
+
 <div class="two-col" style="margin-top:1rem">
     <section class="panel">
         <h3>People with access</h3>
@@ -429,6 +456,15 @@
     await patch({ pinned: next }, next ? 'Pinned' : 'Unpinned');
     pin.setAttribute('aria-pressed', String(next)); pin.textContent = next ? 'Unpin' : 'Pin';
   });
+
+  document.querySelectorAll('[data-decide]').forEach((b) => b.addEventListener('click', async () => {
+    const row = b.closest('tr');
+    const grant = b.dataset.decide === 'grant';
+    try {
+      await api('POST', `/api/decks/${slug}/access-requests/${encodeURIComponent(row.dataset.request)}/decide`, { grant, pdf: row.querySelector('[data-req-pdf]').checked, present: row.querySelector('[data-req-present]').checked });
+      toast(grant ? 'Access granted' : 'Request declined', 'ok'); setTimeout(() => location.reload(), 500);
+    } catch (e) { toast(e.message, 'error'); }
+  }));
 
   document.getElementById('session-start')?.addEventListener('click', async () => {
     const minutes = Number(document.getElementById('session-minutes').value) || null;

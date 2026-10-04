@@ -5,8 +5,9 @@ using Podium.Web.Security;
 
 namespace Podium.Web.Pages;
 
-public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHistoryStore views, CallerResolver callers) : PageModel
+public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHistoryStore views, CallerResolver callers, IAccessRequestStore accessRequests) : PageModel
 {
+    public IReadOnlyList<AccessRequest> PendingRequests { get; private set; } = [];
     public IReadOnlyList<DeckRow> Decks { get; private set; } = [];
     public IReadOnlyList<DeckRow> Pinned { get; private set; } = [];
     public IReadOnlyList<DeckRow> RecentlyViewed { get; private set; } = [];
@@ -34,6 +35,7 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
             dismissed = await views.GetRecentDismissalsAsync(caller.Principal, ct);
         }
 
+        PendingRequests = await accessRequests.ListPendingAsync(ct);
         var everything = await decks.ListAsync(includeArchived: true, ct);
         var all = everything.Where(d => !d.Archived).ToList();
         Archived = everything.Where(d => d.Archived).OrderByDescending(d => d.UpdatedAt).Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), null)).ToList();

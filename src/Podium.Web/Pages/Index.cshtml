@@ -12,6 +12,16 @@
     <a class="btn" href="/sources">Manage sources</a>
 </div>
 
+@if (Model.PendingRequests.Count > 0)
+{
+    <div class="alert alert-info" style="margin-bottom:1rem"><strong>@Model.PendingRequests.Count access request@(Model.PendingRequests.Count == 1 ? "" : "s") waiting:</strong>
+        @foreach (var g in Model.PendingRequests.GroupBy(r => r.DeckSlug))
+        {
+            <a href="/decks/@g.Key#access-requests" style="margin-left:.5rem">@g.Key (@g.Count())</a>
+        }
+    </div>
+}
+
 @if (!Model.HasSources)
 {
     <div class="empty section">
