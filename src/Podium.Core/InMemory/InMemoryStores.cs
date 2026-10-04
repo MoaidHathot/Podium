@@ -81,3 +81,46 @@ public sealed class InMemoryViewHistoryStore : IViewHistoryStore
     public Task<IReadOnlyList<ViewEvent>> RecentForDeckAsync(string deckSlug, int take = 100, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<ViewEvent>>(_items.Where(v => v.DeckSlug == deckSlug).OrderByDescending(v => v.At).Take(take).ToList());
 }
+
+public sealed class InMemorySessionStore : ISessionStore
+{
+    private readonly ConcurrentDictionary<(string, string), Session> _items = new();
+    public Task<Session?> GetAsync(string deckSlug, string id, CancellationToken ct = default) => Task.FromResult(_items.GetValueOrDefault((deckSlug, id)));
+    public Task<IReadOnlyList<Session>> ListForDeckAsync(string deckSlug, int take = 20, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<Session>>(_items.Values.Where(s => s.DeckSlug == deckSlug).OrderByDescending(s => s.StartedAt).Take(take).ToList());
+    public Task<IReadOnlyList<Session>> ListLiveAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<Session>>(_items.Values.Where(s => s.EndedAt is null).OrderBy(s => s.StartedAt).ToList());
+    public Task UpsertAsync(Session session, CancellationToken ct = default) { _items[(session.DeckSlug, session.Id)] = session; return Task.CompletedTask; }
+}
+
+public sealed class InMemoryAccessRequestStore : IAccessRequestStore
+{
+    private readonly ConcurrentDictionary<(string, string), AccessRequest> _items = new();
+    public Task<AccessRequest?> GetAsync(string deckSlug, string principal, CancellationToken ct = default) => Task.FromResult(_items.GetValueOrDefault((deckSlug, principal)));
+    public Task<IReadOnlyList<AccessRequest>> ListForDeckAsync(string deckSlug, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<AccessRequest>>(_items.Values.Where(r => r.DeckSlug == deckSlug).OrderByDescending(r => r.RequestedAt).ToList());
+    public Task<IReadOnlyList<AccessRequest>> ListPendingAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<AccessRequest>>(_items.Values.Where(r => r.Status == AccessRequestStatus.Pending).OrderByDescending(r => r.RequestedAt).ToList());
+    public Task UpsertAsync(AccessRequest request, CancellationToken ct = default) { _items[(request.DeckSlug, request.Principal)] = request; return Task.CompletedTask; }
+    public Task DeleteAsync(string deckSlug, string principal, CancellationToken ct = default) { _items.TryRemove((deckSlug, principal), out _); return Task.CompletedTask; }
+}
+
+public sealed class InMemoryAuditStore : IAuditStore
+{
+    private readonly ConcurrentQueue<AuditEntry> _items = new();
+    public Task AppendAsync(AuditEntry entry, CancellationToken ct = default)
+    {
+        _items.Enqueue(entry);
+        while (_items.Count > 10000 && _items.TryDequeue(out _)) { }
+        return Task.CompletedTask;
+    }
+    public Task<IReadOnlyList<AuditEntry>> RecentAsync(string? target = null, int take = 50, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<AuditEntry>>(_items.Where(e => target is null || e.Target == target).OrderByDescending(e => e.At).Take(take).ToList());
+}
+
+public sealed class InMemorySettingsStore : ISettingsStore
+{
+    private readonly ConcurrentDictionary<string, string> _items = new(StringComparer.Ordinal);
+    public Task<string?> GetAsync(string key, CancellationToken ct = default) => Task.FromResult(_items.GetValueOrDefault(key));
+    public Task SetAsync(string key, string value, CancellationToken ct = default) { _items[key] = value; return Task.CompletedTask; }
+}

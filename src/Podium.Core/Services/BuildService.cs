@@ -31,7 +31,11 @@ public sealed class BuildOptions
 }
 
 /// <summary>Report posted by the builder when it finishes.</summary>
-public sealed record BuildReport(bool Success, bool HasSite, bool HasPdf, bool HasPptx, string? Error, IReadOnlyList<string>? Warnings, bool HasThumbnail = false, bool HasPublicSite = false);
+public sealed record BuildReport(
+    bool Success, bool HasSite, bool HasPdf, bool HasPptx, string? Error, IReadOnlyList<string>? Warnings,
+    bool HasThumbnail = false, bool HasPublicSite = false,
+    bool HasNotes = false, bool HasText = false, bool HasSlideSheet = false, int SlideCount = 0,
+    IReadOnlyList<BuildAnnotation>? Annotations = null);
 
 public sealed class BuildService(
     IBuildStore builds,
@@ -185,8 +189,16 @@ public sealed class BuildService(
             HasPptx = report.HasPptx,
             HasThumbnail = report.HasThumbnail,
             HasPublicSite = report.HasPublicSite,
+            HasNotes = report.HasNotes,
+            HasText = report.HasText,
+            HasSlideSheet = report.HasSlideSheet,
+            SlideCount = Math.Clamp(report.SlideCount, 0, 10000),
             Error = report.Success && report.HasSite ? null : (report.Error ?? "Builder reported failure"),
             Warnings = warnings,
+            // Annotations come from deck-controlled output: cap count and sizes so a hostile deck cannot bloat records.
+            Annotations = (report.Annotations ?? []).Take(50)
+                .Select(a => new BuildAnnotation(Truncate(a.Path, 300), Math.Clamp(a.Line, 1, 1_000_000), a.Level, Truncate(a.Message, 500)))
+                .ToList(),
         };
         await builds.UpsertAsync(build, ct);
 
@@ -205,6 +217,10 @@ public sealed class BuildService(
                 CurrentHasPptx = serveIt ? build.HasPptx : deck.CurrentHasPptx,
                 CurrentHasThumbnail = serveIt ? build.HasThumbnail : deck.CurrentHasThumbnail,
                 CurrentHasPublicSite = serveIt ? build.HasPublicSite : deck.CurrentHasPublicSite,
+                CurrentHasNotes = serveIt ? build.HasNotes : deck.CurrentHasNotes,
+                CurrentHasText = serveIt ? build.HasText : deck.CurrentHasText,
+                CurrentHasSlideSheet = serveIt ? build.HasSlideSheet : deck.CurrentHasSlideSheet,
+                CurrentSlideCount = serveIt ? build.SlideCount : deck.CurrentSlideCount,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await decks.UpsertAsync(deck, ct);
@@ -283,6 +299,10 @@ public sealed class BuildService(
             CurrentHasPptx = build.HasPptx,
             CurrentHasThumbnail = build.HasThumbnail,
             CurrentHasPublicSite = build.HasPublicSite,
+            CurrentHasNotes = build.HasNotes,
+            CurrentHasText = build.HasText,
+            CurrentHasSlideSheet = build.HasSlideSheet,
+            CurrentSlideCount = build.SlideCount,
             PinnedBuildId = freeze ? build.Id : null,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -378,6 +398,8 @@ public sealed class BuildService(
             log.LogWarning("Reaped stale build {Build} for {Deck}", b.Id, b.DeckSlug);
         }
     }
+
+    private static string Truncate(string? s, int max) => string.IsNullOrEmpty(s) ? "" : s.Length <= max ? s : s[..max];
 
     private static long _lastIdTicks;
 

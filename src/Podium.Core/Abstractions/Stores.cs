@@ -59,6 +59,40 @@ public interface IViewHistoryStore
     Task<IReadOnlyList<ViewEvent>> RecentForDeckAsync(string deckSlug, int take = 100, CancellationToken ct = default);
 }
 
+public interface ISessionStore
+{
+    Task<Session?> GetAsync(string deckSlug, string id, CancellationToken ct = default);
+    /// <summary>Sessions of one deck, newest first.</summary>
+    Task<IReadOnlyList<Session>> ListForDeckAsync(string deckSlug, int take = 20, CancellationToken ct = default);
+    /// <summary>Sessions that have not ended yet (across all decks).</summary>
+    Task<IReadOnlyList<Session>> ListLiveAsync(CancellationToken ct = default);
+    Task UpsertAsync(Session session, CancellationToken ct = default);
+}
+
+public interface IAccessRequestStore
+{
+    Task<AccessRequest?> GetAsync(string deckSlug, string principal, CancellationToken ct = default);
+    Task<IReadOnlyList<AccessRequest>> ListForDeckAsync(string deckSlug, CancellationToken ct = default);
+    /// <summary>All pending requests, for the library badge.</summary>
+    Task<IReadOnlyList<AccessRequest>> ListPendingAsync(CancellationToken ct = default);
+    Task UpsertAsync(AccessRequest request, CancellationToken ct = default);
+    Task DeleteAsync(string deckSlug, string principal, CancellationToken ct = default);
+}
+
+public interface IAuditStore
+{
+    Task AppendAsync(AuditEntry entry, CancellationToken ct = default);
+    /// <summary>Newest first; <paramref name="target"/> null = everything.</summary>
+    Task<IReadOnlyList<AuditEntry>> RecentAsync(string? target = null, int take = 50, CancellationToken ct = default);
+}
+
+/// <summary>Small key/value settings (security stamp, migration markers).</summary>
+public interface ISettingsStore
+{
+    Task<string?> GetAsync(string key, CancellationToken ct = default);
+    Task SetAsync(string key, string value, CancellationToken ct = default);
+}
+
 /// <summary>Represents a stored artifact object.</summary>
 public sealed record ArtifactObject(Stream Content, string ContentType, long? Length, string? ETag, DateTimeOffset? LastModified) : IAsyncDisposable
 {

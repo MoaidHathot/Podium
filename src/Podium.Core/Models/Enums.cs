@@ -57,4 +57,30 @@ public enum ArtifactKind
     Log = 3,
     /// <summary>First-slide preview image; follows the site's visibility.</summary>
     Thumbnail = 4,
+    /// <summary>notes.json: per-slide speaker notes. Presenters only (owner / Present grantees), never served from the external origin.</summary>
+    Notes = 5,
+    /// <summary>text.json: per-slide plain text extracted from the PDF, for search. Owner only.</summary>
+    Text = 6,
+    /// <summary>slides.jpg: every slide tiled into one image (go-to grid, slide strip); follows the site's visibility.</summary>
+    SlideSheet = 7,
+    /// <summary>slides.json: geometry of the slide sheet (columns, cell size, count); follows the site's visibility.</summary>
+    SlideSheetMeta = 8,
+    /// <summary>manifest.json: files of the site variants, for offline precaching; follows the site's visibility.</summary>
+    Manifest = 9,
+}
+
+/// <summary>Severity of a deck-health finding reported by the builder.</summary>
+public enum AnnotationLevel
+{
+    Notice = 0,
+    Warning = 1,
+    Failure = 2,
+}
+
+/// <summary>Lifecycle of a request for access to a Shared/Private deck.</summary>
+public enum AccessRequestStatus
+{
+    Pending = 0,
+    Granted = 1,
+    Declined = 2,
 }

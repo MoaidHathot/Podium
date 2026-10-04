@@ -17,6 +17,22 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
         // Give the host a moment to finish starting before hitting external services.
         try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); } catch (OperationCanceledException) { return; }
 
+        // One-off data migrations, guarded by markers in the settings table so they run exactly once per deployment.
+        await RunSafely("migrations", async ct =>
+        {
+            using var scope = scopes.CreateScope();
+            var settings = scope.ServiceProvider.GetRequiredService<ISettingsStore>();
+            if (await settings.GetAsync("migration:deckviews-backfill", ct) is null)
+            {
+                if (scope.ServiceProvider.GetRequiredService<IViewHistoryStore>() is Podium.Web.Storage.TableViewHistoryStore views)
+                {
+                    var copied = await views.BackfillDeckViewsAsync(ct);
+                    log.LogInformation("Backfilled {Count} view(s) into the per-deck analytics table", copied);
+                }
+                await settings.SetAsync("migration:deckviews-backfill", DateTimeOffset.UtcNow.ToString("o"), ct);
+            }
+        }, stoppingToken);
+
         await RunSafely("installation discovery", async ct =>
         {
             using var scope = scopes.CreateScope();
@@ -73,7 +89,7 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
                         if (deck.Archived && DateTimeOffset.UtcNow - deck.UpdatedAt > buildOptions.ArchivedPurgeAfter)
                         {
                             await buildService.PurgeDeckAsync(deck, ct);
-                            await deckStore.UpsertAsync(deck with { CurrentBuildId = null, LatestSuccessfulBuildId = null, PinnedBuildId = null, CurrentHasPdf = false, CurrentHasPptx = false, CurrentHasThumbnail = false }, ct);
+                            await deckStore.UpsertAsync(deck with { CurrentBuildId = null, LatestSuccessfulBuildId = null, PinnedBuildId = null, CurrentHasPdf = false, CurrentHasPptx = false, CurrentHasThumbnail = false, CurrentHasPublicSite = false, CurrentHasNotes = false, CurrentHasText = false, CurrentHasSlideSheet = false, CurrentSlideCount = 0 }, ct);
                         }
                         else if (!deck.Archived)
                             await buildService.ApplyRetentionAsync(deck, ct);

@@ -57,6 +57,16 @@ public sealed record Deck
     public PptxViewer PptxViewer { get; init; } = PptxViewer.Pdf;
     /// <summary>Slidev decks: serve viewers (anyone but the owner) a build variant without speaker notes.</summary>
     public bool StripNotesForViewers { get; init; } = true;
+    /// <summary>Trusted repositories only: allow npm lifecycle scripts while installing the deck's dependencies.</summary>
+    public bool NpmScripts { get; init; }
+    /// <summary>Public decks only: allow other sites to embed the deck in an iframe.</summary>
+    public bool AllowEmbedding { get; init; }
+    /// <summary>Register a service worker so the deck keeps working when the venue network drops.</summary>
+    public bool OfflineCache { get; init; } = true;
+    /// <summary>Hold Podium deployments while a live session of this deck is running (opt-in, see Session).</summary>
+    public bool HoldDeploysWhileLive { get; init; }
+    /// <summary>Id of the running live session, if any (denormalised for the library badge).</summary>
+    public string? LiveSessionId { get; init; }
     /// <summary>Commit SHA the deck content was last changed at.</summary>
     public string? LastCommitSha { get; init; }
     public DateTimeOffset? LastCommitAt { get; init; }
@@ -71,6 +81,10 @@ public sealed record Deck
     public bool CurrentHasPptx { get; init; }
     public bool CurrentHasThumbnail { get; init; }
     public bool CurrentHasPublicSite { get; init; }
+    public bool CurrentHasNotes { get; init; }
+    public bool CurrentHasText { get; init; }
+    public bool CurrentHasSlideSheet { get; init; }
+    public int CurrentSlideCount { get; init; }
     public string? LatestBuildId { get; init; }
     public BuildStatus? LatestBuildStatus { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -99,8 +113,15 @@ public sealed record Build
     public bool HasThumbnail { get; init; }
     /// <summary>A second site variant without speaker notes exists (site-public/).</summary>
     public bool HasPublicSite { get; init; }
+    public bool HasNotes { get; init; }
+    public bool HasText { get; init; }
+    public bool HasSlideSheet { get; init; }
+    /// <summary>Number of slides (pages) in the deck, when the builder could determine it.</summary>
+    public int SlideCount { get; init; }
     /// <summary>Features the deck uses that are not supported remotely (reported by the builder).</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
+    /// <summary>Deck-health findings (missing images, oversized assets...) with file positions; mirrored to GitHub check-run annotations.</summary>
+    public IReadOnlyList<BuildAnnotation> Annotations { get; init; } = [];
     public string? TriggeredBy { get; init; }
     /// <summary>Identity of the builder that produced this build (image digest or script hash); used to rebuild after builder upgrades.</summary>
     public string? BuilderVersion { get; init; }
@@ -123,6 +144,9 @@ public sealed record Grant
     public DateTimeOffset GrantedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
+/// <summary>A deck-health finding reported by the builder. Paths are repository-relative so they map onto check-run annotations.</summary>
+public sealed record BuildAnnotation(string Path, int Line, AnnotationLevel Level, string Message);
+
 /// <summary>Signed, revocable share link.</summary>
 public sealed record ShareLink
 {
@@ -133,6 +157,15 @@ public sealed record ShareLink
     public DateTimeOffset? ExpiresAt { get; init; }
     public bool Revoked { get; init; }
     public string? Label { get; init; }
+    /// <summary>PBKDF2 hash of an optional passcode visitors must enter once per browser; null = no passcode.</summary>
+    public string? PasscodeHash { get; init; }
+    /// <summary>Maximum number of browsers that may open the link (counted when the share cookie is issued); null = unlimited.</summary>
+    public int? MaxUses { get; init; }
+    /// <summary>How many times the link was opened (share cookie issued).</summary>
+    public int Opens { get; init; }
+    public DateTimeOffset? LastOpenedAt { get; init; }
+    /// <summary>Live session this link was minted for; the link dies with the session.</summary>
+    public string? SessionId { get; init; }
 }
 
 public sealed record ViewEvent
@@ -142,4 +175,67 @@ public sealed record ViewEvent
     public required ArtifactKind Artifact { get; init; }
     public DateTimeOffset At { get; init; } = DateTimeOffset.UtcNow;
     public bool Presenter { get; init; }
+    /// <summary>Share link the viewer came through, when access was granted by a link.</summary>
+    public string? LinkId { get; init; }
+}
+
+/// <summary>
+/// A live presentation of a deck: explicitly started and ended by the owner. While running, the deck is frozen, a
+/// join link exists and the sync hub records navigation so a pacing recap can be written at the end.
+/// </summary>
+public sealed record Session
+{
+    public required string Id { get; init; }
+    public required string DeckSlug { get; init; }
+    public DateTimeOffset StartedAt { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? EndedAt { get; init; }
+    /// <summary>Planned talk length; drives the remote's countdown and the auto-end grace period.</summary>
+    public int? PlannedMinutes { get; init; }
+    public bool HoldDeploys { get; init; }
+    /// <summary>Join link minted for the session (revoked when it ends).</summary>
+    public string? LinkId { get; init; }
+    /// <summary>Whether the deck was frozen by the session start (and should be unfrozen at the end).</summary>
+    public bool FrozeDeck { get; init; }
+    public string? Title { get; init; }
+    public DateTimeOffset? LastPresenterSeenAt { get; init; }
+    /// <summary>Why the session ended: manual, idle, overtime, cap.</summary>
+    public string? EndReason { get; init; }
+    public SessionRecap? Recap { get; init; }
+}
+
+/// <summary>Pacing data computed when a session ends.</summary>
+public sealed record SessionRecap(
+    int DurationSeconds,
+    int PeakViewers,
+    int SlidesVisited,
+    /// <summary>Seconds spent per slide index (1-based keys), summed over revisits.</summary>
+    IReadOnlyDictionary<int, int> SecondsPerSlide,
+    int? LastSlide);
+
+/// <summary>A signed-in visitor asking for access to a Shared/Private deck.</summary>
+public sealed record AccessRequest
+{
+    public required string DeckSlug { get; init; }
+    /// <summary>Principal id, e.g. "github:1234567".</summary>
+    public required string Principal { get; init; }
+    public string? DisplayName { get; init; }
+    public string? Message { get; init; }
+    public DateTimeOffset RequestedAt { get; init; } = DateTimeOffset.UtcNow;
+    public AccessRequestStatus Status { get; init; } = AccessRequestStatus.Pending;
+    public DateTimeOffset? DecidedAt { get; init; }
+}
+
+/// <summary>Who changed what, when. Written by every mutating owner action.</summary>
+public sealed record AuditEntry
+{
+    public required string Id { get; init; }
+    public DateTimeOffset At { get; init; } = DateTimeOffset.UtcNow;
+    /// <summary>Actor principal ("github:123") or "system" for automatic actions.</summary>
+    public required string Actor { get; init; }
+    /// <summary>Verb-object, e.g. "deck.visibility", "link.create", "grant.delete", "session.start".</summary>
+    public required string Action { get; init; }
+    /// <summary>Deck slug or other subject the action applied to.</summary>
+    public string? Target { get; init; }
+    public string? Details { get; init; }
+    public string? Ip { get; init; }
 }

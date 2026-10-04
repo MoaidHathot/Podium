@@ -424,6 +424,26 @@ public class DeckSyncServiceTests
     }
 
     [Fact]
+    public async Task Build_report_extras_are_recorded_and_annotations_are_capped_and_truncated()
+    {
+        await _sync.SyncAsync(_source);
+        var started = _runner.Started.Single(s => s.Deck.Slug == "slides-agents");
+        var annotations = Enumerable.Range(0, 80).Select(i => new BuildAnnotation(new string('p', 1000), -5, AnnotationLevel.Warning, new string('m', 2000))).ToList();
+        var report = new BuildReport(true, true, true, false, null, null, HasThumbnail: true, HasPublicSite: true, HasNotes: true, HasText: true, HasSlideSheet: true, SlideCount: 999999, Annotations: annotations);
+        Assert.True(await _buildService.CompleteAsync("slides-agents", started.Build.Id, started.CallbackToken, report));
+
+        var build = (await _builds.GetAsync("slides-agents", started.Build.Id))!;
+        Assert.True(build.HasNotes && build.HasText && build.HasSlideSheet);
+        Assert.Equal(10000, build.SlideCount);
+        Assert.Equal(50, build.Annotations.Count);
+        Assert.All(build.Annotations, a => { Assert.Equal(300, a.Path.Length); Assert.Equal(500, a.Message.Length); Assert.Equal(1, a.Line); });
+
+        var deck = (await _decks.GetAsync("slides-agents"))!;
+        Assert.True(deck.CurrentHasNotes && deck.CurrentHasText && deck.CurrentHasSlideSheet);
+        Assert.Equal(10000, deck.CurrentSlideCount);
+    }
+
+    [Fact]
     public async Task Concurrency_cap_holds_builds_in_the_queue_and_dispatches_as_slots_free_up()
     {
         var opts = new BuildOptions { PublicBaseUrl = new Uri("https://x.test"), MaxConcurrentBuilds = 1 };

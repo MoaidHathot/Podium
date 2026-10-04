@@ -42,6 +42,10 @@ if (string.Equals(storage.ConnectionString, "memory", StringComparison.OrdinalIg
     builder.Services.AddSingleton<IGrantStore, InMemoryGrantStore>();
     builder.Services.AddSingleton<IShareLinkStore, InMemoryShareLinkStore>();
     builder.Services.AddSingleton<IViewHistoryStore, InMemoryViewHistoryStore>();
+    builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
+    builder.Services.AddSingleton<IAccessRequestStore, InMemoryAccessRequestStore>();
+    builder.Services.AddSingleton<IAuditStore, InMemoryAuditStore>();
+    builder.Services.AddSingleton<ISettingsStore, InMemorySettingsStore>();
     builder.Services.AddSingleton<IArtifactStore, LocalArtifactStore>();
 }
 else
@@ -65,6 +69,10 @@ else
     builder.Services.AddSingleton<IGrantStore, TableGrantStore>();
     builder.Services.AddSingleton<IShareLinkStore, TableShareLinkStore>();
     builder.Services.AddSingleton<IViewHistoryStore, TableViewHistoryStore>();
+    builder.Services.AddSingleton<ISessionStore, TableSessionStore>();
+    builder.Services.AddSingleton<IAccessRequestStore, TableAccessRequestStore>();
+    builder.Services.AddSingleton<IAuditStore, TableAuditStore>();
+    builder.Services.AddSingleton<ISettingsStore, TableSettingsStore>();
     builder.Services.AddSingleton<IArtifactStore, BlobArtifactStore>();
 
     // Data protection keys (cookie encryption) must survive restarts and scale-out. In production the key ring is

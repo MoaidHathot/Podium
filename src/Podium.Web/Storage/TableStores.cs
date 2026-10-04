@@ -323,6 +323,25 @@ public sealed class TableViewHistoryStore(TableClients tables) : IViewHistorySto
         await byDeck.UpsertEntityAsync(new TableEntity(e.DeckSlug, TableJson.InvertedTicks(e.At) + "_" + TableJson.Key(e.Principal)) { ["Json"] = TableJson.Serialize(e) }, TableUpdateMode.Replace, ct);
     }
 
+    /// <summary>
+    /// One-off: the per-deck copy was introduced after views had been recorded; copy every historical view over so the
+    /// analytics panel is complete. Idempotent (upserts), bounded by the size of the views table.
+    /// </summary>
+    public async Task<int> BackfillDeckViewsAsync(CancellationToken ct = default)
+    {
+        var all = await tables.GetAsync(Table, ct);
+        var byDeck = await tables.GetAsync(DeckViewsTable, ct);
+        var copied = 0;
+        await foreach (var e in all.QueryAsync<TableEntity>(cancellationToken: ct))
+        {
+            var v = TableJson.Deserialize<ViewEvent>(e);
+            if (v is null) continue;
+            await byDeck.UpsertEntityAsync(new TableEntity(v.DeckSlug, TableJson.InvertedTicks(v.At) + "_" + TableJson.Key(v.Principal)) { ["Json"] = TableJson.Serialize(v) }, TableUpdateMode.Replace, ct);
+            copied++;
+        }
+        return copied;
+    }
+
     public async Task<IReadOnlyList<ViewEvent>> RecentForDeckAsync(string deckSlug, int take = 100, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(DeckViewsTable, ct);
@@ -374,5 +393,169 @@ public sealed class TableViewHistoryStore(TableClients tables) : IViewHistorySto
             if (e.GetDateTimeOffset("At") is { } at) result[e.RowKey] = at;
         }
         return result;
+    }
+}
+
+public sealed class TableSessionStore(TableClients tables) : ISessionStore
+{
+    private const string Table = "sessions";
+    private const string LiveTable = "livesessions";
+
+    public async Task<Session?> GetAsync(string deckSlug, string id, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try
+        {
+            var e = await t.GetEntityAsync<TableEntity>(deckSlug, id, cancellationToken: ct);
+            return TableJson.Deserialize<Session>(e.Value);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+    }
+
+    public async Task<IReadOnlyList<Session>> ListForDeckAsync(string deckSlug, int take = 20, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var list = new List<Session>();
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey == deckSlug, cancellationToken: ct))
+        {
+            var s = TableJson.Deserialize<Session>(e);
+            if (s is not null) list.Add(s);
+        }
+        return list.OrderByDescending(s => s.StartedAt).Take(take).ToList();
+    }
+
+    // Live sessions are mirrored into a tiny table so the deploy guard and the auto-end sweep never scan history.
+    public async Task<IReadOnlyList<Session>> ListLiveAsync(CancellationToken ct = default)
+    {
+        var live = await tables.GetAsync(LiveTable, ct);
+        var list = new List<Session>();
+        await foreach (var e in live.QueryAsync<TableEntity>(cancellationToken: ct))
+        {
+            var s = TableJson.Deserialize<Session>(e);
+            if (s is { EndedAt: null }) list.Add(s);
+        }
+        return list.OrderBy(s => s.StartedAt).ToList();
+    }
+
+    public async Task UpsertAsync(Session session, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await t.UpsertEntityAsync(new TableEntity(session.DeckSlug, session.Id) { ["Json"] = TableJson.Serialize(session), ["Live"] = session.EndedAt is null }, TableUpdateMode.Replace, ct);
+        var live = await tables.GetAsync(LiveTable, ct);
+        if (session.EndedAt is null)
+            await live.UpsertEntityAsync(new TableEntity(session.DeckSlug, session.Id) { ["Json"] = TableJson.Serialize(session) }, TableUpdateMode.Replace, ct);
+        else
+        {
+            try { await live.DeleteEntityAsync(session.DeckSlug, session.Id, cancellationToken: ct); }
+            catch (RequestFailedException ex) when (ex.Status == 404) { }
+        }
+    }
+}
+
+public sealed class TableAccessRequestStore(TableClients tables) : IAccessRequestStore
+{
+    private const string Table = "accessrequests";
+
+    public async Task<AccessRequest?> GetAsync(string deckSlug, string principal, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try
+        {
+            var e = await t.GetEntityAsync<TableEntity>(deckSlug, TableJson.Key(principal), cancellationToken: ct);
+            return TableJson.Deserialize<AccessRequest>(e.Value);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+    }
+
+    public async Task<IReadOnlyList<AccessRequest>> ListForDeckAsync(string deckSlug, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var list = new List<AccessRequest>();
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey == deckSlug, cancellationToken: ct))
+        {
+            var r = TableJson.Deserialize<AccessRequest>(e);
+            if (r is not null) list.Add(r);
+        }
+        return list.OrderByDescending(r => r.RequestedAt).ToList();
+    }
+
+    public async Task<IReadOnlyList<AccessRequest>> ListPendingAsync(CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var list = new List<AccessRequest>();
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.GetBoolean("Pending") == true, cancellationToken: ct))
+        {
+            var r = TableJson.Deserialize<AccessRequest>(e);
+            if (r is { Status: AccessRequestStatus.Pending }) list.Add(r);
+        }
+        return list.OrderByDescending(r => r.RequestedAt).ToList();
+    }
+
+    public async Task UpsertAsync(AccessRequest request, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await t.UpsertEntityAsync(new TableEntity(request.DeckSlug, TableJson.Key(request.Principal)) { ["Json"] = TableJson.Serialize(request), ["Pending"] = request.Status == AccessRequestStatus.Pending }, TableUpdateMode.Replace, ct);
+    }
+
+    public async Task DeleteAsync(string deckSlug, string principal, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try { await t.DeleteEntityAsync(deckSlug, TableJson.Key(principal), cancellationToken: ct); }
+        catch (RequestFailedException ex) when (ex.Status == 404) { }
+    }
+}
+
+public sealed class TableAuditStore(TableClients tables) : IAuditStore
+{
+    private const string Table = "audit";
+
+    // Two copies: one global timeline (partition "all") and one per target, both newest-first by inverted ticks.
+    public async Task AppendAsync(AuditEntry entry, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var row = TableJson.InvertedTicks(entry.At) + "_" + entry.Id;
+        var json = TableJson.Serialize(entry);
+        await t.UpsertEntityAsync(new TableEntity("all", row) { ["Json"] = json }, TableUpdateMode.Replace, ct);
+        if (!string.IsNullOrEmpty(entry.Target))
+            await t.UpsertEntityAsync(new TableEntity("t_" + TableJson.Key(entry.Target), row) { ["Json"] = json }, TableUpdateMode.Replace, ct);
+    }
+
+    public async Task<IReadOnlyList<AuditEntry>> RecentAsync(string? target = null, int take = 50, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var pk = target is null ? "all" : "t_" + TableJson.Key(target);
+        var list = new List<AuditEntry>();
+        await foreach (var page in t.QueryAsync<TableEntity>(x => x.PartitionKey == pk, maxPerPage: take, cancellationToken: ct).AsPages())
+        {
+            foreach (var e in page.Values)
+            {
+                var a = TableJson.Deserialize<AuditEntry>(e);
+                if (a is not null) list.Add(a);
+            }
+            if (list.Count >= take) break;
+        }
+        return list.OrderByDescending(a => a.At).Take(take).ToList();
+    }
+}
+
+public sealed class TableSettingsStore(TableClients tables) : ISettingsStore
+{
+    private const string Table = "settings";
+
+    public async Task<string?> GetAsync(string key, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try
+        {
+            var e = await t.GetEntityAsync<TableEntity>("setting", TableJson.Key(key), cancellationToken: ct);
+            return e.Value.GetString("Value");
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+    }
+
+    public async Task SetAsync(string key, string value, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await t.UpsertEntityAsync(new TableEntity("setting", TableJson.Key(key)) { ["Value"] = value }, TableUpdateMode.Replace, ct);
     }
 }
