@@ -33,6 +33,19 @@ test('duplicate errors collapse and unrelated output yields nothing', () => {
   assert.deepEqual(parsePresentermErrors('all good', 'x', 'main.md'), []);
 });
 
+test('stdout progress lines interleaved between the error and its caret line do not hide the message', () => {
+  const out = [
+    '\u001b[mfailed to build presentation: error at main.md:34:1:',
+    'exporting using rows=30, columns=120, width=2400, height=1200',
+    '\u001b[m34 | \u001b[m![](ev2-release-demo/slide1.png)',
+    'waiting for images to be generated and code to be executed, if any...',
+    "\u001b[m   | \u001b[m\u001b[m^ could not load image 'ev2-release-demo/slide1.png': No such file or directory (os error 2)\u001b[m",
+  ].join('\n');
+  const f = parsePresentermErrors(out, 'deck', 'main.md');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].message, "could not load image 'ev2-release-demo/slide1.png': No such file or directory (os error 2)");
+});
+
 test('annotations from deck output are normalised and bounded', () => {
   assert.equal(normalizeAnnotation(null), null);
   assert.equal(normalizeAnnotation({ path: 'a', line: 1 }), null);

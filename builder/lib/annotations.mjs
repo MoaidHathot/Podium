@@ -31,7 +31,8 @@ export function parsePresentermErrors(output, deckPath, entry) {
     seen.add(key);
     findings.push({ path: deckPath ? `${deckPath}/${file}` : file, line, level, message });
   };
-  // Output shape (each line may be prefixed by a "[timestamp]  " from the build log):
+  // Output shape (each line may be prefixed by a "[timestamp]  " from the build log; stdout progress lines such as
+  // "exporting using rows=30..." can interleave with these stderr lines, so scan ahead rather than stop):
   //   failed to build presentation: error at main.md:34:1:
   //   34 | ![](ev2-release-demo/slide1.png)          <- source echo (optional)
   //      | ^ could not load image '...': ...          <- the message, after the caret
@@ -40,11 +41,14 @@ export function parsePresentermErrors(output, deckPath, entry) {
     const m = /error at ([^\s:]+):(\d+):\d+:?\s*(.*)$/.exec(lines[i]);
     if (!m) continue;
     let detail = (m[3] || '').trim();
-    for (let j = i + 1; j < Math.min(lines.length, i + 4) && !detail; j++) {
+    for (let j = i + 1; j < Math.min(lines.length, i + 10) && !detail; j++) {
       const caret = /^\s*\|\s*\^\s*(.+)$/.exec(lines[j]);        // "   | ^ message"
       if (caret) { detail = caret[1].trim(); break; }
-      if (/^\s*\d+\s*\|/.test(lines[j])) continue;               // "34 | <source>": skip the echo
-      if (lines[j].trim() && !/^\s*\|/.test(lines[j])) break;    // unrelated output
+      if (/error at [^\s:]+:\d+:\d+/.test(lines[j])) break;      // next error: this one had no caret line
+    }
+    if (!detail) {
+      const img = /could not load image '([^']+)'[^\n]*/.exec(lines.slice(i, i + 10).join('\n'));
+      if (img) detail = img[0].trim();
     }
     push(m[1], Number(m[2]), 'failure', detail || 'presenterm could not render this slide');
   }
