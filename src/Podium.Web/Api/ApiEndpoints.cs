@@ -69,7 +69,7 @@ public static partial class ApiEndpoints
         }).RequireRateLimiting("probe");
 
         // ----- Owner only -----
-        var owner = app.MapGroup("/api").RequireAuthorization(PodiumClaims.OwnerPolicy).AddEndpointFilter<RequestHeaderFilter>();
+        var owner = app.MapGroup("/api").RequireAuthorization(PodiumClaims.OwnerPolicy).AddEndpointFilter<RequestHeaderFilter>().AddEndpointFilter<AuditFilter>();
 
         owner.MapGet("/decks", async (IDeckStore decks, IBuildStore builds, CancellationToken ct) =>
         {
@@ -209,6 +209,9 @@ public static partial class ApiEndpoints
         });
 
         owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
+
+        // Audit trail (owner only): newest first, optionally for one deck.
+        owner.MapGet("/activity", async (string? target, IAuditStore audit, CancellationToken ct) => Results.Ok(await audit.RecentAsync(string.IsNullOrWhiteSpace(target) ? null : target, 100, ct)));
 
         // Full-text search across slide text (owner only; the index lives in memory).
         owner.MapGet("/search", (string? q, DeckSearchIndex search) =>
@@ -379,6 +382,40 @@ public static partial class ApiEndpoints
 public sealed record SourceRequest(string Owner, string Repo, string? Ref);
 
 /// <summary>Rejects mutating requests that lack the custom header (CSRF defence in depth on top of SameSite cookies).</summary>
+/// <summary>
+/// Records every successful mutating owner API call in the audit log: action = method + route template (e.g.
+/// "PATCH /api/decks/{slug}"), target = the slug when the route has one, details = a compact JSON view of the
+/// request body (bounded; passcodes are never logged).
+/// </summary>
+public sealed class AuditFilter : IEndpointFilter
+{
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var http = context.HttpContext;
+        var result = await next(context);
+        if (HttpMethods.IsGet(http.Request.Method) || HttpMethods.IsHead(http.Request.Method)) return result;
+        var status = result switch { IStatusCodeHttpResult s => s.StatusCode ?? 200, _ => 200 };
+        if (status is < 200 or >= 300) return result;
+        var route = http.GetEndpoint()?.Metadata.GetMetadata<Microsoft.AspNetCore.Routing.RouteNameMetadata>()?.RouteName
+                    ?? (http.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? http.Request.Path.Value;
+        var target = http.Request.RouteValues.TryGetValue("slug", out var slug) ? slug?.ToString() : http.Request.RouteValues.TryGetValue("sourceOwner", out var so) && http.Request.RouteValues.TryGetValue("sourceRepo", out var sr) ? $"{so}/{sr}" : null;
+        string? details = null;
+        foreach (var arg in context.Arguments)
+        {
+            if (arg is null || arg is HttpContext || arg is CancellationToken || arg is string || arg.GetType().Namespace?.StartsWith("Podium.Core.Abstractions", StringComparison.Ordinal) == true) continue;
+            if (arg.GetType().IsClass && arg.GetType().Namespace == "Podium.Web.Api" || arg.GetType().Name.EndsWith("Request", StringComparison.Ordinal) || arg.GetType().Name.EndsWith("Patch", StringComparison.Ordinal))
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(arg, arg.GetType(), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+                details = System.Text.RegularExpressions.Regex.Replace(json, "\"passcode\":\"[^\"]*\"", "\"passcode\":\"***\"");
+                break;
+            }
+        }
+        if (http.Request.QueryString.HasValue) details = (details is null ? "" : details + " ") + http.Request.QueryString.Value;
+        await http.RequestServices.GetRequiredService<AuditService>().RecordAsync(http, $"{http.Request.Method} {route}", target, details);
+        return result;
+    }
+}
+
 public sealed class RequestHeaderFilter : IEndpointFilter
 {
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)

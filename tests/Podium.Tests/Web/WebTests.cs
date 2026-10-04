@@ -314,6 +314,43 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
     }
 
     [Fact]
+    public async Task Sign_out_everywhere_invalidates_existing_sessions_and_mutations_are_audited()
+    {
+        var deck = await app.SeedDeckAsync("audit-deck");
+        var a = await app.OwnerClientAsync();
+        var b = await app.OwnerClientAsync(); // second browser
+        Assert.Equal(HttpStatusCode.OK, (await a.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { pinned = true, tags = new[] { "x" } }))).StatusCode);
+
+        var activity = await a.GetFromJsonAsync<JsonElement>($"/api/activity?target={deck.Slug}");
+        var entry = activity.EnumerateArray().First();
+        Assert.Equal("PATCH /api/decks/{slug}", entry.GetProperty("action").GetString());
+        Assert.Equal(deck.Slug, entry.GetProperty("target").GetString());
+        Assert.Contains("\"pinned\":true", entry.GetProperty("details").GetString());
+        Assert.StartsWith("github:", entry.GetProperty("actor").GetString());
+
+        // Passcodes never reach the audit trail.
+        await a.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", passcode = "s3cret-pass" }));
+        var all = await a.GetFromJsonAsync<JsonElement>("/api/activity");
+        Assert.DoesNotContain("s3cret-pass", all.ToString());
+        var linkEntry = all.EnumerateArray().First(e => e.GetProperty("action").GetString() == "POST /api/decks/{slug}/links");
+        Assert.Contains("\"passcode\":\"***\"", linkEntry.GetProperty("details").GetString());
+
+        // Guests cannot read the trail or sign everyone out.
+        var guest = await app.GuestClientAsync();
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.GetAsync("/api/activity")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsync("/api/security/sign-out-everywhere", null)).StatusCode);
+
+        // Sign out everywhere from browser A: B's cookie (issued earlier) is dead on its next request.
+        await Task.Delay(1100); // the stamp has second precision relative to ticket issue times
+        Assert.Equal(HttpStatusCode.OK, (await a.PostAsync("/api/security/sign-out-everywhere", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await b.GetAsync("/api/decks")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await a.GetAsync("/api/decks")).StatusCode);
+        // A fresh login works again.
+        var c = await app.OwnerClientAsync();
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync("/api/decks")).StatusCode);
+    }
+
+    [Fact]
     public async Task Builder_report_requires_a_valid_callback_token()
     {
         var deck = await app.SeedDeckAsync("report-deck");

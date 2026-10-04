@@ -1,0 +1,32 @@
+@page "/activity"
+@model Podium.Web.Pages.ActivityModel
+@{ ViewData["Title"] = "Activity"; }
+<div class="row-between" style="margin-bottom:1rem">
+    <div><h1>Activity</h1><p class="muted" style="margin:0">Every change made through Podium: who, what, when, from where. Newest first.</p></div>
+    <a class="btn" href="/">Library</a>
+</div>
+@if (Model.Entries.Count == 0)
+{
+    <div class="empty section"><h3>Nothing yet</h3><p>Changes you make to decks, grants, links and sessions show up here.</p></div>
+}
+else
+{
+<section class="panel">
+    <table class="table">
+        <thead><tr><th>When</th><th>Who</th><th>What</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
+        <tbody>
+        @foreach (var a in Model.Entries)
+        {
+            <tr>
+                <td><time datetime="@a.At.UtcDateTime.ToString("o")">@a.At.ToString("g")</time></td>
+                <td class="mono">@a.Actor</td>
+                <td class="mono">@a.Action</td>
+                <td>@if (a.Target is not null) { <a href="/decks/@a.Target" class="mono">@a.Target</a> }</td>
+                <td class="faint" style="font-size:.8rem; max-width:30rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="@a.Details">@a.Details</td>
+                <td class="mono faint">@a.Ip</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+}

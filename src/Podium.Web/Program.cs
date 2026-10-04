@@ -140,6 +140,8 @@ builder.Services.AddSingleton<InstallationDiscovery>();
 builder.Services.AddSingleton<GitHubWebhookHandler>();
 builder.Services.AddHostedService<MaintenanceService>();
 builder.Services.AddSingleton<CallerResolver>();
+builder.Services.AddSingleton<SecurityStamp>();
+builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<ViewTokenService>();
 builder.Services.AddSingleton<DeckAccessService>();
 builder.Services.AddSingleton<Podium.Web.Sync.SyncHub>();
@@ -173,6 +175,16 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
             if (galleryEnabled && ctx.Request.Path == "/") { ctx.Response.Redirect("/gallery" + ctx.Request.QueryString); return Task.CompletedTask; }
             ctx.Response.Redirect(ctx.RedirectUri);
             return Task.CompletedTask;
+        };
+        // "Sign out everywhere": tickets issued before the security stamp are rejected and the cookie cleared.
+        o.Events.OnValidatePrincipal = async ctx =>
+        {
+            var stamp = ctx.HttpContext.RequestServices.GetRequiredService<SecurityStamp>();
+            if (!await stamp.IsTicketValidAsync(ctx.Properties.IssuedUtc, ctx.HttpContext.RequestAborted))
+            {
+                ctx.RejectPrincipal();
+                await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            }
         };
     });
 
@@ -298,6 +310,14 @@ app.MapPost("/logout", async (HttpContext http, Microsoft.AspNetCore.Antiforgery
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login");
 });
+// Owner only (policy on the group): invalidates every session cookie, including this one.
+app.MapPost("/api/security/sign-out-everywhere", async (HttpContext http, SecurityStamp stamp, AuditService audit, CancellationToken ct) =>
+{
+    await audit.RecordAsync(http, "security.sign-out-everywhere", null);
+    await stamp.BumpAsync(ct);
+    await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Ok(new { ok = true });
+}).RequireAuthorization(PodiumClaims.OwnerPolicy).AddEndpointFilter<Podium.Web.Api.RequestHeaderFilter>();
 
 if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin"))
 {

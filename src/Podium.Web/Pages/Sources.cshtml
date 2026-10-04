@@ -67,10 +67,20 @@
     </section>
 }
 
+<section class="panel" style="margin-top:1rem">
+    <h3>Security</h3>
+    <p class="hint">Lost a device, or a session looks off? Signing out everywhere invalidates every Podium session cookie at once (including this one); share links and the GitHub App are unaffected.</p>
+    <button class="btn btn-danger btn-sm" id="sign-out-everywhere">Sign out everywhere</button>
+</section>
+
 @section Scripts {
 <script nonce="@Podium.Web.Security.Csp.Nonce(HttpContext)">
 (function () {
   const { api, toast } = Podium;
+  document.getElementById('sign-out-everywhere').addEventListener('click', async () => {
+    if (!confirm('Sign out every browser, including this one?')) return;
+    try { await api('POST', '/api/security/sign-out-everywhere'); location.href = '/login'; } catch (e) { toast(e.message, 'error'); }
+  });
   document.getElementById('refresh').addEventListener('click', async (e) => {
     e.target.disabled = true;
     try { const r = await api('POST', '/api/installations/refresh'); toast(`Installations refreshed (${r.added} new)`, 'ok'); setTimeout(() => location.reload(), 800); }
