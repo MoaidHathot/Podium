@@ -145,15 +145,19 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
         o.LoginPath = "/login";
         o.AccessDeniedPath = "/denied";
         o.ReturnUrlParameter = "returnUrl";
+        // With the public gallery on, "/" is a portfolio for everyone who is not the owner (anonymous or signed in).
+        var galleryEnabled = config.GetValue<bool>("Podium:PublicGallery");
         o.Events.OnRedirectToLogin = ctx =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api")) { ctx.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; }
+            if (galleryEnabled && ctx.Request.Path == "/") { ctx.Response.Redirect("/gallery" + ctx.Request.QueryString); return Task.CompletedTask; }
             ctx.Response.Redirect(ctx.RedirectUri);
             return Task.CompletedTask;
         };
         o.Events.OnRedirectToAccessDenied = ctx =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api")) { ctx.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; }
+            if (galleryEnabled && ctx.Request.Path == "/") { ctx.Response.Redirect("/gallery" + ctx.Request.QueryString); return Task.CompletedTask; }
             ctx.Response.Redirect(ctx.RedirectUri);
             return Task.CompletedTask;
         };
@@ -199,6 +203,7 @@ builder.Services.AddRazorPages(o =>
     o.Conventions.AllowAnonymousToPage("/Login");
     o.Conventions.AllowAnonymousToPage("/Denied");
     o.Conventions.AllowAnonymousToPage("/Shared");
+    o.Conventions.AllowAnonymousToPage("/Gallery");
     o.Conventions.AllowAnonymousToPage("/Error");
 });
 builder.Services.AddHttpContextAccessor();

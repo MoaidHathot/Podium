@@ -32,6 +32,15 @@ public sealed class PodiumOptions
 
     /// <summary>Allow adding public repositories that the owner does not control.</summary>
     public bool AllowExternalSources { get; set; } = true;
+
+    /// <summary>
+    /// Show a gallery of Public decks to visitors who are not the owner (anonymous or signed in) at "/". Off by
+    /// default: a fresh deployment stays login-only until the owner decides to publish a portfolio.
+    /// </summary>
+    public bool PublicGallery { get; set; }
+
+    /// <summary>Optional name shown as the gallery headline (defaults to "Decks").</summary>
+    public string? GalleryTitle { get; set; }
 }
 
 public sealed class GitHubOptions

@@ -17,7 +17,7 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
     public async Task Anonymous_ui_redirects_to_login_and_api_returns_401()
     {
         var c = app.Client();
-        var ui = await c.SendAsync(PodiumWebFactory.Navigation("/"));
+        var ui = await c.SendAsync(PodiumWebFactory.Navigation("/sources"));
         Assert.Equal(HttpStatusCode.Redirect, ui.StatusCode);
         Assert.StartsWith("/login", PathOf(ui.Headers.Location!));
         var api = await c.GetAsync("/api/decks");
@@ -25,10 +25,46 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
     }
 
     [Fact]
+    public async Task Public_gallery_lists_only_public_decks_and_routes_non_owners_to_it()
+    {
+        var pub = await app.SeedDeckAsync("gallery-public", Visibility.Public);
+        await app.Services.GetRequiredService<IDeckStore>().UpsertAsync(pub with { Tags = ["ai", "talk"], Description = "A public talk" });
+        var priv = await app.SeedDeckAsync("gallery-private");
+        var shared = await app.SeedDeckAsync("gallery-shared", Visibility.Shared);
+
+        var anon = app.Client();
+        var root = await anon.SendAsync(PodiumWebFactory.Navigation("/"));
+        Assert.Equal(HttpStatusCode.Redirect, root.StatusCode);
+        Assert.Equal("/gallery", PathOf(root.Headers.Location!));
+        var gallery = await anon.SendAsync(PodiumWebFactory.Navigation("/gallery"));
+        Assert.Equal(HttpStatusCode.OK, gallery.StatusCode);
+        var html = await gallery.Content.ReadAsStringAsync();
+        Assert.Contains($"/d/{pub.Slug}/", html);
+        Assert.DoesNotContain(priv.Slug, html);
+        Assert.DoesNotContain(shared.Slug, html);
+        Assert.Contains("og:title", html);
+        Assert.Contains("#ai", html);
+        Assert.Contains("Sign in", html);
+
+        var tagged = await anon.SendAsync(PodiumWebFactory.Navigation("/gallery?tag=nope"));
+        Assert.DoesNotContain($"/d/{pub.Slug}/", await tagged.Content.ReadAsStringAsync());
+
+        var guest = await app.GuestClientAsync(990001);
+        var guestRoot = await guest.SendAsync(PodiumWebFactory.Navigation("/"));
+        Assert.Equal("/gallery", PathOf(guestRoot.Headers.Location!));
+        Assert.Contains("shared with me", await (await guest.SendAsync(PodiumWebFactory.Navigation("/gallery"))).Content.ReadAsStringAsync());
+
+        var owner = await app.OwnerClientAsync();
+        Assert.Equal(HttpStatusCode.OK, (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).StatusCode); // library
+        var ownerGallery = await owner.SendAsync(PodiumWebFactory.Navigation("/gallery"));
+        Assert.Equal(HttpStatusCode.Redirect, ownerGallery.StatusCode); // owner lands in the library instead
+    }
+
+    [Fact]
     public async Task Signed_in_non_owner_is_denied_everywhere_the_owner_goes()
     {
         var guest = await app.GuestClientAsync();
-        var ui = await guest.SendAsync(PodiumWebFactory.Navigation("/"));
+        var ui = await guest.SendAsync(PodiumWebFactory.Navigation("/sources"));
         Assert.Equal(HttpStatusCode.Redirect, ui.StatusCode);
         Assert.StartsWith("/denied", PathOf(ui.Headers.Location!));
         Assert.Equal(HttpStatusCode.Forbidden, (await guest.GetAsync("/api/decks")).StatusCode);

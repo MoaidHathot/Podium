@@ -36,6 +36,7 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
         builder.UseSetting("Podium:OwnerGitHubId", OwnerId.ToString());
         builder.UseSetting("Podium:SigningKey", Convert.ToBase64String(Encoding.UTF8.GetBytes("integration-test-signing-key-0123456789")));
         builder.UseSetting("Auth:AllowDevLogin", "true");
+        builder.UseSetting("Podium:PublicGallery", "true");
         builder.UseSetting("GitHub:WebhookSecret", "whsec-test");
         builder.UseSetting("GitHub:Token", "");
         builder.UseSetting("GitHub:AppId", "0");

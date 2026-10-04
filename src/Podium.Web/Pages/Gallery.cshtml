@@ -1,0 +1,82 @@
+@page "/gallery"
+@model Podium.Web.Pages.GalleryModel
+@{
+    ViewData["Title"] = Model.Title;
+    var description = $"{Model.Decks.Count} public deck{(Model.Decks.Count == 1 ? "" : "s")}";
+}
+@section Head {
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="@Model.Title" />
+    <meta property="og:description" content="@description" />
+    <meta property="og:url" content="@Model.Origin/" />
+    @if (Model.Decks.FirstOrDefault(d => d.CurrentHasThumbnail && d.Visibility == Visibility.Public) is { } first)
+    {
+        <meta property="og:image" content="@Model.Origin/d/@(first.Slug).jpg?v=@first.CurrentBuildId" />
+        <meta name="twitter:card" content="summary_large_image" />
+    }
+}
+<div class="row-between" style="margin-bottom:1rem; flex-wrap:wrap; gap:.6rem">
+    <div>
+        <h1>@Model.Title</h1>
+        <p class="muted" style="margin:0">@description@(Model.Tag is not null ? $" tagged \"{Model.Tag}\"" : "")</p>
+    </div>
+    @if (Model.Caller.IsAuthenticated)
+    {
+        <a class="btn" href="/shared">Decks shared with me</a>
+    }
+    else
+    {
+        <a class="btn" href="/login" title="Sign in to see decks shared with you">Sign in</a>
+    }
+</div>
+
+@if (Model.Tags.Count > 0)
+{
+    <div class="row" style="flex-wrap:wrap; gap:.4rem; margin-bottom:1rem">
+        <a class="chip @(Model.Tag is null ? "active" : "")" href="/gallery">All</a>
+        @foreach (var t in Model.Tags)
+        {
+            <a class="chip @(string.Equals(Model.Tag, t, StringComparison.OrdinalIgnoreCase) ? "active" : "")" href="/gallery?tag=@Uri.EscapeDataString(t)">#@t</a>
+        }
+    </div>
+}
+
+@if (Model.Decks.Count == 0)
+{
+    <div class="empty section">
+        <h3>Nothing public yet</h3>
+        <p>Decks appear here once their owner makes them public.</p>
+    </div>
+}
+else
+{
+    <div class="grid section">
+    @foreach (var d in Model.Decks)
+    {
+        var canSite = d.Visibility == Visibility.Public;
+        <article class="card">
+            @if (canSite && d.CurrentHasThumbnail)
+            {
+                <a class="card-thumb" href="/d/@d.Slug/" tabindex="-1"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId" alt="" loading="lazy" /></a>
+            }
+            <div class="card-body">
+                <div class="card-title">@d.Title</div>
+                @if (d.Author is not null || d.LastCommitAt is not null)
+                {
+                    <div class="card-sub">@d.Author@(d.Author is not null && d.LastCommitAt is not null ? " · " : "")@(d.LastCommitAt?.ToString("MMM yyyy"))</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(d.Description)) { <p class="muted" style="font-size:.85rem; margin:.3rem 0 0">@(d.Description.Length > 160 ? d.Description[..160] + "…" : d.Description)</p> }
+                @if (d.Tags.Count > 0)
+                {
+                    <div class="card-tags">@foreach (var t in d.Tags.Take(5)) { <a class="tag" href="/gallery?tag=@Uri.EscapeDataString(t)">#@t</a> }</div>
+                }
+                <div class="card-actions">
+                    @if (canSite) { <a class="btn btn-primary btn-sm" href="/d/@d.Slug/">Open</a> }
+                    @if (d.PdfVisibility == Visibility.Public && d.CurrentHasPdf) { <a class="btn btn-sm" href="/d/@(d.Slug).pdf">PDF</a> }
+                    @if (d.PptxVisibility == Visibility.Public && d.CurrentHasPptx) { <a class="btn btn-sm" href="/d/@(d.Slug).pptx">PPTX</a> }
+                </div>
+            </div>
+        </article>
+    }
+    </div>
+}

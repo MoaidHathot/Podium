@@ -15,6 +15,7 @@
     <title>@(ViewData["Title"] is string t && t.Length > 0 ? t + " · Podium" : "Podium")</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/css/podium.css" asp-append-version="true" />
+    @await RenderSectionAsync("Head", required: false)
 </head>
 <body>
     <header class="topbar">
