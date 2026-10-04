@@ -31,14 +31,26 @@ export function parsePresentermErrors(output, deckPath, entry) {
     seen.add(key);
     findings.push({ path: deckPath ? `${deckPath}/${file}` : file, line, level, message });
   };
-  const re = /error at ([^\s:]+):(\d+):\d+:?\s*\n?(?:\s*\|?\s*\^?\s*)?([^\n]*)/g;
-  let m;
-  while ((m = re.exec(text))) {
-    const detail = (m[3] || '').replace(/^\|?\s*\^\s*/, '').trim();
+  // Output shape (each line may be prefixed by a "[timestamp]  " from the build log):
+  //   failed to build presentation: error at main.md:34:1:
+  //   34 | ![](ev2-release-demo/slide1.png)          <- source echo (optional)
+  //      | ^ could not load image '...': ...          <- the message, after the caret
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/^\[[^\]]*\]\s*/, ''));
+  for (let i = 0; i < lines.length; i++) {
+    const m = /error at ([^\s:]+):(\d+):\d+:?\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    let detail = (m[3] || '').trim();
+    for (let j = i + 1; j < Math.min(lines.length, i + 4) && !detail; j++) {
+      const caret = /^\s*\|\s*\^\s*(.+)$/.exec(lines[j]);        // "   | ^ message"
+      if (caret) { detail = caret[1].trim(); break; }
+      if (/^\s*\d+\s*\|/.test(lines[j])) continue;               // "34 | <source>": skip the echo
+      if (lines[j].trim() && !/^\s*\|/.test(lines[j])) break;    // unrelated output
+    }
     push(m[1], Number(m[2]), 'failure', detail || 'presenterm could not render this slide');
   }
   if (!findings.length) {
     const img = /could not load image '([^']+)'/g;
+    let m;
     while ((m = img.exec(text))) push(entry, 1, 'warning', `Referenced image not found: ${m[1]}`);
   }
   return findings;

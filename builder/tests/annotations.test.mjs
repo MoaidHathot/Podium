@@ -15,6 +15,18 @@ test('presenterm image error becomes a positioned failure', () => {
   });
 });
 
+test('production log shape with source echo and timestamps yields the caret message', () => {
+  const out = [
+    '[2026-10-04T22:57:58.849Z]   \u001b[mfailed to build presentation: error at main.md:34:1:',
+    '[2026-10-04T22:57:58.849Z]   \u001b[m34 | \u001b[m![](ev2-release-demo/slide1.png)',
+    "[2026-10-04T22:57:58.849Z]   \u001b[m   | \u001b[m\u001b[m^ could not load image 'ev2-release-demo/slide1.png': No such file or directory (os error 2)\u001b[m",
+  ].join('\n');
+  const f = parsePresentermErrors(out, 'Microsoft/casual/ai/sa7bi-hackathon-overview', 'main.md');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].line, 34);
+  assert.equal(f[0].message, "could not load image 'ev2-release-demo/slide1.png': No such file or directory (os error 2)");
+});
+
 test('duplicate errors collapse and unrelated output yields nothing', () => {
   const out = 'error at main.md:3:1:\n | ^ boom\nerror at main.md:3:1:\n | ^ boom\n';
   assert.equal(parsePresentermErrors(out, '', 'main.md').length, 1);

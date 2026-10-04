@@ -50,7 +50,7 @@ jobs:
           node --check sheet.mjs
           bash -n entrypoint.sh
       - name: Builder unit tests
-        run: node --test 'tests/**/*.test.mjs'
+        run: node --test tests/*.test.mjs
       - name: Lockfile is in sync with package.json
         run: npm ls --omit=dev >/dev/null
 
