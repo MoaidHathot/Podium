@@ -78,6 +78,7 @@ function Get-FoundationOutputs {
     $jobId = (& az containerapp job show -g $ResourceGroup -n "$BaseName-builder" --query id -o tsv 2>$null | Where-Object { "$_" -notmatch 'WARNING' } | Out-String).Trim()
     $web = (Invoke-Az @('identity', 'show', '-g', $ResourceGroup, '-n', "id-$BaseName-web", '-o', 'json') | Out-String) | ConvertFrom-Json
     $deploy = (Invoke-Az @('identity', 'show', '-g', $ResourceGroup, '-n', "id-$BaseName-deploy", '-o', 'json') | Out-String) | ConvertFrom-Json
+    $appInsights = (& az monitor app-insights component show -g $ResourceGroup -a "appi-$BaseName" --query connectionString -o tsv 2>$null | Where-Object { "$_" -notmatch 'WARNING' } | Out-String).Trim()
     return [pscustomobject]@{
         storageAccountName       = $storage
         keyVaultName             = $kv
@@ -88,6 +89,7 @@ function Get-FoundationOutputs {
         webIdentityId            = $web.id
         webIdentityClientId      = $web.clientId
         deployIdentityClientId   = $deploy.clientId
+        appInsightsConnectionString = $appInsights
     }
 }
 
@@ -173,6 +175,7 @@ if ($Phase -in 'app', 'all') {
         if ($doms.Count -gt 0) { $params.customDomains = $doms }
     }
     $params.minReplicas = $MinReplicas
+    if ($o.appInsightsConnectionString) { $params.appInsightsConnectionString = $o.appInsightsConnectionString }
     $paramFile = Write-ParametersFile $params
     try { Invoke-Az @('deployment', 'group', 'create', '-g', $ResourceGroup, '-n', 'podium-app', '-f', (Join-Path $infra 'app.bicep'), '-p', "@$paramFile", '-o', 'none') | Out-Null }
     finally { Remove-Item $paramFile -Force -ErrorAction SilentlyContinue }

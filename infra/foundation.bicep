@@ -77,6 +77,114 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
+// Application Insights (workspace-based): requests, dependencies, exceptions and traces from the web app via
+// OpenTelemetry. Shares the Log Analytics quota above.
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'appi-${baseName}'
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logs.id
+    IngestionMode: 'LogAnalytics'
+    RetentionInDays: 30
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Alerts: e-mail on crash loops / failed probes, build-failure streaks and server errors. Cents per month.
+// ---------------------------------------------------------------------------------------------------------------
+resource alertGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
+  name: 'ag-${baseName}'
+  location: 'global'
+  properties: {
+    groupShortName: take(baseName, 12)
+    enabled: true
+    emailReceivers: [ { name: 'owner', emailAddress: budgetEmail, useCommonAlertSchema: true } ]
+  }
+}
+
+resource alertContainerFailures 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
+  name: 'alert-${baseName}-web-restarts'
+  location: location
+  properties: {
+    displayName: 'Podium web: container terminated or probe failed'
+    description: 'The web container exited unexpectedly or failed its probes (crash loop, bad image, startup error).'
+    severity: 1
+    enabled: true
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    scopes: [ logs.id ]
+    criteria: {
+      allOf: [
+        {
+          query: 'ContainerAppSystemLogs_CL | where ContainerAppName_s == "${baseName}-web" | where Reason_s in ("ContainerTerminated", "ProbeFailed") | where Log_s !has "ManuallyStopped" and Log_s !has "ScaledToZero"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 2
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: [ alertGroup.id ] }
+  }
+}
+
+resource alertBuildFailures 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
+  name: 'alert-${baseName}-build-failures'
+  location: location
+  properties: {
+    displayName: 'Podium: repeated build failures'
+    description: 'Three or more deck builds failed within an hour (builder image problem, GitHub outage, or a broken deck being retried).'
+    severity: 2
+    enabled: true
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT1H'
+    scopes: [ logs.id ]
+    criteria: {
+      allOf: [
+        {
+          query: 'ContainerAppConsoleLogs_CL | where ContainerAppName_s == "${baseName}-web" | where Log_s has "finished: Failed"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 3
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: [ alertGroup.id ] }
+  }
+}
+
+resource alertServerErrors 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
+  name: 'alert-${baseName}-5xx'
+  location: location
+  properties: {
+    displayName: 'Podium web: server errors'
+    description: 'Ten or more 5xx responses in 15 minutes (as recorded by Application Insights).'
+    severity: 2
+    enabled: true
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    scopes: [ logs.id ]
+    criteria: {
+      allOf: [
+        {
+          query: 'AppRequests | where toint(ResultCode) >= 500'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 10
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: [ alertGroup.id ] }
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Storage (Entra-only: shared keys disabled, no public blobs)
 // ---------------------------------------------------------------------------------------------------------------
@@ -260,3 +368,4 @@ output webIdentityClientId string = webIdentity.properties.clientId
 output webIdentityPrincipalId string = webIdentity.properties.principalId
 output deployIdentityClientId string = deployIdentity.properties.clientId
 output logAnalyticsId string = logs.id
+output appInsightsConnectionString string = appInsights.properties.ConnectionString

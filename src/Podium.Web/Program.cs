@@ -1,3 +1,4 @@
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 using System.Security.Claims;
 using AspNet.Security.OAuth.GitHub;
 using Azure.Data.Tables;
@@ -90,6 +91,17 @@ else
         dp.ProtectKeysWithAzureKeyVault(new Uri(dpKeyId), credential);
     else if (!builder.Environment.IsDevelopment())
         throw new InvalidOperationException("DataProtection:KeyVaultKeyId must be set outside Development so cookie keys are encrypted at rest.");
+}
+
+// ----- Telemetry: requests, dependencies, exceptions and traces to Application Insights (OpenTelemetry) -----
+// Only when a connection string is configured (production via Bicep); local runs keep console logs only.
+if (!string.IsNullOrWhiteSpace(config["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+{
+    builder.Services.AddOpenTelemetry().UseAzureMonitor(o =>
+    {
+        o.SamplingRatio = 1.0f; // tiny traffic; keep everything
+        // The connection string carries only an instrumentation key (not a secret); ingestion is keyed, not Entra-authenticated.
+    });
 }
 
 // ----- Builder runner -----

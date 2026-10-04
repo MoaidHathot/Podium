@@ -42,6 +42,9 @@ param minReplicas int = 0
 @description('Show a gallery of Public decks to visitors at / (portfolio). Off keeps the root login-only.')
 param publicGallery bool = true
 
+@description('Application Insights connection string (instrumentation key based; empty disables telemetry).')
+param appInsightsConnectionString string = ''
+
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = { name: keyVaultName }
 
 var secretNames = [ 'podium-signing-key', 'github-private-key', 'github-client-id', 'github-client-secret', 'github-webhook-secret' ]
@@ -94,6 +97,7 @@ resource web 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'Podium__ExternalBaseUrl', value: 'https://${baseName}-web.${environmentDefaultDomain}' }
             { name: 'Podium__SigningKey', secretRef: 'podium-signing-key' }
           { name: 'Podium__PublicGallery', value: string(publicGallery) }
+          { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
             { name: 'Storage__AccountName', value: storageAccountName }
             { name: 'DataProtection__KeyVaultKeyId', value: dataProtectionKeyId }
             { name: 'Builder__Mode', value: 'ContainerAppsJob' }
