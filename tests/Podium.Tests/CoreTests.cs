@@ -1,6 +1,8 @@
 using Podium.Core;
 using Podium.Core.Discovery;
+using Podium.Core.Abstractions;
 using Podium.Core.Models;
+using Podium.Core.Services;
 using Podium.Core.Security;
 
 namespace Podium.Tests;
@@ -137,6 +139,41 @@ public class DeckConfigTests
     {
         Assert.Null(DeckConfig.Parse("- just\n- a list"));
         Assert.Null(DeckConfig.Parse("title: [unclosed"));
+    }
+}
+
+public class DeckSearchIndexTests
+{
+    private sealed class TextArtifacts(string json) : IArtifactStore
+    {
+        public Task<ArtifactObject?> OpenSiteFileAsync(string deckSlug, string buildId, string relativePath, CancellationToken ct = default, string variant = "site") => Task.FromResult<ArtifactObject?>(null);
+        public Task<ArtifactObject?> OpenArtifactAsync(string deckSlug, string buildId, ArtifactKind kind, CancellationToken ct = default)
+            => Task.FromResult<ArtifactObject?>(kind == ArtifactKind.Text ? new ArtifactObject(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)), "application/json", null, null, null) : null);
+        public Task<Uri> CreateUploadUriAsync(string deckSlug, string buildId, TimeSpan lifetime, CancellationToken ct = default) => Task.FromResult(new Uri("https://x.invalid/"));
+        public Task DeleteBuildAsync(string deckSlug, string buildId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Indexes_served_text_and_ranks_title_matches_first()
+    {
+        var json = """[{"index":1,"title":"Intro","text":"Welcome to the talk about agents"},{"index":4,"title":"Agents everywhere","text":"Not a few tools. A fleet of agents."},{"index":9,"title":null,"text":"Questions?"}]""";
+        var index = new DeckSearchIndex(new TextArtifacts(json), Microsoft.Extensions.Logging.Abstractions.NullLogger<DeckSearchIndex>.Instance);
+        var deck = new Deck { Slug = "talk", SourceId = "s", Path = "", Entry = "slides.md", Kind = DeckKind.Slidev, Title = "My talk", CurrentBuildId = "b1", CurrentHasText = true };
+        await index.RefreshAsync(deck);
+        Assert.Equal(1, index.DeckCount);
+
+        var hits = index.Search("agents");
+        Assert.Equal(2, hits.Count);
+        Assert.Equal(4, hits[0].Slide); // title match ranks first
+        Assert.Equal("My talk", hits[0].Title);
+        Assert.Contains("fleet", hits[0].Snippet);
+        Assert.Empty(index.Search("agents welcome fleet")); // all terms required on one slide
+        Assert.Single(index.Search("welcome agents"));
+        Assert.Empty(index.Search("a")); // too short
+
+        // Archived or text-less decks drop out.
+        await index.RefreshAsync(deck with { Archived = true });
+        Assert.Equal(0, index.DeckCount);
     }
 }
 

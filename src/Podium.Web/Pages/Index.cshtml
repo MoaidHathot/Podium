@@ -134,6 +134,11 @@ else
             </div>
         </section>
     </div>
+    <section class="section hidden" id="slide-hits" aria-live="polite">
+        <div class="section-head"><h2>In slides</h2><span class="faint count" id="slide-hits-count"></span></div>
+        <ul class="hits" id="slide-hits-list"></ul>
+    </section>
+
     <div class="empty hidden" id="no-results" style="margin-top:1rem">
         <h3>No matches</h3>
         <p>Try a different search or clear the filters.</p>
@@ -216,8 +221,36 @@ else
       && (!state.tag || (c.dataset.tags || '').split(' ').includes(state.tag));
   }
 
+  // Full-text hits inside slide content (owner API, debounced). Independent of the card filter.
+  const hitsSection = document.getElementById('slide-hits'), hitsList = document.getElementById('slide-hits-list'), hitsCount = document.getElementById('slide-hits-count');
+  let hitsTimer = null, hitsSeq = 0;
+  function searchSlides() {
+    const q = search.value.trim();
+    clearTimeout(hitsTimer);
+    if (q.length < 2) { hitsSection.classList.add('hidden'); hitsList.innerHTML = ''; return; }
+    hitsTimer = setTimeout(async () => {
+      const seq = ++hitsSeq;
+      try {
+        const hits = await Podium.api('GET', `/api/search?q=${encodeURIComponent(q)}`);
+        if (seq !== hitsSeq) return;
+        hitsList.innerHTML = '';
+        for (const h of hits) {
+          const li = document.createElement('li');
+          const a = document.createElement('a'); a.href = `/d/${h.slug}/${h.slide}`; a.target = '_blank'; a.rel = 'noopener';
+          const t = document.createElement('strong'); t.textContent = h.title;
+          const where = document.createElement('span'); where.className = 'faint'; where.textContent = ` · slide ${h.slide}${h.slideTitle ? ` · ${h.slideTitle}` : ''}`;
+          const snip = document.createElement('div'); snip.className = 'muted snippet'; snip.textContent = h.snippet;
+          a.append(t, where); li.append(a, snip); hitsList.appendChild(li);
+        }
+        hitsCount.textContent = hits.length ? `${hits.length} slide${hits.length === 1 ? '' : 's'}` : 'no slide text matches';
+        hitsSection.classList.toggle('hidden', false);
+      } catch { hitsSection.classList.add('hidden'); }
+    }, 220);
+  }
+
   function render() {
     const filtering = search.value.trim().length > 0 || state.kind || state.vis || state.status || state.tag;
+    searchSlides();
     // Shelves step aside while searching/filtering; an emptied shelf (all recents dismissed) stays hidden.
     shelves.forEach((s) => s.classList.toggle('hidden', !!filtering || (s.id !== 'archived' && s.querySelectorAll('.card').length === 0)));
     clearBtn.classList.toggle('hidden', !filtering);

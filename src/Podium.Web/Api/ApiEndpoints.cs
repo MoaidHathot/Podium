@@ -19,7 +19,7 @@ public static partial class ApiEndpoints
     public static IEndpointRouteBuilder MapPodiumApi(this IEndpointRouteBuilder app)
     {
         // ----- Unauthenticated, token/signature protected -----
-        app.MapPost("/api/builds/{slug}/{buildId}/report", async (string slug, string buildId, HttpContext http, BuildService builds, DeckAccessService access, IDeckStore decks, Sync.SyncHub hub, CancellationToken ct) =>
+        app.MapPost("/api/builds/{slug}/{buildId}/report", async (string slug, string buildId, HttpContext http, BuildService builds, DeckAccessService access, IDeckStore decks, Sync.SyncHub hub, DeckSearchIndex search, CancellationToken ct) =>
         {
             var auth = http.Request.Headers.Authorization.ToString();
             if (!auth.StartsWith("Bearer ", StringComparison.Ordinal)) return Results.Unauthorized();
@@ -33,6 +33,7 @@ public static partial class ApiEndpoints
                 // Open decks learn about the new served build immediately (frozen decks keep serving the old one, so no notice).
                 var deck = await decks.GetAsync(slug, ct);
                 if (deck?.CurrentBuildId == buildId) await hub.NotifyBuildAsync(slug, buildId, ct);
+                if (deck is not null) await search.RefreshAsync(deck, ct);
             }
             return ok ? Results.Ok() : Results.Unauthorized();
         }).DisableAntiforgery().RequireRateLimiting("webhook");
@@ -152,22 +153,24 @@ public static partial class ApiEndpoints
         });
 
         // Serve a specific successful build (rollback / promote); optionally freeze on it.
-        owner.MapPost("/decks/{slug}/builds/{buildId}/serve", async (string slug, string buildId, [FromQuery] bool freeze, BuildService builds, DeckAccessService access, Sync.SyncHub hub, CancellationToken ct) =>
+        owner.MapPost("/decks/{slug}/builds/{buildId}/serve", async (string slug, string buildId, [FromQuery] bool freeze, BuildService builds, DeckAccessService access, Sync.SyncHub hub, DeckSearchIndex search, CancellationToken ct) =>
         {
             if (!Podium.Core.Slug.IsValid(slug) || buildId.Length > 40) return Results.BadRequest();
             var deck = await builds.ServeBuildAsync(slug, buildId, freeze, ct);
             if (deck is null) return Results.NotFound(new { error = "Build not found, not successful, or its artifacts were cleaned up" });
             access.Invalidate(slug);
             await hub.NotifyBuildAsync(slug, buildId, ct);
+            await search.RefreshAsync(deck, ct);
             return Results.Ok(deck);
         });
 
         // Permanently delete an archived deck: artifacts, build history, grants, links and the deck record itself.
-        owner.MapDelete("/decks/{slug}", async (string slug, IDeckStore decks, IGrantStore grants, IShareLinkStore links, BuildService builds, DeckAccessService access, CancellationToken ct) =>
+        owner.MapDelete("/decks/{slug}", async (string slug, IDeckStore decks, IGrantStore grants, IShareLinkStore links, BuildService builds, DeckAccessService access, DeckSearchIndex search, CancellationToken ct) =>
         {
             var deck = await decks.GetAsync(slug, ct);
             if (deck is null) return Results.NotFound();
             if (!deck.Archived) return Results.Conflict(new { error = "Only archived decks can be deleted. Remove the deck from the repository (or the source) first; it is archived on the next sync." });
+            search.Remove(slug);
             await builds.PurgeDeckAsync(deck, ct);
             foreach (var g in await grants.ListForDeckAsync(slug, ct)) await grants.DeleteAsync(slug, g.Principal, ct);
             foreach (var l in await links.ListForDeckAsync(slug, ct)) await links.UpsertAsync(l with { Revoked = true }, ct);
@@ -206,6 +209,13 @@ public static partial class ApiEndpoints
         });
 
         owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
+
+        // Full-text search across slide text (owner only; the index lives in memory).
+        owner.MapGet("/search", (string? q, DeckSearchIndex search) =>
+        {
+            if (string.IsNullOrWhiteSpace(q) || q.Length > 200) return Results.Ok(Array.Empty<SearchHit>());
+            return Results.Ok(search.Search(q, 30));
+        });
 
         // Access requests from signed-in visitors: approve (= grant) or decline.
         owner.MapGet("/access-requests", async (IAccessRequestStore requests, CancellationToken ct) => Results.Ok(await requests.ListPendingAsync(ct)));

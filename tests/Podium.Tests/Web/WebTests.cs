@@ -296,6 +296,24 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
     });
 
     [Fact]
+    public async Task Slide_text_search_is_owner_only_and_finds_slides()
+    {
+        var deck = await app.SeedDeckAsync("search-deck", Visibility.Public);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.Text, "application/json", "[{\"index\":3,\"title\":\"Demo\",\"text\":\"The quick brown fox jumps\"}]"u8.ToArray());
+        var updated = deck with { CurrentHasText = true };
+        await app.Services.GetRequiredService<IDeckStore>().UpsertAsync(updated);
+        await app.Services.GetRequiredService<Podium.Core.Services.DeckSearchIndex>().RefreshAsync(updated);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await app.Client().GetAsync("/api/search?q=fox")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await (await app.GuestClientAsync()).GetAsync("/api/search?q=fox")).StatusCode);
+        var owner = await app.OwnerClientAsync();
+        var hits = await owner.GetFromJsonAsync<JsonElement>("/api/search?q=brown%20fox");
+        var hit = hits.EnumerateArray().Single(h => h.GetProperty("slug").GetString() == deck.Slug);
+        Assert.Equal(3, hit.GetProperty("slide").GetInt32());
+        Assert.Empty((await owner.GetFromJsonAsync<JsonElement>("/api/search?q=zebra")).EnumerateArray());
+    }
+
+    [Fact]
     public async Task Builder_report_requires_a_valid_callback_token()
     {
         var deck = await app.SeedDeckAsync("report-deck");

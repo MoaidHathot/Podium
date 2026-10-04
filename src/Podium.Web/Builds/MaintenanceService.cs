@@ -33,6 +33,14 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
             }
         }, stoppingToken);
 
+        await RunSafely("search index", async ct =>
+        {
+            using var scope = scopes.CreateScope();
+            var index = scope.ServiceProvider.GetRequiredService<Podium.Core.Services.DeckSearchIndex>();
+            foreach (var d in await scope.ServiceProvider.GetRequiredService<IDeckStore>().ListAsync(includeArchived: false, ct)) await index.RefreshAsync(d, ct);
+            log.LogInformation("Search index ready: {Count} deck(s)", index.DeckCount);
+        }, stoppingToken);
+
         await RunSafely("installation discovery", async ct =>
         {
             using var scope = scopes.CreateScope();

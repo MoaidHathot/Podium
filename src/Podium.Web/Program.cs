@@ -119,6 +119,7 @@ builder.Services.AddSingleton<Podium.Core.Abstractions.IBuildObserver, GitHubChe
 builder.Services.AddScoped<BuildService>();
 builder.Services.AddOptions<LiveSessionOptions>().Bind(config.GetSection("Sessions"));
 builder.Services.AddSingleton<SessionRecorders>();
+builder.Services.AddSingleton<DeckSearchIndex>();
 builder.Services.AddScoped<SessionService>();
 builder.Services.AddScoped<DeckSyncService>();
 builder.Services.AddSingleton<SyncQueue>();
