@@ -117,6 +117,9 @@ builder.Services.AddSingleton<GitHubAppAuth>();
 builder.Services.AddSingleton<IRepositoryClient, GitHubRepositoryClient>();
 builder.Services.AddSingleton<Podium.Core.Abstractions.IBuildObserver, GitHubChecksObserver>();
 builder.Services.AddScoped<BuildService>();
+builder.Services.AddOptions<LiveSessionOptions>().Bind(config.GetSection("Sessions"));
+builder.Services.AddSingleton<SessionRecorders>();
+builder.Services.AddScoped<SessionService>();
 builder.Services.AddScoped<DeckSyncService>();
 builder.Services.AddSingleton<SyncQueue>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncQueue>());
@@ -224,6 +227,14 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 });
 
 var app = builder.Build();
+
+// Live sessions record pacing from the sync relay (no extra traffic from clients).
+{
+    var hub = app.Services.GetRequiredService<Podium.Web.Sync.SyncHub>();
+    var recorders = app.Services.GetRequiredService<SessionRecorders>();
+    hub.OnPresenterPosition = recorders.RecordPositionAsync;
+    hub.OnPresence = recorders.RecordPresenceAsync;
+}
 app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Podium is shutting down (graceful stop requested)"));
 
 app.UseForwardedHeaders();
@@ -289,6 +300,12 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
 }
 
 app.MapGet("/healthz", () => Results.Ok(new { ok = true }));
+// Deploy guard: counts only. Deployments wait while a session that opted into holding them is live.
+app.MapGet("/healthz/live", async (SessionService sessions, Podium.Web.Sync.SyncHub hub, CancellationToken ct) =>
+{
+    var holding = await sessions.HoldingDeploysAsync(ct);
+    return Results.Ok(new { holdDeploys = holding.Count, presenting = hub.RoomsWithPresenters().Count });
+}).RequireRateLimiting("probe");
 app.MapDeckServing();
 Podium.Web.Serving.PresenterToolsEndpoints.MapPresenterTools(app);
 app.MapPodiumApi();

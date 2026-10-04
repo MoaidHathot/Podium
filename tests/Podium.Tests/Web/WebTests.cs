@@ -147,6 +147,55 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Equal(BuildStatus.Running, (await decks.GetAsync("checks-deck"))!.LatestBuildStatus);
     }
 
+    [Fact]
+    public async Task Live_session_flow_join_link_dies_with_the_session_and_the_deploy_guard_reflects_it()
+    {
+        var deck = await app.SeedDeckAsync("session-deck");
+        var owner = await app.OwnerClientAsync();
+        var anon = app.Client();
+
+        var guardBefore = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
+        var holdingBefore = guardBefore.GetProperty("holdDeploys").GetInt32();
+
+        var start = await owner.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { plannedMinutes = 45, holdDeploys = true, freeze = true }));
+        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
+        using var doc = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
+        var joinUrl = doc.RootElement.GetProperty("joinUrl").GetString()!;
+        var linkId = doc.RootElement.GetProperty("session").GetProperty("linkId").GetString();
+        Assert.Contains($"?share={linkId}", joinUrl);
+
+        // Starting twice is a conflict; the deck is frozen and flagged live.
+        Assert.Equal(HttpStatusCode.Conflict, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { holdDeploys = false }))).StatusCode);
+        var state = (await app.Services.GetRequiredService<IDeckStore>().GetAsync(deck.Slug))!;
+        Assert.NotNull(state.LiveSessionId);
+        Assert.Equal(deck.CurrentBuildId, state.PinnedBuildId);
+
+        // The room joins through the link, anonymously, to a Private deck.
+        var joined = await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
+        Assert.Equal(HttpStatusCode.OK, joined.StatusCode);
+
+        var guard = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
+        Assert.Equal(holdingBefore + 1, guard.GetProperty("holdDeploys").GetInt32());
+
+        // End: link revoked, deck unfrozen, recap written, guard released.
+        var end = await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+        Assert.Equal(HttpStatusCode.OK, end.StatusCode);
+        var fresh = app.Client();
+        Assert.NotEqual(HttpStatusCode.OK, (await fresh.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"))).StatusCode);
+        state = (await app.Services.GetRequiredService<IDeckStore>().GetAsync(deck.Slug))!;
+        Assert.Null(state.LiveSessionId);
+        Assert.Null(state.PinnedBuildId);
+        var after = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
+        Assert.Equal(holdingBefore, after.GetProperty("holdDeploys").GetInt32());
+        var list = await owner.GetFromJsonAsync<JsonElement>($"/api/decks/{deck.Slug}/sessions");
+        Assert.Equal("manual", list.EnumerateArray().First().GetProperty("endReason").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=false", null)).StatusCode);
+
+        // Guests cannot start sessions.
+        var guest = await app.GuestClientAsync();
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { holdDeploys = true }))).StatusCode);
+    }
+
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
@@ -341,6 +390,82 @@ public sealed class ServingTests(PodiumWebFactory app)
         var owner = await (await app.OwnerClientAsync()).GetAsync($"/d/{deck.Slug}.pdf");
         Assert.Equal(HttpStatusCode.OK, owner.StatusCode);
         Assert.Equal("application/pdf", owner.Content.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
+    public async Task Speaker_notes_are_served_to_presenters_only_and_never_from_the_external_origin()
+    {
+        var deck = await app.SeedDeckAsync("notes-deck", Visibility.Public);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.Notes, "application/json", "[{\"index\":1,\"note\":\"secret\"}]"u8.ToArray());
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.SlideSheet, "image/jpeg", [0xFF, 0xD8, 0xFF, 0xD9]);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.SlideSheetMeta, "application/json", "{\"count\":1}"u8.ToArray());
+        await app.Services.GetRequiredService<IDeckStore>().UpsertAsync(deck with { CurrentHasNotes = true, CurrentHasSlideSheet = true });
+        app.Services.GetRequiredService<Podium.Web.Serving.DeckAccessService>().Invalidate(deck.Slug);
+
+        // Public deck: anyone gets the slide sheet (slide content is public anyway)...
+        var anon = app.Client();
+        Assert.Equal(HttpStatusCode.OK, (await anon.GetAsync($"/d/{deck.Slug}/slides.json")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await anon.GetAsync($"/d/{deck.Slug}/slides.jpg")).StatusCode);
+        // ...but never the notes.
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync($"/d/{deck.Slug}/notes.json")).StatusCode);
+        var guest = await app.GuestClientAsync(777001);
+        Assert.Equal(HttpStatusCode.NotFound, (await guest.GetAsync($"/d/{deck.Slug}/notes.json")).StatusCode);
+
+        // A grantee with the Present right does.
+        await app.Services.GetRequiredService<IGrantStore>().UpsertAsync(new Grant { DeckSlug = deck.Slug, Principal = "github:777002", Site = true, Present = true });
+        var copresenter = await app.GuestClientAsync(777002);
+        var notes = await copresenter.GetAsync($"/d/{deck.Slug}/notes.json");
+        Assert.Equal(HttpStatusCode.OK, notes.StatusCode);
+        Assert.Contains("secret", await notes.Content.ReadAsStringAsync());
+        Assert.Contains("no-store", notes.Headers.CacheControl!.ToString());
+
+        var owner = await app.OwnerClientAsync();
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync($"/d/{deck.Slug}/notes.json")).StatusCode);
+        var remote = await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/remote"));
+        Assert.Equal(HttpStatusCode.OK, remote.StatusCode);
+        Assert.Contains("data-has-notes=\"1\"", await remote.Content.ReadAsStringAsync());
+
+        // The external origin never serves presenter tooling, even with a valid owner session replayed there.
+        var external = app.Client(PodiumWebFactory.ExternalOrigin);
+        var bounced = await external.GetAsync($"/d/{deck.Slug}/notes.json");
+        Assert.Equal(HttpStatusCode.Redirect, bounced.StatusCode);
+        Assert.StartsWith(PodiumWebFactory.PublicOrigin, bounced.Headers.Location!.ToString());
+
+        // Private deck: the sheet follows the site's visibility.
+        var priv = await app.SeedDeckAsync("notes-private-deck");
+        await app.Services.GetRequiredService<IDeckStore>().UpsertAsync(priv with { CurrentHasSlideSheet = true });
+        app.Services.GetRequiredService<Podium.Web.Serving.DeckAccessService>().Invalidate(priv.Slug);
+        Assert.NotEqual(HttpStatusCode.OK, (await anon.GetAsync($"/d/{priv.Slug}/slides.json")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Offline_worker_is_scoped_to_the_deck_and_follows_the_setting_and_the_deck_access()
+    {
+        var deck = await app.SeedDeckAsync("offline-deck", Visibility.Public);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.Manifest, "application/json", "{\"build\":\"x\",\"variants\":{\"site\":[\"index.html\"]}}"u8.ToArray());
+        var c = app.Client();
+        var sw = await c.GetAsync($"/d/{deck.Slug}/_podium/sw.js");
+        Assert.Equal(HttpStatusCode.OK, sw.StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/", sw.Headers.GetValues("Service-Worker-Allowed").Single());
+        Assert.Equal("text/javascript", sw.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(HttpStatusCode.OK, (await c.GetAsync($"/d/{deck.Slug}/_podium/manifest.json")).StatusCode);
+        var page = await c.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        var html = await page.Content.ReadAsStringAsync();
+        Assert.Contains("data-offline=\"1\"", html);
+        Assert.DoesNotContain("data-presenter=\"1\"", html); // anonymous viewer: runtime caching only
+
+        var owner = await app.OwnerClientAsync();
+        Assert.Contains("data-presenter=\"1\"", await (await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).Content.ReadAsStringAsync());
+
+        // Turned off: no worker, no flag.
+        Assert.Equal(HttpStatusCode.OK, (await owner.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { offlineCache = false }))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await c.GetAsync($"/d/{deck.Slug}/_podium/sw.js")).StatusCode);
+        Assert.DoesNotContain("data-offline", await (await c.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).Content.ReadAsStringAsync());
+
+        // Private deck: the worker and manifest follow the deck's access.
+        var priv = await app.SeedDeckAsync("offline-private");
+        Assert.NotEqual(HttpStatusCode.OK, (await c.GetAsync($"/d/{priv.Slug}/_podium/sw.js")).StatusCode);
+        Assert.NotEqual(HttpStatusCode.OK, (await c.GetAsync($"/d/{priv.Slug}/_podium/manifest.json")).StatusCode);
     }
 
     private static int CountOf(string haystack, string needle)

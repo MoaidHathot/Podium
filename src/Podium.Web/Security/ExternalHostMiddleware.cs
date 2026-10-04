@@ -16,7 +16,7 @@ public sealed class ExternalHostMiddleware(RequestDelegate next, ViewTokenServic
     // typically this very host (platform FQDN).
     private static readonly PathString[] AllowedPrefixes = ["/d", "/_podium", "/ws/sync", "/api/builds", "/healthz", "/css", "/js", "/favicon.svg"];
     // Podium-generated presenter tools are never served from the external origin (they are for the owner, who has no session there).
-    private static readonly System.Text.RegularExpressions.Regex ToolPaths = new("^/d/[a-z0-9][a-z0-9-]*/(remote|qr\\.svg)$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex ToolPaths = new("^/d/[a-z0-9][a-z0-9-]*/(remote|qr\\.svg|notes\\.json|slides\\.jpg|slides\\.json)$", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex VersionApi = new("^/api/decks/[a-z0-9][a-z0-9-]*/version$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     public async Task InvokeAsync(HttpContext http)

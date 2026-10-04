@@ -35,7 +35,8 @@ COPY package.json package-lock.json* ./
 RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund --loglevel error \
  && chown -R pwuser:pwuser /ms-playwright \
  && chmod -R go-w /opt/podium
-COPY build.mjs thumb.mjs entrypoint.sh ./
+COPY build.mjs thumb.mjs notes.mjs sheet.mjs entrypoint.sh ./
+COPY lib ./lib
 COPY addon ./addon
 RUN chmod 0755 entrypoint.sh && setpriv --version >/dev/null
 

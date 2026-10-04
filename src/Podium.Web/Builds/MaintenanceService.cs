@@ -50,6 +50,18 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
                 await scope.ServiceProvider.GetRequiredService<BuildService>().ReapStaleAsync(ct);
             }, stoppingToken);
 
+            // Live sessions whose presenter vanished, overran or hit the cap end by themselves (see LiveSessionOptions).
+            await RunSafely("session sweep", async ct =>
+            {
+                using var scope = scopes.CreateScope();
+                var hub = scope.ServiceProvider.GetRequiredService<Podium.Web.Sync.SyncHub>();
+                var access = scope.ServiceProvider.GetRequiredService<Podium.Web.Serving.DeckAccessService>();
+                var sessions = scope.ServiceProvider.GetRequiredService<Podium.Core.Services.SessionService>();
+                var before = await scope.ServiceProvider.GetRequiredService<ISessionStore>().ListLiveAsync(ct);
+                var ended = await sessions.SweepAsync(slug => hub.Presence(slug).Presenters, ct);
+                if (ended > 0) foreach (var s in before) access.Invalidate(s.DeckSlug);
+            }, stoppingToken);
+
             // Builds waiting for a free slot (see BuildOptions.MaxConcurrentBuilds); normally dispatched as builds
             // finish, this is the safety net for lost callbacks and restarts.
             await RunSafely("dispatch", async ct =>

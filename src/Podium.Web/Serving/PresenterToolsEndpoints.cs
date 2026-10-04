@@ -1,4 +1,5 @@
 using Microsoft.Net.Http.Headers;
+using Podium.Core.Abstractions;
 using Podium.Core.Models;
 using Podium.Core.Security;
 using Podium.Web.Security;
@@ -7,9 +8,11 @@ using QRCoder;
 namespace Podium.Web.Serving;
 
 /// <summary>
-/// /d/{slug}/qr.svg  : QR code of the deck URL (same access rules as the deck itself).
-/// /d/{slug}/remote  : phone remote for presenters (owner / Present grantees): prev/next, slide counter, timer.
-/// Both are Podium-generated pages, never author code, so they are served from the main origin.
+/// Podium-generated presenter tooling (never author code, so always served from the main origin):
+///   /d/{slug}/qr.svg      QR code of the deck URL (same access rules as the deck itself)
+///   /d/{slug}/remote      phone remote for presenters (owner / Present grantees)
+///   /d/{slug}/notes.json  speaker notes per slide, presenters only; the audience's site variant has them stripped
+///   /d/{slug}/slides.jpg  all slides tiled into one image (+ /slides.json geometry); follows the site's visibility
 /// </summary>
 public static class PresenterToolsEndpoints
 {
@@ -40,34 +43,88 @@ public static class PresenterToolsEndpoints
             http.Response.Headers[HeaderNames.CacheControl] = "no-store";
             return Results.Content(RemotePage(result.Deck), "text/html; charset=utf-8");
         });
+
+        // Speaker notes: the one artifact that must never reach a viewer. Owner / Present grantees only, main origin
+        // only (ExternalHostMiddleware bounces the path), never cached by shared caches.
+        app.MapGet("/d/{slug}/notes.json", async (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct) =>
+        {
+            var caller = callers.Resolve(http.User);
+            var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
+            if (result.Deck is null || result.Decision != AccessDecision.Allow || !result.CanPresent) return Results.NotFound();
+            if (result.Deck.CurrentBuildId is null || !result.Deck.CurrentHasNotes) return Results.NotFound();
+            var file = await artifacts.OpenArtifactAsync(slug, result.Deck.CurrentBuildId, ArtifactKind.Notes, ct);
+            if (file is null) return Results.NotFound();
+            http.Response.Headers[HeaderNames.CacheControl] = "private, no-store";
+            http.Response.Headers[HeaderNames.XContentTypeOptions] = "nosniff";
+            return Results.Stream(file.Content, "application/json; charset=utf-8");
+        }).RequireRateLimiting("probe");
+
+        app.MapGet("/d/{slug}/slides.jpg", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct)
+            => ServeSheet(slug, ArtifactKind.SlideSheet, "image/jpeg", http, access, artifacts, callers, ct)).RequireRateLimiting("probe");
+        app.MapGet("/d/{slug}/slides.json", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct)
+            => ServeSheet(slug, ArtifactKind.SlideSheetMeta, "application/json; charset=utf-8", http, access, artifacts, callers, ct)).RequireRateLimiting("probe");
         return app;
+    }
+
+    /// <summary>The slide sheet shows slide content, so it follows the site's visibility (like the thumbnail).</summary>
+    private static async Task<IResult> ServeSheet(string slug, ArtifactKind kind, string contentType, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct)
+    {
+        var caller = callers.Resolve(http.User);
+        var result = await access.EvaluateAsync(http, slug, ArtifactKind.Thumbnail, caller, ct);
+        if (result.Deck is null || result.Decision != AccessDecision.Allow || result.Deck.CurrentBuildId is null || !result.Deck.CurrentHasSlideSheet) return Results.NotFound();
+        var file = await artifacts.OpenArtifactAsync(slug, result.Deck.CurrentBuildId, kind, ct);
+        if (file is null) return Results.NotFound();
+        http.Response.Headers[HeaderNames.CacheControl] = "private, max-age=86400";
+        http.Response.Headers[HeaderNames.XContentTypeOptions] = "nosniff";
+        http.Response.Headers["X-Podium-Build"] = result.Deck.CurrentBuildId;
+        return Results.Stream(file.Content, contentType, lastModified: file.LastModified,
+            entityTag: file.ETag is null ? null : new EntityTagHeaderValue(DeckServingEndpoints.QuoteEtag(file.ETag)));
     }
 
     private static string RemotePage(Deck deck)
     {
         var title = System.Net.WebUtility.HtmlEncode(deck.Title);
         var slug = deck.Slug;
+        var hasNotes = deck.CurrentHasNotes ? "1" : "0";
+        var hasSheet = deck.CurrentHasSlideSheet ? "1" : "0";
         return $$"""
             <!doctype html>
             <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
             <meta name="theme-color" content="#0b0d12"><title>Remote · {{title}}</title>
             <link rel="stylesheet" href="/css/remote.css">
-            </head><body data-slug="{{slug}}">
-            <header><div class="title">{{title}}</div><div class="conn" id="conn" aria-live="polite">connecting…</div></header>
+            </head><body data-slug="{{slug}}" data-has-notes="{{hasNotes}}" data-has-sheet="{{hasSheet}}" data-build="{{deck.CurrentBuildId}}">
+            <header>
+              <div class="title">{{title}}</div>
+              <div class="status"><span class="presence" id="presence" title="People watching"></span><span class="conn" id="conn" aria-live="polite">connecting…</span></div>
+            </header>
             <main>
               <div class="counter"><span id="page">–</span><span class="of">/ <span id="total">–</span></span><span class="clicks" id="clicks"></span></div>
+              <section class="notes" id="notes" hidden>
+                <div class="note-current" id="note-current"></div>
+                <div class="note-next"><span class="label">Next</span> <span id="note-next-title"></span><div id="note-next"></div></div>
+              </section>
               <div class="pad">
                 <button class="nav prev" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 5-7 7 7 7"/></svg></button>
                 <button class="nav next" id="next" aria-label="Next"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 5 7 7-7 7"/></svg></button>
               </div>
               <div class="row">
                 <button class="small" id="first">⇤ First</button>
+                <button class="small" id="goto" hidden>⊞ Go to</button>
+                <button class="small" id="black" aria-pressed="false">■ Black</button>
+                <button class="small" id="message">💬 Message</button>
+              </div>
+              <div class="row">
                 <button class="small" id="timer-toggle">▶ Timer</button>
                 <button class="small" id="timer-reset" title="Reset timer">↺</button>
                 <span class="timer" id="timer">00:00</span>
+                <span class="countdown" id="countdown" hidden></span>
+                <button class="small" id="plan" title="Planned duration">⏱ Plan</button>
               </div>
-              <div class="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space.</div>
+              <div class="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B = black, G = go to.</div>
             </main>
+            <dialog id="goto-dialog"><div class="goto-head"><strong>Go to slide</strong><button class="small" id="goto-close">✕</button></div><div class="goto-grid" id="goto-grid"></div></dialog>
+            <dialog id="message-dialog"><form method="dialog"><label>Message for the audience<input id="message-text" maxlength="300" placeholder="Demo in progress, back in a minute"></label><div class="row"><button class="small" value="show">Show</button><button class="small" value="clear">Clear</button><button class="small" value="cancel">Cancel</button></div></form></dialog>
+            <dialog id="plan-dialog"><form method="dialog"><label>Planned length (minutes)<input id="plan-minutes" type="number" min="1" max="600" inputmode="numeric"></label><div class="row"><button class="small" value="set">Set</button><button class="small" value="clear">No countdown</button></div></form></dialog>
             <script src="/js/remote.js"></script>
             </body></html>
             """;

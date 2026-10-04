@@ -39,6 +39,31 @@ public static class DeckServingEndpoints
             return Results.Stream(file.Content, "image/jpeg", lastModified: file.LastModified,
                 entityTag: file.ETag is null ? null : new Microsoft.Net.Http.Headers.EntityTagHeaderValue(QuoteEtag(file.ETag)));
         });
+        // Offline cache: the service worker script (scoped to the deck) and the build manifest it precaches from.
+        // Both live under the reserved _podium/ subpath so they can never collide with a deck's own files.
+        app.MapGet("/d/{slug}/_podium/sw.js", async (string slug, HttpContext http, DeckAccessService access, CallerResolver callers, IWebHostEnvironment env, CancellationToken ct) =>
+        {
+            var caller = callers.Resolve(http.User);
+            var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
+            if (result.Deck is null || result.Decision != AccessDecision.Allow || !result.Deck.OfflineCache) return Results.NotFound();
+            var file = env.WebRootFileProvider.GetFileInfo("_podium/sw.js");
+            if (!file.Exists) return Results.NotFound();
+            http.Response.Headers["Service-Worker-Allowed"] = $"/d/{slug}/";
+            http.Response.Headers[HeaderNames.CacheControl] = "no-cache";
+            http.Response.Headers[HeaderNames.XContentTypeOptions] = "nosniff";
+            return Results.Stream(file.CreateReadStream(), "text/javascript; charset=utf-8");
+        });
+        app.MapGet("/d/{slug}/_podium/manifest.json", async (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct) =>
+        {
+            var caller = callers.Resolve(http.User);
+            var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
+            if (result.Deck is null || result.Decision != AccessDecision.Allow || result.Deck.CurrentBuildId is null) return Results.NotFound();
+            var file = await artifacts.OpenArtifactAsync(slug, result.Deck.CurrentBuildId, ArtifactKind.Manifest, ct);
+            if (file is null) return Results.NotFound();
+            http.Response.Headers[HeaderNames.CacheControl] = "private, no-cache";
+            http.Response.Headers["X-Podium-Build"] = result.Deck.CurrentBuildId;
+            return Results.Stream(file.Content, "application/json; charset=utf-8");
+        }).RequireRateLimiting("probe");
         // Note: routing ignores trailing slashes, so "/d/{slug}" and "/d/{slug}/" both land here with an empty path.
         // Share-link probing is bounded on navigations only; asset fetches of an open deck are not counted.
         app.MapMethods("/d/{slug}/{**path}", ["GET", "HEAD"], ServeSite).AddEndpointFilter<NavigationRateLimitFilter>();
@@ -150,7 +175,7 @@ public static class DeckServingEndpoints
                 using var ms = new MemoryStream();
                 await file.Content.CopyToAsync(ms, ct);
                 var html = Encoding.UTF8.GetString(ms.ToArray());
-                html = InjectLiveScript(html, slug, deck.CurrentBuildId);
+                html = InjectLiveScript(html, slug, deck.CurrentBuildId, deck.OfflineCache, result.CanPresent);
                 // Link previews (Slack/Teams/Twitter) for decks anyone can open; private decks reveal nothing to crawlers anyway.
                 if (deck.Visibility == Visibility.Public && !onExternalHost)
                     html = InjectOpenGraph(html, deck, $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}");
@@ -202,9 +227,9 @@ public static class DeckServingEndpoints
     }
 
     /// <summary>Adds the Podium live script (new-build detection + presenter sync bootstrap) before &lt;/head&gt;.</summary>
-    internal static string InjectLiveScript(string html, string slug, string buildId)
+    internal static string InjectLiveScript(string html, string slug, string buildId, bool offline = false, bool presenter = false)
     {
-        var tag = $"<script defer src=\"{LiveScriptPath}\" data-slug=\"{slug}\" data-build=\"{buildId}\"></script>";
+        var tag = $"<script defer src=\"{LiveScriptPath}\" data-slug=\"{slug}\" data-build=\"{buildId}\"{(offline ? " data-offline=\"1\"" : "")}{(presenter ? " data-presenter=\"1\"" : "")}></script>";
         var idx = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
         return idx < 0 ? tag + html : html.Insert(idx, tag);
     }
@@ -284,7 +309,7 @@ public static class DeckServingEndpoints
     private static string MainHostUrl(PodiumOptions options, HttpContext http)
         => options.PublicBaseUrl.ToString().TrimEnd('/') + http.Request.Path + http.Request.QueryString;
 
-    private static string QuoteEtag(string etag) => etag.StartsWith('"') || etag.StartsWith("W/", StringComparison.Ordinal) ? etag : $"\"{etag}\"";
+    internal static string QuoteEtag(string etag) => etag.StartsWith('"') || etag.StartsWith("W/", StringComparison.Ordinal) ? etag : $"\"{etag}\"";
 
     internal static bool IsNavigationRequest(HttpContext http) => IsNavigation(http);
 }
