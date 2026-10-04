@@ -112,6 +112,41 @@
                 </div>
             </div>
         }
+        @if (d.Kind == DeckKind.Slidev && servable)
+        {
+            <div style="margin-top:1rem; padding-top:.9rem; border-top:1px solid var(--border)" id="session-panel">
+                @if (Model.LiveSession is { } live)
+                {
+                    <div class="row" style="align-items:center; gap:.6rem">
+                        <span class="badge badge-live">● Live</span>
+                        <strong>Session running</strong>
+                        <span class="faint">since <time datetime="@live.StartedAt.UtcDateTime.ToString("o")">@live.StartedAt.ToString("HH:mm")</time>@(live.PlannedMinutes is { } pm ? $", planned {pm} min" : "")@(live.HoldDeploys ? ", holding deployments" : "")</span>
+                    </div>
+                    @if (live.LinkId is not null)
+                    {
+                        <div class="field" style="margin-top:.6rem">
+                            <label>Join link for the room <span class="faint">(dies when the session ends)</span></label>
+                            <div class="url-box"><code>@Model.Origin/d/@d.Slug/?share=@live.LinkId</code><button class="btn btn-sm" data-copy="@Model.Origin/d/@d.Slug/?share=@live.LinkId">Copy</button></div>
+                        </div>
+                    }
+                    <div class="row" style="margin-top:.6rem">
+                        <button class="btn btn-primary btn-sm" id="session-end">End session</button>
+                        <label class="row" style="gap:.3rem; font-size:.85rem"><input type="checkbox" id="session-unfreeze" checked /> unfreeze the deck when ending</label>
+                    </div>
+                }
+                else
+                {
+                    <strong>Go live</strong>
+                    <p class="hint" style="margin:.2rem 0 .6rem">Freezes the served version for the talk, mints a join link that expires when you end, and records pacing per slide for the recap. Ends by itself if no presenter is connected for 15 minutes.</p>
+                    <div class="row" style="gap:.6rem; flex-wrap:wrap; align-items:center">
+                        <label class="row" style="gap:.3rem; font-size:.85rem">Planned <input class="input" id="session-minutes" type="number" min="1" max="600" placeholder="min" style="width:5rem" /></label>
+                        <label class="row" style="gap:.3rem; font-size:.85rem"><input type="checkbox" id="session-freeze" checked /> freeze deck</label>
+                        <label class="row" style="gap:.3rem; font-size:.85rem" title="Pushes to Podium itself wait until this session ends (max 45 min); deck builds are never affected"><input type="checkbox" id="session-hold" @(d.HoldDeploysWhileLive ? "checked" : "") /> hold Podium deployments</label>
+                        <button class="btn btn-primary btn-sm" id="session-start">Go live</button>
+                    </div>
+                }
+            </div>
+        }
         <div style="margin-top:.75rem" class="row">
             @if (Model.CurrentBuild?.HasPdf == true)
             {
@@ -255,6 +290,33 @@
     </section>
 </div>
 
+@if (Model.Sessions.Any(s => s.EndedAt is not null))
+{
+<section class="panel" style="margin-top:1rem">
+    <h3>Sessions</h3>
+    <p class="hint">Pacing from past live sessions: how long each slide was on screen (summed over revisits).</p>
+    @foreach (var s in Model.Sessions.Where(s => s.Recap is not null).Take(5))
+    {
+        var r = s.Recap!;
+        var max = Math.Max(1, r.SecondsPerSlide.Values.DefaultIfEmpty(1).Max());
+        <details style="margin-bottom:.6rem" @(s == Model.Sessions.First(x => x.Recap is not null) ? "open" : null)>
+            <summary><strong>@s.StartedAt.ToString("yyyy-MM-dd HH:mm")</strong> <span class="faint">· @TimeSpan.FromSeconds(r.DurationSeconds).ToString(r.DurationSeconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss")@(s.PlannedMinutes is { } pm ? $" of {pm} min planned" : "") · peak @r.PeakViewers viewer@(r.PeakViewers == 1 ? "" : "s") · @r.SlidesVisited slide@(r.SlidesVisited == 1 ? "" : "s") visited · ended: @s.EndReason</span></summary>
+            @if (r.SecondsPerSlide.Count > 0)
+            {
+                <div class="session-bars" style="margin-top:.5rem">
+                @foreach (var kv in r.SecondsPerSlide.OrderBy(k => k.Key))
+                {
+                    <span class="mono faint">@kv.Key</span>
+                    <div class="bar" style="width:@(Math.Max(1, kv.Value * 100 / max))%" title="@kv.Value s"></div>
+                    <span class="mono">@TimeSpan.FromSeconds(kv.Value).ToString(@"m\:ss")</span>
+                }
+                </div>
+            }
+        </details>
+    }
+</section>
+}
+
 <section class="panel" style="margin-top:1rem">
     <h3>Views</h3>
     <p class="hint">One view per person per deck per 10 minutes; your own views are included. Anonymous public viewers appear as one entry.</p>
@@ -341,6 +403,19 @@
     const next = pin.getAttribute('aria-pressed') !== 'true';
     await patch({ pinned: next }, next ? 'Pinned' : 'Unpinned');
     pin.setAttribute('aria-pressed', String(next)); pin.textContent = next ? 'Unpin' : 'Pin';
+  });
+
+  document.getElementById('session-start')?.addEventListener('click', async () => {
+    const minutes = Number(document.getElementById('session-minutes').value) || null;
+    try {
+      const r = await api('POST', `/api/decks/${slug}/sessions`, { plannedMinutes: minutes, holdDeploys: document.getElementById('session-hold').checked, freeze: document.getElementById('session-freeze').checked });
+      toast('Live. Share the join link with the room.', 'ok'); setTimeout(() => location.reload(), 500);
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  document.getElementById('session-end')?.addEventListener('click', async () => {
+    const unfreeze = document.getElementById('session-unfreeze').checked;
+    try { await api('POST', `/api/decks/${slug}/sessions/end?unfreeze=${unfreeze}`); toast('Session ended', 'ok'); setTimeout(() => location.reload(), 500); }
+    catch (e) { toast(e.message, 'error'); }
   });
 
   document.getElementById('alias-save').addEventListener('click', async () => {

@@ -5,8 +5,10 @@ using Podium.Core.Models;
 
 namespace Podium.Web.Pages.Decks;
 
-public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links, IViewHistoryStore views) : PageModel
+public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links, IViewHistoryStore views, ISessionStore sessions) : PageModel
 {
+    public IReadOnlyList<Session> Sessions { get; private set; } = [];
+    public Session? LiveSession => Sessions.FirstOrDefault(s => s.EndedAt is null && s.Id == Deck.LiveSessionId);
     public IReadOnlyList<ViewEvent> RecentViews { get; private set; } = [];
     public int Views7d { get; private set; }
     public int Views30d { get; private set; }
@@ -31,6 +33,7 @@ public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildS
         Links = await links.ListForDeckAsync(slug, ct);
         CurrentBuild = deck.CurrentBuildId is null ? null : Builds.FirstOrDefault(b => b.Id == deck.CurrentBuildId) ?? await builds.GetAsync(slug, deck.CurrentBuildId, ct);
         RecentViews = await views.RecentForDeckAsync(slug, 200, ct);
+        Sessions = await sessions.ListForDeckAsync(slug, 10, ct);
         var now = DateTimeOffset.UtcNow;
         Views7d = RecentViews.Count(v => v.At > now.AddDays(-7));
         Views30d = RecentViews.Count(v => v.At > now.AddDays(-30));

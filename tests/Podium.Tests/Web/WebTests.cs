@@ -147,6 +147,55 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Equal(BuildStatus.Running, (await decks.GetAsync("checks-deck"))!.LatestBuildStatus);
     }
 
+    [Fact]
+    public async Task Live_session_flow_join_link_dies_with_the_session_and_the_deploy_guard_reflects_it()
+    {
+        var deck = await app.SeedDeckAsync("session-deck");
+        var owner = await app.OwnerClientAsync();
+        var anon = app.Client();
+
+        var guardBefore = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
+        var holdingBefore = guardBefore.GetProperty("holdDeploys").GetInt32();
+
+        var start = await owner.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { plannedMinutes = 45, holdDeploys = true, freeze = true }));
+        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
+        using var doc = JsonDocument.Parse(await start.Content.ReadAsStringAsync());
+        var joinUrl = doc.RootElement.GetProperty("joinUrl").GetString()!;
+        var linkId = doc.RootElement.GetProperty("session").GetProperty("linkId").GetString();
+        Assert.Contains($"?share={linkId}", joinUrl);
+
+        // Starting twice is a conflict; the deck is frozen and flagged live.
+        Assert.Equal(HttpStatusCode.Conflict, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { holdDeploys = false }))).StatusCode);
+        var state = (await app.Services.GetRequiredService<IDeckStore>().GetAsync(deck.Slug))!;
+        Assert.NotNull(state.LiveSessionId);
+        Assert.Equal(deck.CurrentBuildId, state.PinnedBuildId);
+
+        // The room joins through the link, anonymously, to a Private deck.
+        var joined = await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
+        Assert.Equal(HttpStatusCode.OK, joined.StatusCode);
+
+        var guard = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
+        Assert.Equal(holdingBefore + 1, guard.GetProperty("holdDeploys").GetInt32());
+
+        // End: link revoked, deck unfrozen, recap written, guard released.
+        var end = await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+        Assert.Equal(HttpStatusCode.OK, end.StatusCode);
+        var fresh = app.Client();
+        Assert.NotEqual(HttpStatusCode.OK, (await fresh.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"))).StatusCode);
+        state = (await app.Services.GetRequiredService<IDeckStore>().GetAsync(deck.Slug))!;
+        Assert.Null(state.LiveSessionId);
+        Assert.Null(state.PinnedBuildId);
+        var after = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
+        Assert.Equal(holdingBefore, after.GetProperty("holdDeploys").GetInt32());
+        var list = await owner.GetFromJsonAsync<JsonElement>($"/api/decks/{deck.Slug}/sessions");
+        Assert.Equal("manual", list.EnumerateArray().First().GetProperty("endReason").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=false", null)).StatusCode);
+
+        // Guests cannot start sessions.
+        var guest = await app.GuestClientAsync();
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { holdDeploys = true }))).StatusCode);
+    }
+
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };

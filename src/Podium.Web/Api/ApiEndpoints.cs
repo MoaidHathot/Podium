@@ -184,6 +184,26 @@ public static partial class ApiEndpoints
             return Results.Ok(deck);
         });
 
+        // Live sessions: Go live (freeze + join link + recording) / End (revoke + recap).
+        owner.MapPost("/decks/{slug}/sessions", async (string slug, StartSessionRequest req, SessionService sessions, DeckAccessService access, HttpContext http, CancellationToken ct) =>
+        {
+            var (session, error) = await sessions.StartAsync(slug, req.PlannedMinutes, req.HoldDeploys, req.Freeze ?? true, req.Title, ct);
+            if (session is null) return Results.Conflict(new { error });
+            access.Invalidate(slug);
+            var joinUrl = session.LinkId is null ? null : $"{http.Request.Scheme}://{http.Request.Host}/d/{slug}/?share={session.LinkId}";
+            return Results.Ok(new { session, joinUrl });
+        });
+
+        owner.MapPost("/decks/{slug}/sessions/end", async (string slug, [FromQuery] bool unfreeze, SessionService sessions, DeckAccessService access, CancellationToken ct) =>
+        {
+            var session = await sessions.EndAsync(slug, "manual", unfreeze, ct);
+            if (session is null) return Results.NotFound(new { error = "No live session" });
+            access.Invalidate(slug);
+            return Results.Ok(session);
+        });
+
+        owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
+
         owner.MapPost("/decks/{slug}/grants", async (string slug, GrantRequest req, IDeckStore decks, IGrantStore grants, GitHubAppAuth gh, ISourceStore sources, CancellationToken ct) =>
         {
             var deck = await decks.GetAsync(slug, ct);
@@ -313,6 +333,7 @@ public static partial class ApiEndpoints
 public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label);
+public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title);
 
 public static partial class ApiEndpoints
 {

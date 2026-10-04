@@ -51,6 +51,7 @@
         <div class="card-meta">
             <span class="badge badge-kind-@kind kind">@Model.KindLabel</span>
             <span class="badge badge-vis-@vis vis" title="@visTitle">@Model.VisibilityLabel</span>
+            @if (d.LiveSessionId is not null) { <span class="badge badge-live" title="A live session is running">● Live</span> }
             @if (d.PinnedBuildId is not null) { <span class="badge badge-frozen" title="Frozen: the served version does not change until you unfreeze">❄ Frozen</span> }
             <span class="status" title="@Model.StatusLabel"><span class="dot @Model.StatusClass"></span> <span class="status-long" data-status-label>@Model.StatusLabel</span><span class="status-short" data-status-short>@Model.StatusShort</span></span>
             @if (d.LastCommitAt is { } at)

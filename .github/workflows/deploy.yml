@@ -10,6 +10,11 @@ on:
       - 'Directory.Build.props'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
+    inputs:
+      force:
+        description: Deploy even while a live session asked to hold deployments
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -107,6 +112,30 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # A deck owner can ask, per live session, that Podium itself is not rolled out mid-talk. Sessions end by
+      # themselves when the presenter disappears (15 min), so this can never wait forever: bounded by
+      # DEPLOY_GUARD_MAX_WAIT_MINUTES (repository variable; default 45, 0 disables) and overridable with the force input.
+      - name: Wait for live sessions that hold deployments
+        if: ${{ !inputs.force }}
+        env:
+          HEALTH_URL: ${{ vars.PODIUM_PUBLIC_URL || 'https://slides.moaid.codes' }}/healthz/live
+          MAX_WAIT_MINUTES: ${{ vars.DEPLOY_GUARD_MAX_WAIT_MINUTES || '45' }}
+        run: |
+          set -uo pipefail
+          if [ "$MAX_WAIT_MINUTES" = "0" ]; then echo "guard disabled"; exit 0; fi
+          deadline=$(( $(date +%s) + MAX_WAIT_MINUTES * 60 ))
+          while :; do
+            body=$(curl -fsS --max-time 20 "$HEALTH_URL" || echo '{}')
+            holding=$(echo "$body" | sed -n 's/.*"holdDeploys":\([0-9]*\).*/\1/p')
+            holding=${holding:-0}
+            if [ "$holding" = "0" ]; then echo "no live session is holding deployments"; exit 0; fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::$holding live session(s) still hold deployments after $MAX_WAIT_MINUTES minutes; re-run with force to override"
+              exit 1
+            fi
+            echo "$holding live session(s) hold deployments; waiting 60s"
+            sleep 60
+          done
       - name: Update images (pinned by digest)
         run: |
           set -euo pipefail
