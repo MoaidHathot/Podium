@@ -118,6 +118,9 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
+    // Purge protection: a deleted vault/secret cannot be permanently erased before the retention period ends, so a
+    // compromised deploy identity cannot destroy the signing key or GitHub App credentials. Irreversible once set.
+    enablePurgeProtection: true
     publicNetworkAccess: 'Enabled'
   }
 }

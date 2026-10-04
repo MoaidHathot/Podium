@@ -90,6 +90,13 @@ Requires *Storage Table Data Reader* (and *Storage Blob Data Reader* for artifac
 signed-in user. Artifacts are reproducible from the repositories at any time (a rebuild recreates them), so the
 tables are the part worth keeping.
 
+## Re-running infrastructure deployments
+
+`infra/deploy.ps1` keeps whatever image the web app and builder job currently run (CI deploys pinned digests); the
+`:latest` tags are only used when a resource does not exist yet. Pass `-WebImage`/`-BuilderImage` to override.
+The Key Vault has purge protection on (irreversible), `main` rejects force-pushes and deletion, and every GitHub Action
+is pinned to a commit SHA (Dependabot bumps the pins).
+
 ## Scaling
 
 - `infra/deploy.ps1 -Phase app -MinReplicas 1` keeps one replica warm (no ~20 s cold start) for a few dollars a month;

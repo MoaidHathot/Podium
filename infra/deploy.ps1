@@ -19,13 +19,33 @@ param(
     [string] $GitHubRepository = 'MoaidHathot/Podium',
     [string] $GitHubAppId,
     [string] $GitHubAppSlug,
-    [string] $WebImage = 'ghcr.io/moaidhathot/podium/web:latest',
+    # Images default to whatever is currently deployed (CI pins digests); the :latest tags are used only when the
+    # resource does not exist yet, so re-running a phase never rolls production to a different image.
+    [string] $WebImage,
     # 0 = scale to zero when idle (default); 1 = always-warm replica (app phase).
     [ValidateRange(0, 1)] [int] $MinReplicas = 0,
-    [string] $BuilderImage = 'ghcr.io/moaidhathot/podium/builder:latest'
+    [string] $BuilderImage
 )
 $ErrorActionPreference = 'Stop'
 $infra = $PSScriptRoot
+
+function Resolve-DeployedImage {
+    # Returns the image reference the given container app / job currently runs, or $null when it does not exist.
+    param([ValidateSet('app', 'job')] [string] $Kind, [string] $Name)
+    $cmd = if ($Kind -eq 'job') { @('containerapp', 'job', 'show') } else { @('containerapp', 'show') }
+    $img = & az @cmd -g $ResourceGroup -n $Name --query 'properties.template.containers[0].image' -o tsv 2>$null | Where-Object { "$_" -notmatch 'WARNING' } | Out-String
+    if ($LASTEXITCODE -ne 0 -or -not "$img".Trim()) { return $null }
+    return "$img".Trim()
+}
+
+if (-not $BuilderImage) {
+    $BuilderImage = Resolve-DeployedImage -Kind job -Name "$BaseName-builder"
+    if ($BuilderImage) { Write-Host "builder image: keeping deployed $BuilderImage" } else { $BuilderImage = 'ghcr.io/moaidhathot/podium/builder:latest' }
+}
+if (-not $WebImage) {
+    $WebImage = Resolve-DeployedImage -Kind app -Name "$BaseName-web"
+    if ($WebImage) { Write-Host "web image: keeping deployed $WebImage" } else { $WebImage = 'ghcr.io/moaidhathot/podium/web:latest' }
+}
 
 function Invoke-Az {
     # Usage: Invoke-Az @('group', 'create', '-n', $rg). An explicit array avoids clashes with PowerShell common parameters (-o).
