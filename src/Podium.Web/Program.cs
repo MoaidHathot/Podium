@@ -14,6 +14,7 @@ using System.Threading.RateLimiting;
 using Microsoft.Extensions.Options;
 using Podium.Core.Abstractions;
 using Podium.Core.InMemory;
+using Podium.Core.Models;
 using Podium.Core.Services;
 using Podium.Web.Api;
 using Podium.Web.Builds;
@@ -258,6 +259,15 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 
 var app = builder.Build();
 
+// `Podium.Web export`: one-shot backup of the tables into the "backups" blob container, then exit (scheduled job).
+if (args.Length > 0 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
+{
+    var tables = app.Services.GetService<TableServiceClient>();
+    var blobs = app.Services.GetService<BlobServiceClient>();
+    if (tables is null || blobs is null) { Console.Error.WriteLine("export needs Azure storage (Storage:AccountName or a connection string)"); return 2; }
+    return await BackupCommand.RunAsync(tables, blobs, storage.TablePrefix, Console.Out, CancellationToken.None);
+}
+
 // Live sessions record pacing from the sync relay (no extra traffic from clients).
 {
     var hub = app.Services.GetRequiredService<Podium.Web.Sync.SyncHub>();
@@ -335,6 +345,30 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
         await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
         return Results.Redirect(SafeReturnUrl(returnUrl));
     });
+
+    // Development/CI only: seeds a fixture deck (memory storage) whose tiny site speaks the Podium sync protocol, so
+    // browser smoke tests can exercise library, details, remote and the relay without a real build.
+    app.MapPost("/dev-seed", async (ISourceStore sources, IDeckStore decks, IBuildStore builds, IArtifactStore artifacts, DeckAccessService access, DeckSearchIndex search, CancellationToken ct) =>
+    {
+        if (artifacts is not LocalArtifactStore local) return Results.BadRequest("dev-seed needs memory storage");
+        const string slug = "fixture-deck";
+        await sources.UpsertAsync(new Source { Id = "fixture/slides", Owner = "fixture", Repo = "slides", Trusted = true, LastSeenSha = new string('a', 40) }, ct);
+        var dir = (await local.CreateUploadUriAsync(slug, "fixture1", TimeSpan.FromMinutes(5), ct)).LocalPath;
+        Directory.CreateDirectory(Path.Combine(dir, "site"));
+        await File.WriteAllTextAsync(Path.Combine(dir, "site", "index.html"), Podium.Web.Storage.FixtureDeck.IndexHtml, ct);
+        await File.WriteAllTextAsync(Path.Combine(dir, "notes.json"), "[{\"index\":1,\"title\":\"One\",\"note\":\"First note\"},{\"index\":2,\"title\":\"Two\",\"note\":\"Second note\"},{\"index\":3,\"title\":\"Three\",\"note\":null}]", ct);
+        await File.WriteAllTextAsync(Path.Combine(dir, "text.json"), "[{\"index\":1,\"title\":\"One\",\"text\":\"fixture slide one\"},{\"index\":2,\"title\":\"Two\",\"text\":\"fixture slide two\"},{\"index\":3,\"title\":\"Three\",\"text\":\"fixture slide three\"}]", ct);
+        await decks.UpsertAsync(new Deck
+        {
+            Slug = slug, SourceId = "fixture/slides", Path = "fixture", Entry = "slides.md", Kind = DeckKind.Slidev, Title = "Fixture deck", Tags = ["fixture"],
+            Visibility = Visibility.Public, CurrentBuildId = "fixture1", LatestSuccessfulBuildId = "fixture1", LatestBuildId = "fixture1", LatestBuildStatus = BuildStatus.Succeeded,
+            CurrentHasNotes = true, CurrentHasText = true, CurrentSlideCount = 3, LastCommitSha = new string('a', 40),
+        }, ct);
+        await builds.UpsertAsync(new Build { Id = "fixture1", DeckSlug = slug, Sha = new string('a', 40), Status = BuildStatus.Succeeded, HasSite = true, HasNotes = true, HasText = true, SlideCount = 3, FinishedAt = DateTimeOffset.UtcNow, StartedAt = DateTimeOffset.UtcNow.AddSeconds(-20) }, ct);
+        access.Invalidate(slug);
+        await search.RefreshAsync((await decks.GetAsync(slug, ct))!, ct);
+        return Results.Ok(new { slug });
+    });
 }
 
 app.MapGet("/healthz", () => Results.Ok(new { ok = true }));
@@ -351,6 +385,7 @@ Podium.Web.Sync.SyncEndpoints.MapSync(app);
 app.MapRazorPages();
 
 app.Run();
+return 0;
 
 static string SafeReturnUrl(string? returnUrl)
     => !string.IsNullOrEmpty(returnUrl) && returnUrl.StartsWith('/') && !returnUrl.StartsWith("//", StringComparison.Ordinal) && !returnUrl.StartsWith("/\\", StringComparison.Ordinal) ? returnUrl : "/";

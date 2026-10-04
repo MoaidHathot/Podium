@@ -54,6 +54,46 @@ jobs:
       - name: Lockfile is in sync with package.json
         run: npm ls --omit=dev >/dev/null
 
+  smoke:
+    # Real browser against the real pipeline (memory storage, dev login): library, details, deck relay, remote, gallery.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: builder/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: builder
+      - run: npx playwright install --with-deps chromium
+        working-directory: builder
+      - run: dotnet build src/Podium.Web -c Release --nologo
+      - name: Start Podium (memory storage)
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://localhost:5199
+          Storage__ConnectionString: memory
+          Builder__Mode: LocalProcess
+          Builder__AutoRebuildOnUpgrade: 'false'
+          Podium__PublicBaseUrl: http://localhost:5199
+          Podium__ExternalBaseUrl: http://127.0.0.1:5199
+          Podium__PublicGallery: 'true'
+          Podium__OwnerGitHubId: '1001'
+          Podium__SigningKey: aW50ZWdyYXRpb24tdGVzdC1zaWduaW5nLWtleS0wMTIzNDU2Nzg5
+          Auth__AllowDevLogin: 'true'
+          GitHub__Token: ''
+        run: |
+          dotnet src/Podium.Web/bin/Release/net10.0/Podium.Web.dll > podium.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://localhost:5199/healthz && break || sleep 2; done
+      - run: node tests/smoke/smoke.mjs http://localhost:5199
+      - name: Server log
+        if: failure()
+        run: tail -n 200 podium.log
+
   images:
     # Builds both images without pushing so a broken Dockerfile or base-image change fails the PR, not the deploy.
     runs-on: ubuntu-latest

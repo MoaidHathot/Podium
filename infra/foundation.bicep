@@ -22,6 +22,9 @@ param githubExtraSubjects array = []
 @description('Builder container image.')
 param builderImage string = 'ghcr.io/moaidhathot/podium/builder:latest'
 
+@description('Web image, used by the scheduled backup job (same image as the app, xport mode).')
+param webImage string = 'ghcr.io/moaidhathot/podium/web:latest'
+
 @description('Monthly budget in USD for the resource group.')
 param budgetAmount int = 8
 
@@ -282,6 +285,63 @@ resource builderJob 'Microsoft.App/jobs@2024-03-01' = {
           image: builderImage
           resources: { cpu: json('2.0'), memory: '4Gi' }
           env: [ { name: 'PODIUM_WORKDIR', value: '/work' } ]
+        }
+      ]
+    }
+  }
+}
+
+// Daily backup of the index tables into the "backups" container (the artifacts are reproducible from git). Runs the
+// web image in `export` mode with the web identity; runs older than 30 days are deleted by the lifecycle rule.
+resource backupJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: '${baseName}-backup'
+  location: location
+  identity: { type: 'UserAssigned', userAssignedIdentities: { '${webIdentity.id}': {} } }
+  properties: {
+    environmentId: env.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 600
+      replicaRetryLimit: 1
+      scheduleTriggerConfig: { cronExpression: '15 3 * * *', parallelism: 1, replicaCompletionCount: 1 }
+    }
+    template: {
+      containers: [
+        {
+          name: 'backup'
+          image: webImage
+          args: [ 'export' ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          env: [
+            { name: 'Storage__AccountName', value: storage.name }
+            { name: 'AZURE_CLIENT_ID', value: webIdentity.properties.clientId }
+            { name: 'Podium__PublicBaseUrl', value: 'https://localhost' }
+            { name: 'Podium__OwnerGitHubId', value: '1' }
+            { name: 'Podium__SigningKey', value: 'export-only-no-requests-are-served-0123456789abcdef' }
+            { name: 'DataProtection__KeyVaultKeyId', value: dataProtectionKey.properties.keyUriWithVersion }
+            { name: 'Builder__Mode', value: 'LocalProcess' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+resource backupLifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+  parent: storage
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'expire-backups'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: { blobTypes: [ 'blockBlob' ], prefixMatch: [ 'backups/' ] }
+            actions: { baseBlob: { delete: { daysAfterModificationGreaterThan: 30 } } }
+          }
         }
       ]
     }

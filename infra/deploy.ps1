@@ -108,6 +108,7 @@ if ($Phase -in 'foundation', 'all') {
         baseName            = $BaseName
         githubRepository    = $GitHubRepository
         builderImage        = $BuilderImage
+        webImage            = $WebImage
         budgetEmail         = $BudgetEmail
         githubExtraSubjects = @($extraSubjects)
     }
