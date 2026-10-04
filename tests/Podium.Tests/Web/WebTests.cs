@@ -379,6 +379,66 @@ public sealed class ServingTests(PodiumWebFactory app)
     }
 
     [Fact]
+    public async Task Share_link_admission_is_signed_counted_capped_and_passcode_protected()
+    {
+        var deck = await app.SeedDeckAsync("hardened-link-deck");
+        var owner = await app.OwnerClientAsync();
+        var links = app.Services.GetRequiredService<IShareLinkStore>();
+
+        // Forged cookie: a plain link id (the old unsigned format) buys nothing.
+        var plain = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", expiresInDays = 7 }));
+        var plainId = JsonDocument.Parse(await plain.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString()!;
+        var forged = app.Client();
+        var forgedReq = PodiumWebFactory.Navigation($"/d/{deck.Slug}/");
+        forgedReq.Headers.Add("Cookie", $"podium_share_{deck.Slug}={plainId}");
+        Assert.NotEqual(HttpStatusCode.OK, (await forged.SendAsync(forgedReq)).StatusCode);
+
+        // Max uses: two browsers may be admitted, the third is not; admitted browsers keep working.
+        var capped = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", expiresInDays = 7, maxUses = 2 }));
+        var cappedId = JsonDocument.Parse(await capped.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString()!;
+        var b1 = app.Client(); var b2 = app.Client(); var b3 = app.Client();
+        Assert.Equal(HttpStatusCode.OK, (await b1.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await b2.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
+        Assert.NotEqual(HttpStatusCode.OK, (await b3.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await b1.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/5"))).StatusCode); // cookie, no ?share
+        var cappedLink = (await links.GetAsync(cappedId))!;
+        Assert.Equal(2, cappedLink.Opens);
+        Assert.NotNull(cappedLink.LastOpenedAt);
+        // Views record which link admitted the viewer.
+        var recent = await app.Services.GetRequiredService<IViewHistoryStore>().RecentForDeckAsync(deck.Slug);
+        Assert.Contains(recent, v => v.LinkId == cappedId);
+
+        // Revoking ends it for cookie holders too.
+        await owner.PostAsync($"/api/decks/{deck.Slug}/links/{cappedId}/revoke", null);
+        Assert.NotEqual(HttpStatusCode.OK, (await b1.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).StatusCode);
+
+        // Passcode: arrival is bounced to the unlock page; wrong code 401; right code admits and the cookie carries on.
+        var locked = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", expiresInDays = 7, passcode = "open sesame" }));
+        var lockedId = JsonDocument.Parse(await locked.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString()!;
+        Assert.NotNull((await links.GetAsync(lockedId))!.PasscodeHash);
+        Assert.DoesNotContain("open sesame", (await links.GetAsync(lockedId))!.PasscodeHash);
+        var v = app.Client();
+        var bounce = await v.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/3?share={lockedId}"));
+        Assert.Equal(HttpStatusCode.Redirect, bounce.StatusCode);
+        var unlockUrl = bounce.Headers.Location!.ToString();
+        Assert.StartsWith($"/d/{deck.Slug}/unlock?share={lockedId}", unlockUrl);
+        var form = await v.GetAsync(unlockUrl);
+        Assert.Equal(HttpStatusCode.OK, form.StatusCode);
+        var formHtml = await form.Content.ReadAsStringAsync();
+        var token = System.Text.RegularExpressions.Regex.Match(formHtml, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value;
+        Assert.False(string.IsNullOrEmpty(token));
+        var wrong = await v.PostAsync($"/d/{deck.Slug}/unlock", new FormUrlEncodedContent(new Dictionary<string, string> { ["share"] = lockedId, ["passcode"] = "nope", ["next"] = $"/d/{deck.Slug}/3", ["__RequestVerificationToken"] = token }));
+        Assert.Equal(HttpStatusCode.Unauthorized, wrong.StatusCode);
+        var right = await v.PostAsync($"/d/{deck.Slug}/unlock", new FormUrlEncodedContent(new Dictionary<string, string> { ["share"] = lockedId, ["passcode"] = "open sesame", ["next"] = $"/d/{deck.Slug}/3", ["__RequestVerificationToken"] = token }));
+        Assert.Equal(HttpStatusCode.Redirect, right.StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/3", right.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.OK, (await v.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/3"))).StatusCode);
+        // Open redirect attempts on "next" are neutralised.
+        var evil = await v.PostAsync($"/d/{deck.Slug}/unlock", new FormUrlEncodedContent(new Dictionary<string, string> { ["share"] = lockedId, ["passcode"] = "open sesame", ["next"] = "https://evil.example/", ["__RequestVerificationToken"] = token }));
+        Assert.Equal($"/d/{deck.Slug}/", evil.Headers.Location!.ToString());
+    }
+
+    [Fact]
     public async Task Pdf_export_follows_its_own_visibility()
     {
         var deck = await app.SeedDeckAsync("pdf-deck", Visibility.Public);

@@ -235,6 +235,8 @@ public static partial class ApiEndpoints
             var deck = await decks.GetAsync(slug, ct);
             if (deck is null) return Results.NotFound();
             if (req.Artifact is not (ArtifactKind.Site or ArtifactKind.Pdf or ArtifactKind.Pptx)) return Results.BadRequest();
+            if (req.Passcode is { Length: > 200 }) return Results.BadRequest(new { error = "Passcode too long" });
+            if (req.MaxUses is < 1 or > 100_000) return Results.BadRequest(new { error = "Max uses must be between 1 and 100000" });
             var id = NewLinkId();
             var link = new ShareLink
             {
@@ -243,6 +245,8 @@ public static partial class ApiEndpoints
                 Artifact = req.Artifact,
                 Label = req.Label?.Trim(),
                 ExpiresAt = req.ExpiresInDays is > 0 and <= 3650 ? DateTimeOffset.UtcNow.AddDays(req.ExpiresInDays.Value) : null,
+                PasscodeHash = string.IsNullOrWhiteSpace(req.Passcode) ? null : Passcodes.Hash(req.Passcode.Trim()),
+                MaxUses = req.MaxUses,
             };
             await links.UpsertAsync(link, ct);
             var path = req.Artifact == ArtifactKind.Site ? $"/d/{slug}/" : $"/d/{slug}.{req.Artifact.ToString().ToLowerInvariant()}";
@@ -335,7 +339,7 @@ public static partial class ApiEndpoints
 
 public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null, bool? OfflineCache = null, bool? AllowEmbedding = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
-public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label);
+public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label, string? Passcode = null, int? MaxUses = null);
 public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title);
 
 public static partial class ApiEndpoints

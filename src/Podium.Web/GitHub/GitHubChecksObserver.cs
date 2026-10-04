@@ -67,7 +67,17 @@ public sealed class GitHubChecksObserver(GitHubAppAuth auth, IOptions<PodiumOpti
                 ? $"Built in {Duration(build)}. {Artifacts(build)}\n\n[Open deck]({options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{deck.Slug}/)"
                 : $"**{build.Error ?? "Build failed"}**\n\n[Build log]({DetailsUrl(deck)})";
             if (build.Warnings.Count > 0) summary += "\n\nWarnings:\n" + string.Join("\n", build.Warnings.Select(w => "- " + w));
-            var output = new NewCheckRunOutput(ok ? "Deck built" : "Deck build failed", summary);
+            if (build.Annotations.Count > 0) summary += $"\n\n{build.Annotations.Count} finding(s) in the deck sources; see the annotations.";
+            var output = new NewCheckRunOutput(ok ? "Deck built" : "Deck build failed", summary)
+            {
+                // Deck-health findings land on the exact file and line in the commit (GitHub caps at 50 per request).
+                Annotations = build.Annotations.Take(50).Select(a => new NewCheckRunAnnotation(a.Path, a.Line, a.Line, a.Level switch
+                {
+                    AnnotationLevel.Failure => CheckAnnotationLevel.Failure,
+                    AnnotationLevel.Warning => CheckAnnotationLevel.Warning,
+                    _ => CheckAnnotationLevel.Notice,
+                }, a.Message)).ToList(),
+            };
 
             if (build.ExternalRef is { } reference && long.TryParse(reference, out var runId))
             {

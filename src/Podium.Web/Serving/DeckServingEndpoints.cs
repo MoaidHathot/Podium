@@ -88,6 +88,9 @@ public static class DeckServingEndpoints
             return Results.NotFound();
         }
 
+        if (result.NeedsPasscodeFor is { } lockedLink && result.Decision != AccessDecision.Allow && IsNavigation(http) && !onExternalHost)
+            return Results.Redirect($"/d/{slug}/unlock?share={Uri.EscapeDataString(lockedLink)}&next={Uri.EscapeDataString(http.Request.Path + QueryWithout(http, "share"))}");
+
         switch (result.Decision)
         {
             case AccessDecision.RequireLogin:
@@ -138,7 +141,7 @@ public static class DeckServingEndpoints
             var fileUrl = $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{slug}.pptx?vt={Uri.EscapeDataString(fileToken)}";
             var embed = "https://view.officeapps.live.com/op/embed.aspx?src=" + Uri.EscapeDataString(fileUrl);
             http.Response.Headers[HeaderNames.CacheControl] = "no-store";
-            await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct);
+            await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct, result.LinkId);
             return Results.Content(OfficeViewerPage(deck, slug, embed), "text/html; charset=utf-8");
         }
 
@@ -181,7 +184,7 @@ public static class DeckServingEndpoints
                     html = InjectOpenGraph(html, deck, $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}");
 
                 headers[HeaderNames.CacheControl] = "no-cache, private";
-                await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct);
+                await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct, result.LinkId);
                 return Results.Content(html, "text/html; charset=utf-8");
             }
         }
@@ -205,6 +208,8 @@ public static class DeckServingEndpoints
             ? new DeckAccessResult(await access.GetDeckAsync(slug, ct), AccessDecision.Allow, false, true)
             : await access.EvaluateAsync(http, slug, kind, caller, ct);
         if (result.Deck is null) return Results.NotFound();
+        if (result.NeedsPasscodeFor is { } lockedLink && result.Decision != AccessDecision.Allow)
+            return Results.Redirect($"/d/{slug}/unlock?share={Uri.EscapeDataString(lockedLink)}&next={Uri.EscapeDataString(http.Request.Path + QueryWithout(http, "share"))}");
         switch (result.Decision)
         {
             case AccessDecision.RequireLogin: return Results.Redirect(LoginUrl(http));
@@ -220,7 +225,7 @@ public static class DeckServingEndpoints
         var fileName = $"{slug}.{kind.ToString().ToLowerInvariant()}";
         var inline = kind == ArtifactKind.Pdf && !http.Request.Query.ContainsKey("download");
         http.Response.Headers[HeaderNames.ContentDisposition] = $"{(inline ? "inline" : "attachment")}; filename=\"{fileName}\"";
-        await RecordViewAsync(views, cache, caller, slug, "", kind, ct);
+        await RecordViewAsync(views, cache, caller, slug, "", kind, ct, result.LinkId);
         return Results.Stream(file.Content, file.ContentType, lastModified: file.LastModified,
             entityTag: file.ETag is null ? null : new Microsoft.Net.Http.Headers.EntityTagHeaderValue(QuoteEtag(file.ETag)),
             enableRangeProcessing: true);
@@ -281,15 +286,15 @@ public static class DeckServingEndpoints
             """;
     }
 
-    private static async Task RecordViewAsync(IViewHistoryStore views, IMemoryCache cache, Caller caller, string slug, string path, ArtifactKind kind, CancellationToken ct)
+    private static async Task RecordViewAsync(IViewHistoryStore views, IMemoryCache cache, Caller caller, string slug, string path, ArtifactKind kind, CancellationToken ct, string? linkId = null)
     {
         var principal = caller.Principal ?? "anonymous";
-        var key = $"view:{principal}:{slug}:{kind}";
+        var key = $"view:{principal}:{slug}:{kind}:{linkId}";
         if (cache.TryGetValue(key, out _)) return;
         cache.Set(key, true, TimeSpan.FromMinutes(10));
         try
         {
-            await views.RecordAsync(new ViewEvent { DeckSlug = slug, Principal = principal, Artifact = kind, Presenter = path.StartsWith("presenter", StringComparison.OrdinalIgnoreCase) }, ct);
+            await views.RecordAsync(new ViewEvent { DeckSlug = slug, Principal = principal, Artifact = kind, Presenter = path.StartsWith("presenter", StringComparison.OrdinalIgnoreCase), LinkId = linkId }, ct);
         }
         catch (Exception) when (!ct.IsCancellationRequested)
         {
@@ -308,6 +313,13 @@ public static class DeckServingEndpoints
 
     private static string MainHostUrl(PodiumOptions options, HttpContext http)
         => options.PublicBaseUrl.ToString().TrimEnd('/') + http.Request.Path + http.Request.QueryString;
+
+    private static string QueryWithout(HttpContext http, string key)
+    {
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(http.Request.QueryString.Value ?? "");
+        q.Remove(key);
+        return q.Count == 0 ? "" : Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString("", q.ToDictionary(kv => kv.Key, kv => (string?)kv.Value.ToString()));
+    }
 
     internal static string QuoteEtag(string etag) => etag.StartsWith('"') || etag.StartsWith("W/", StringComparison.Ordinal) ? etag : $"\"{etag}\"";
 

@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
 using Podium.Core.Abstractions;
 using Podium.Core.Models;
@@ -59,6 +61,35 @@ public static class PresenterToolsEndpoints
             return Results.Stream(file.Content, "application/json; charset=utf-8");
         }).RequireRateLimiting("probe");
 
+        // Passcode-protected share links: a tiny interstitial. GET renders the form; POST verifies, admits (signed
+        // cookie) and continues to the deck. Rate limited per IP like login, and the passcode never appears in a URL.
+        app.MapGet("/d/{slug}/unlock", async (string slug, [FromQuery] string? share, [FromQuery] string? next, HttpContext http, DeckAccessService access, IShareLinkStore links, IAntiforgery antiforgery, CancellationToken ct) =>
+        {
+            if (!Podium.Core.Slug.IsValid(slug) || string.IsNullOrEmpty(share) || share.Length > 64) return Results.NotFound();
+            var deck = await access.GetDeckAsync(slug, ct);
+            var link = await links.GetAsync(share, ct);
+            if (deck is null || link is null || link.DeckSlug != slug || link.Revoked || link.PasscodeHash is null) return Results.NotFound();
+            http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            return Results.Content(UnlockPage(deck, share, SafeNext(next, slug), wrong: false, antiforgery.GetAndStoreTokens(http)), "text/html; charset=utf-8");
+        }).RequireRateLimiting("auth");
+
+        app.MapPost("/d/{slug}/unlock", async (string slug, HttpContext http, DeckAccessService access, IAntiforgery antiforgery, CancellationToken ct) =>
+        {
+            if (!Podium.Core.Slug.IsValid(slug)) return Results.NotFound();
+            if (!await antiforgery.IsRequestValidAsync(http)) return Results.BadRequest();
+            var form = await http.Request.ReadFormAsync(ct);
+            var share = form["share"].ToString();
+            var passcode = form["passcode"].ToString();
+            var next = SafeNext(form["next"].ToString(), slug);
+            if (string.IsNullOrEmpty(share) || share.Length > 64) return Results.NotFound();
+            if (await access.AdmitWithPasscodeAsync(http, slug, share, passcode, ct)) return Results.Redirect(next);
+            var deck = await access.GetDeckAsync(slug, ct);
+            if (deck is null) return Results.NotFound();
+            http.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            return Results.Content(UnlockPage(deck, share, next, wrong: true, antiforgery.GetAndStoreTokens(http)), "text/html; charset=utf-8");
+        }).RequireRateLimiting("auth");
+
         app.MapGet("/d/{slug}/slides.jpg", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct)
             => ServeSheet(slug, ArtifactKind.SlideSheet, "image/jpeg", http, access, artifacts, callers, ct)).RequireRateLimiting("probe");
         app.MapGet("/d/{slug}/slides.json", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct)
@@ -79,6 +110,33 @@ public static class PresenterToolsEndpoints
         http.Response.Headers["X-Podium-Build"] = result.Deck.CurrentBuildId;
         return Results.Stream(file.Content, contentType, lastModified: file.LastModified,
             entityTag: file.ETag is null ? null : new EntityTagHeaderValue(DeckServingEndpoints.QuoteEtag(file.ETag)));
+    }
+
+    /// <summary>Only same-deck paths may be the continuation target (no open redirects).</summary>
+    private static string SafeNext(string? next, string slug)
+        => !string.IsNullOrEmpty(next) && next.StartsWith($"/d/{slug}", StringComparison.Ordinal) && !next.StartsWith("//", StringComparison.Ordinal) && !next.Contains('\\') && next.Length < 2000 ? next : $"/d/{slug}/";
+
+    private static string UnlockPage(Deck deck, string share, string next, bool wrong, AntiforgeryTokenSet tokens)
+    {
+        var title = System.Net.WebUtility.HtmlEncode(deck.Title);
+        var antiforgery = $"<input type=\"hidden\" name=\"{tokens.FormFieldName}\" value=\"{System.Net.WebUtility.HtmlEncode(tokens.RequestToken)}\">";
+        return $$"""
+            <!doctype html>
+            <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+            <title>Passcode · {{title}}</title><link rel="stylesheet" href="/css/podium.css"></head>
+            <body class="centered"><main class="card" style="max-width:26rem; margin:10vh auto; padding:1.5rem">
+            <h1 style="font-size:1.2rem; margin:0 0 .4rem">{{title}}</h1>
+            <p class="muted" style="margin:0 0 1rem">This link is protected with a passcode.</p>
+            {{(wrong ? "<p class=\"error\" role=\"alert\">That passcode is not right.</p>" : "")}}
+            <form method="post" action="/d/{{deck.Slug}}/unlock">
+              <input type="hidden" name="share" value="{{System.Net.WebUtility.HtmlEncode(share)}}">
+              <input type="hidden" name="next" value="{{System.Net.WebUtility.HtmlEncode(next)}}">
+              {{antiforgery}}
+              <label for="passcode" class="faint">Passcode</label>
+              <input class="input" id="passcode" name="passcode" type="password" autocomplete="one-time-code" autofocus required maxlength="200" style="width:100%; margin:.3rem 0 .8rem">
+              <button class="btn btn-primary" type="submit">Open deck</button>
+            </form></main></body></html>
+            """;
     }
 
     private static string RemotePage(Deck deck)
