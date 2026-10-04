@@ -343,6 +343,52 @@ public sealed class ServingTests(PodiumWebFactory app)
         Assert.Equal("application/pdf", owner.Content.Headers.ContentType!.MediaType);
     }
 
+    [Fact]
+    public async Task Speaker_notes_are_served_to_presenters_only_and_never_from_the_external_origin()
+    {
+        var deck = await app.SeedDeckAsync("notes-deck", Visibility.Public);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.Notes, "application/json", "[{\"index\":1,\"note\":\"secret\"}]"u8.ToArray());
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.SlideSheet, "image/jpeg", [0xFF, 0xD8, 0xFF, 0xD9]);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.SlideSheetMeta, "application/json", "{\"count\":1}"u8.ToArray());
+        await app.Services.GetRequiredService<IDeckStore>().UpsertAsync(deck with { CurrentHasNotes = true, CurrentHasSlideSheet = true });
+        app.Services.GetRequiredService<Podium.Web.Serving.DeckAccessService>().Invalidate(deck.Slug);
+
+        // Public deck: anyone gets the slide sheet (slide content is public anyway)...
+        var anon = app.Client();
+        Assert.Equal(HttpStatusCode.OK, (await anon.GetAsync($"/d/{deck.Slug}/slides.json")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await anon.GetAsync($"/d/{deck.Slug}/slides.jpg")).StatusCode);
+        // ...but never the notes.
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync($"/d/{deck.Slug}/notes.json")).StatusCode);
+        var guest = await app.GuestClientAsync(777001);
+        Assert.Equal(HttpStatusCode.NotFound, (await guest.GetAsync($"/d/{deck.Slug}/notes.json")).StatusCode);
+
+        // A grantee with the Present right does.
+        await app.Services.GetRequiredService<IGrantStore>().UpsertAsync(new Grant { DeckSlug = deck.Slug, Principal = "github:777002", Site = true, Present = true });
+        var copresenter = await app.GuestClientAsync(777002);
+        var notes = await copresenter.GetAsync($"/d/{deck.Slug}/notes.json");
+        Assert.Equal(HttpStatusCode.OK, notes.StatusCode);
+        Assert.Contains("secret", await notes.Content.ReadAsStringAsync());
+        Assert.Contains("no-store", notes.Headers.CacheControl!.ToString());
+
+        var owner = await app.OwnerClientAsync();
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync($"/d/{deck.Slug}/notes.json")).StatusCode);
+        var remote = await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/remote"));
+        Assert.Equal(HttpStatusCode.OK, remote.StatusCode);
+        Assert.Contains("data-has-notes=\"1\"", await remote.Content.ReadAsStringAsync());
+
+        // The external origin never serves presenter tooling, even with a valid owner session replayed there.
+        var external = app.Client(PodiumWebFactory.ExternalOrigin);
+        var bounced = await external.GetAsync($"/d/{deck.Slug}/notes.json");
+        Assert.Equal(HttpStatusCode.Redirect, bounced.StatusCode);
+        Assert.StartsWith(PodiumWebFactory.PublicOrigin, bounced.Headers.Location!.ToString());
+
+        // Private deck: the sheet follows the site's visibility.
+        var priv = await app.SeedDeckAsync("notes-private-deck");
+        await app.Services.GetRequiredService<IDeckStore>().UpsertAsync(priv with { CurrentHasSlideSheet = true });
+        app.Services.GetRequiredService<Podium.Web.Serving.DeckAccessService>().Invalidate(priv.Slug);
+        Assert.NotEqual(HttpStatusCode.OK, (await anon.GetAsync($"/d/{priv.Slug}/slides.json")).StatusCode);
+    }
+
     private static int CountOf(string haystack, string needle)
     {
         int count = 0, i = 0;

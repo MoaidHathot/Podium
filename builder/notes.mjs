@@ -2,12 +2,13 @@
 //   notes.json : [{ index, title, note }]            speaker notes per page (hidden/disabled slides are skipped by the
 //                                                     parser so indexes match what the browser shows)
 //   lint       : [{ path, line, level, message }]     deck-health findings with repository-relative positions
-// Usage: node notes.mjs <deckDir> <entry> <repoDir> <deckPathInRepo> <outNotesJson> <outLintJson>
+//   text.json  : [{ index, title, text }]            plain slide text for search (markdown/HTML stripped), in slide numbering
+// Usage: node notes.mjs <deckDir> <entry> <repoDir> <deckPathInRepo> <outNotesJson> <outLintJson> <outTextJson>
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
-const [deckDir, entry, repoDir, deckPath, outNotes, outLint] = process.argv.slice(2);
+const [deckDir, entry, repoDir, deckPath, outNotes, outLint, outText] = process.argv.slice(2);
 const require = createRequire(join(deckDir, 'package.json'));
 const { load } = require('@slidev/parser/fs');
 
@@ -83,6 +84,26 @@ for (const s of data.slides) {
   }
 }
 
+// Plain text per slide for search: strip frontmatter-free markdown and HTML down to words.
+function plainText(md) {
+  return String(md || '')
+    .replace(/```[\s\S]*?```/g, (m) => m.replace(/```[^\n]*\n?/g, ''))   // keep code content, drop fences
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/[*_`>|~]/g, ' ')
+    .replace(/&(nbsp|amp|lt|gt|quot);/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 20000);
+}
+const text = data.slides.map((s) => ({ index: s.index + 1, title: s.title ? plainText(s.title) : null, text: plainText(s.content) }));
+
 writeFileSync(outNotes, JSON.stringify(notes));
 writeFileSync(outLint, JSON.stringify(findings));
+if (outText) writeFileSync(outText, JSON.stringify(text));
 process.stdout.write(`notes: ${notes.filter((n) => n.note).length}/${notes.length} slides have notes; lint: ${findings.length} finding(s)\n`);

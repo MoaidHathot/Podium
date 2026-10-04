@@ -284,7 +284,7 @@ public static class DeckServingEndpoints
     private static string MainHostUrl(PodiumOptions options, HttpContext http)
         => options.PublicBaseUrl.ToString().TrimEnd('/') + http.Request.Path + http.Request.QueryString;
 
-    private static string QuoteEtag(string etag) => etag.StartsWith('"') || etag.StartsWith("W/", StringComparison.Ordinal) ? etag : $"\"{etag}\"";
+    internal static string QuoteEtag(string etag) => etag.StartsWith('"') || etag.StartsWith("W/", StringComparison.Ordinal) ? etag : $"\"{etag}\"";
 
     internal static bool IsNavigationRequest(HttpContext http) => IsNavigation(http);
 }

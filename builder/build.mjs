@@ -334,7 +334,7 @@ async function extractNotesAndLint(deckDir, outDir, result) {
   const notesOut = join(outDir, 'notes.json');
   const lintOut = join(workRoot, 'lint.json');
   mkdirForDeck(dirname(lintOut));
-  const r = await run(process.execPath, [script, deckDir, entry, join(workRoot, 'repo'), deckPath, notesOut, lintOut], { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 60000) });
+  const r = await run(process.execPath, [script, deckDir, entry, join(workRoot, 'repo'), deckPath, notesOut, lintOut, join(outDir, 'text.json')], { cwd: deckDir, allowFail: true, timeoutMs: Math.min(remainingMs(), 60000) });
   if (r.code === 0 && existsSync(notesOut)) {
     try {
       const notes = JSON.parse(readFileSync(notesOut, 'utf8'));
@@ -587,85 +587,71 @@ async function makeThumbnail(outDir, result) {
 // Slide sheet (all pages tiled into one JPEG), per-page text for search, manifest for offline precaching
 // ---------------------------------------------------------------------------------------------------------------
 const SHEET_COLS = 6;
-const SHEET_CELL_W = 320;
 const SHEET_MAX_PAGES = 400;
 
 async function makeSlideSheetAndText(outDir, result) {
   const pdf = join(outDir, 'deck.pdf');
-  if (!existsSync(pdf)) return; // decks without a PDF (export off, presenterm without weasyprint...) get neither
-  const pdftoppm = which('pdftoppm');
-  const pdftotext = which('pdftotext');
-  const pdfinfo = which('pdfinfo');
-  let pages = 0;
-  if (pdfinfo) {
-    const info = await run(pdfinfo, [pdf], { allowFail: true, echo: false, timeoutMs: 30000 });
-    const m = /Pages:\s+(\d+)/.exec(info.out || '');
-    if (m) pages = Number(m[1]);
-  }
-  if (pages > 0) result.slideCount = pages;
+  const slidevSlides = kind === 'slidev' && result.hasNotes ? result.slideCount : 0; // slide count from the parser
 
-  if (pdftotext) {
-    // One record per page: pdftotext's form-feed separates pages.
-    const r = await run(pdftotext, ['-layout', '-enc', 'UTF-8', pdf, '-'], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 60000) });
-    if (r.code === 0) {
-      const chunks = String(r.out).split('\f');
-      if (chunks.length && !chunks[chunks.length - 1].trim()) chunks.pop();
-      const text = chunks.slice(0, SHEET_MAX_PAGES).map((t, i) => ({ index: i + 1, text: t.replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim().slice(0, 20000) }));
-      writeFileSync(join(outDir, 'text.json'), JSON.stringify(text));
-      result.hasText = true;
-      if (!result.slideCount) result.slideCount = text.length;
-    } else result.warnings.push('Slide text could not be extracted (pdftotext failed)');
-  }
-
-  if (pdftoppm && pages > 0 && pages <= SHEET_MAX_PAGES) {
-    const dir = join(workRoot, 'sheet');
-    rmSync(dir, { recursive: true, force: true });
-    mkdirForDeck(dir);
-    const r = await run(pdftoppm, ['-jpeg', '-jpegopt', 'quality=70', '-scale-to-x', String(SHEET_CELL_W), '-scale-to-y', '-1', pdf, join(dir, 'p')], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 120000) });
-    const tiles = readdirSync(dir).filter((f) => f.endsWith('.jpg')).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    if (r.code === 0 && tiles.length) {
-      const ffmpeg = which('ffmpeg');
-      const magick = which('montage');
-      const rows = Math.ceil(tiles.length / SHEET_COLS);
-      const out = join(outDir, 'slides.jpg');
-      let ok = false;
-      if (magick) {
-        const m = await run(magick, [...tiles.map((t) => join(dir, t)), '-tile', `${SHEET_COLS}x`, '-geometry', '+0+0', '-background', 'black', out], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 120000) });
-        ok = m.code === 0 && existsSync(out);
-      } else if (ffmpeg) {
-        // ffmpeg tile filter needs a fixed cell size; pad every tile to the first tile's size.
-        const m = await run(ffmpeg, ['-y', '-loglevel', 'error', '-framerate', '1', '-i', join(dir, 'p-%0' + String(tiles[0].match(/\d+/)[0].length) + 'd.jpg'), '-vf', `pad=ceil(iw/2)*2:ceil(ih/2)*2,tile=${SHEET_COLS}x${rows}:color=black`, '-frames:v', '1', '-q:v', '5', out], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 120000) });
-        ok = m.code === 0 && existsSync(out);
-      } else {
-        ok = await tileWithPlaywright(dir, tiles, SHEET_COLS, out);
-      }
-      if (ok) {
-        // Cell height: read from the first tile via its JPEG header (SOF0/SOF2).
-        const { width, height } = jpegSize(readFileSync(join(dir, tiles[0]))) || { width: SHEET_CELL_W, height: Math.round(SHEET_CELL_W * 9 / 16) };
-        writeFileSync(join(outDir, 'slides.json'), JSON.stringify({ count: tiles.length, cols: SHEET_COLS, rows, cellWidth: width, cellHeight: height }));
-        result.hasSlideSheet = true;
-      } else result.warnings.push('Slide sheet could not be composed (see build log)');
+  // --- Text for search. Slidev: already written by notes.mjs in slide numbering (its PDF may have a page per click
+  // step). Everything else: one record per PDF page.
+  if (kind === 'slidev') {
+    result.hasText = existsSync(join(outDir, 'text.json'));
+  } else if (existsSync(pdf)) {
+    const pdftotext = which('pdftotext');
+    const pdfinfo = which('pdfinfo');
+    if (pdfinfo) {
+      const info = await run(pdfinfo, [pdf], { allowFail: true, echo: false, timeoutMs: 30000 });
+      const m = /Pages:\s+(\d+)/.exec(info.out || '');
+      if (m) result.slideCount = Number(m[1]);
+    }
+    if (pdftotext) {
+      const r = await run(pdftotext, ['-layout', '-enc', 'UTF-8', pdf, '-'], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 60000) });
+      if (r.code === 0) {
+        const chunks = String(r.out).split('\f');
+        if (chunks.length && !chunks[chunks.length - 1].trim()) chunks.pop();
+        const text = chunks.slice(0, SHEET_MAX_PAGES).map((t, i) => ({ index: i + 1, title: null, text: t.replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim().slice(0, 20000) }));
+        writeFileSync(join(outDir, 'text.json'), JSON.stringify(text));
+        result.hasText = true;
+        if (!result.slideCount) result.slideCount = text.length;
+      } else result.warnings.push('Slide text could not be extracted (pdftotext failed)');
     }
   }
-}
 
-/** Fallback composer: a headless page draws the tiles on a canvas (runs as the deck user via thumb.mjs' sibling). */
-async function tileWithPlaywright(dir, tiles, cols, out) {
-  const r = await run(process.execPath, [join(here, 'sheet.mjs'), dir, String(cols), out], { allowFail: true, timeoutMs: Math.min(remainingMs(), 120000), envExtra: { NODE_PATH: join(here, 'node_modules') } });
-  return r.code === 0 && existsSync(out);
-}
-
-function jpegSize(buf) {
-  let i = 2;
-  while (i < buf.length) {
-    if (buf[i] !== 0xFF) return null;
-    const marker = buf[i + 1];
-    if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
-    i += 2 + buf.readUInt16BE(i + 2);
+  // --- Slide sheet. Slidev: screenshot every slide of the built site (true slide numbering, no PDF needed).
+  // Others: tile the PDF pages.
+  const out = join(outDir, 'slides.jpg');
+  let geometry = null;
+  if (kind === 'slidev' && slidevSlides > 0 && slidevSlides <= SHEET_MAX_PAGES) {
+    const r = await run(process.execPath, [join(here, 'sheet.mjs'), '--site', join(outDir, 'site'), basePath, String(slidevSlides), String(SHEET_COLS), out], { allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { NODE_PATH: join(here, 'node_modules') } });
+    geometry = r.code === 0 ? lastJsonLine(r.out) : null;
+  } else if (kind !== 'slidev' && existsSync(pdf) && result.slideCount > 0 && result.slideCount <= SHEET_MAX_PAGES) {
+    const pdftoppm = which('pdftoppm');
+    if (pdftoppm) {
+      const dir = join(workRoot, 'sheet');
+      rmSync(dir, { recursive: true, force: true });
+      mkdirForDeck(dir);
+      const p = await run(pdftoppm, ['-jpeg', '-jpegopt', 'quality=70', '-scale-to-x', '320', '-scale-to-y', '-1', pdf, join(dir, 'p')], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 120000) });
+      if (p.code === 0) {
+        const r = await run(process.execPath, [join(here, 'sheet.mjs'), '--tiles', dir, String(SHEET_COLS), out], { allowFail: true, timeoutMs: Math.min(remainingMs(), 120000), envExtra: { NODE_PATH: join(here, 'node_modules') } });
+        geometry = r.code === 0 ? lastJsonLine(r.out) : null;
+      }
+    }
   }
+  if (geometry && existsSync(out)) {
+    writeFileSync(join(outDir, 'slides.json'), JSON.stringify(geometry));
+    result.hasSlideSheet = true;
+  } else if (result.slideCount > 0) {
+    rmSync(out, { force: true });
+    result.warnings.push('Slide sheet could not be composed (see build log)');
+  }
+}
+
+function lastJsonLine(out) {
+  const lines = String(out || '').trim().split(/\r?\n/).reverse();
+  for (const l of lines) { const s = l.replace(/^\[[^\]]*\]\s*/, '').trim(); if (s.startsWith('{')) { try { return JSON.parse(s); } catch { /* keep looking */ } } }
   return null;
 }
-
 /** Lists every site file per variant so a service worker can precache a build; never includes presenter-only data. */
 function writeManifest(outDir, result) {
   const manifest = { build: buildId, variants: {} };
