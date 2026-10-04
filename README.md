@@ -24,7 +24,10 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Access control** per deck *and* per artifact: Private, Link (revocable signed URLs), Shared (specific GitHub users), Public.
 - **Discovery**: one library across all connected repositories; `/` focuses search.
 - **Cross-device presenter sync**: a tiny Slidev addon is injected at build time; any instance opened by you (or a *Present* grantee) drives every other open instance through a WebSocket relay. Viewers follow. Clickers work as plain keyboard input.
-- **Phone remote** at `/d/<slug>/remote` (prev/next, counter, timer) and a **QR code** (`/d/<slug>/qr.svg`, shown on the deck page) so the room can open the deck and follow live.
+- **Phone remote** at `/d/<slug>/remote`: speaker notes for the current and next slide, a go-to grid of slide thumbnails, prev/next, blackout and an audience message, timer with a planned-duration countdown, and how many people are watching. A **QR code** (`/d/<slug>/qr.svg`, shown on the deck page) lets the room open the deck and follow live.
+- **Live sessions**: *Go live* freezes the served version, mints a join link that dies when you end, and records pacing; *End session* writes a recap (duration, peak viewers, seconds per slide). Sessions end by themselves when no presenter is connected for 15 minutes. Optionally a live session holds Podium's own deployments until it ends.
+- **Audience affordances**: a "Live · following" pill with *Browse freely* / *Jump to live*; presenter-driven blackout; viewers reconnect and re-sync automatically.
+- **Offline mode**: a per-deck service worker keeps the deck working when the venue network drops (presenters precache the whole build, viewers cache what they visit).
 - **Live updates without surprises**: a new build is announced over the socket; hidden tabs reload silently, visible viewers get a "Reload" notice, presenter views are never reloaded automatically.
 - **Self-updating builds**: when the builder image changes, decks built by the previous builder are rebuilt automatically (failed ones are retried).
 - **External decks**: public repositories you do not own can be added. They build in the same isolated job and are served from a *separate origin* (`Podium:ExternalBaseUrl`, by default the platform FQDN) with a short-lived view token instead of your session, so their code can never read your session or private decks.
@@ -36,7 +39,14 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Link previews**: public decks carry Open Graph / Twitter card tags (title, description, first-slide thumbnail) so links unfurl in chat and social clients; tags the deck already declares are left alone.
 - **Rename-safe sources**: repositories are tracked by GitHub's numeric id, so renaming or transferring one keeps its decks, URLs, grants and share links.
 - **Clean-up**: decks that disappear from their repository are archived (artifacts purged after 30 days) and listed in an *Archived* shelf with a *Delete permanently* action for immediate removal of builds, grants and share links.
+- **Share links** show how often they were opened; optionally capped (max opens) or protected with a passcode (entered once per browser). Admission is a signed cookie; revoking a link cuts off cookie holders too.
+- **Access requests**: a signed-in visitor who cannot open a deck can ask for access; you approve (creates the grant) or decline from the deck page. The page looks the same for unknown slugs, so it never reveals which decks exist.
+- **Public gallery**: with `Podium:PublicGallery`, visitors who are not the owner see a portfolio of your Public decks at `/` (thumbnails, tags, link previews).
+- **Slide strip** on the deck page with copy-link-to-slide; **full-text search** across slide text from the library search box ("In slides" hits jump to the slide); **embedding** opt-in for Public decks.
+- **Deck health**: the builder reports missing images, oversized assets and presenterm errors with file positions, shown on the deck page and as GitHub check-run annotations on the commit.
+- **Bulk actions** (visibility, tags, pin, rebuild), a **New deck** wizard that opens GitHub's editor pre-filled with a starter deck, and `?` for keyboard shortcuts.
 - **GitHub check runs** (optional): grant the app *Checks: read & write* (and subscribe to the `check_run` event) and every build reports back on the commit as `Podium / <deck>` with a link to the deck or the build log; GitHub's **Re-run** button rebuilds the deck.
+- **Operations**: Application Insights telemetry, e-mail alerts (crash loops, build-failure streaks, 5xx), a daily backup of the index into a `backups` container, an audit trail of every change (`/activity`) and *Sign out everywhere*.
 - **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; per-IP rate limits on login, webhook and deck entry; nonce-based Content-Security-Policy on every Podium page (deck pages are the author's HTML and are served from the external origin when untrusted); secrets in Key Vault, data-protection keys wrapped by a Key Vault key.
 
 ## Deck detection
@@ -104,7 +114,9 @@ Finally install the GitHub App on the repositories holding your slides (Sources 
 `dotnet test tests/Podium.Tests` runs the Core unit tests and the web integration tests. The latter boot the real
 pipeline (authentication, rate limiting, external-origin isolation, serving, owner API) on in-memory stores with a fake
 artifact store, so they cover the security boundaries without Azure, GitHub or a builder. Pull requests run `ci.yml`
-(build + tests, builder lint, both Dockerfiles assembled without pushing); pushes to `main` run `deploy.yml`.
+(build + tests, builder lint and unit tests, a real-browser smoke test against the pipeline with a seeded fixture deck,
+both Dockerfiles assembled without pushing); pushes to `main` run `deploy.yml`, which waits (bounded) while a live
+session that opted in is running.
 Dependabot keeps NuGet, npm (Slidev grouped separately), Docker base images and GitHub Actions current.
 
 ## Local development
@@ -132,6 +144,9 @@ dotnet run --project src/Podium.Web      # http://localhost:5187, /dev-login sig
 | `Builder:Mode` | `ContainerAppsJob` or `LocalProcess`; `Builder:JobResourceId`, `Builder:LocalScriptPath` |
 | `Builder:MaxConcurrentBuilds` | builds running at once (default 3); the rest wait in the queue and start as slots free up |
 | `Builder:TrustedMaxOutputMegabytes` / `Builder:UntrustedMaxOutputMegabytes` | upload budget per build (defaults 1024 / 256 MB); oversized builds fail and the served build stays |
+| `Podium:PublicGallery`, `Podium:GalleryTitle` | portfolio of Public decks for visitors at `/` (off by default; on in the provided Bicep) |
+| `Sessions:IdleTimeout` / `OvertimeGrace` / `HardCap` | when live sessions end on their own (15 min / 30 min / 4 h) |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | telemetry via OpenTelemetry (set by Bicep; empty disables) |
 
 ## Remote limitations
 

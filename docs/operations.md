@@ -79,7 +79,33 @@ OIDC federated credentials on the `id-podium-deploy` user-assigned identity; the
 renamed or forked, re-run `infra/deploy.ps1 -Phase foundation` from the new repository (`-GitHubRepository owner/repo`):
 it registers the branch, environment and id-form subjects GitHub presents.
 
+## Telemetry and alerts
+
+Requests, dependencies and exceptions go to Application Insights (`appi-podium`, workspace-based) through
+OpenTelemetry. Three alert rules e-mail the budget address: web container terminated / probe failed (crash loop),
+three or more failed builds in an hour, ten or more 5xx responses in 15 minutes. Alerts, the action group and App
+Insights are all in `infra/foundation.bicep`.
+
+## Live sessions and the deploy guard
+
+A live session can ask Podium to hold its own deployments (per session, off by default). The workflow polls
+`/healthz/live` and waits up to `DEPLOY_GUARD_MAX_WAIT_MINUTES` (repository variable, default 45; `0` disables), or
+deploys immediately with the `force` input. Sessions end by themselves when no presenter has been connected for 15
+minutes, 30 minutes past the planned length, or after 4 hours, so a forgotten session never blocks for long. Deck
+builds are never affected by the guard.
+
+## Audit trail and sessions
+
+Every mutating owner API call is recorded (actor, action, target, bounded details with passcodes masked, IP) and
+shown per deck and on `/activity`; `GET /api/activity` returns the newest 100. *Sign out everywhere* (Sources page)
+bumps a security stamp that invalidates every session cookie issued before it.
+
 ## Backups and export
+
+A scheduled Container Apps Job (`podium-backup`, daily at 03:15 UTC) runs the web image in `export` mode with the web
+identity and writes every table as JSON to the `backups` container (`<timestamp>/<table>.json`); a lifecycle rule
+deletes runs older than 30 days. Trigger one manually with `az containerapp job start -g rg-podium -n podium-backup`.
+For an ad-hoc local copy:
 
 ```pwsh
 ./scripts/export-data.ps1 -ResourceGroup rg-podium -Out ./export            # tables as JSON
