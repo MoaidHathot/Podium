@@ -295,7 +295,8 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         var deck = await app.SeedDeckAsync("csp-free-deck", Visibility.Public);
         var served = await app.Client().SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
         Assert.Equal(HttpStatusCode.OK, served.StatusCode);
-        Assert.False(served.Headers.Contains("Content-Security-Policy"));
+        // Deck pages are the author's HTML: no script policy, only the framing rule.
+        Assert.Equal("frame-ancestors 'self'", served.Headers.GetValues("Content-Security-Policy").Single());
         Assert.Equal("SAMEORIGIN", served.Headers.GetValues("X-Frame-Options").Single());
     }
 
@@ -574,6 +575,30 @@ public sealed class ServingTests(PodiumWebFactory app)
         var priv = await app.SeedDeckAsync("offline-private");
         Assert.NotEqual(HttpStatusCode.OK, (await c.GetAsync($"/d/{priv.Slug}/_podium/sw.js")).StatusCode);
         Assert.NotEqual(HttpStatusCode.OK, (await c.GetAsync($"/d/{priv.Slug}/_podium/manifest.json")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Embedding_is_allowed_only_for_public_decks_that_opted_in()
+    {
+        var deck = await app.SeedDeckAsync("embed-deck", Visibility.Public);
+        var c = app.Client();
+        var closed = await c.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        Assert.Equal("SAMEORIGIN", closed.Headers.GetValues("X-Frame-Options").Single());
+        Assert.Contains("frame-ancestors 'self'", closed.Headers.GetValues("Content-Security-Policy").Single());
+
+        var owner = await app.OwnerClientAsync();
+        await owner.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { allowEmbedding = true }));
+        var open = await c.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        Assert.False(open.Headers.Contains("X-Frame-Options"));
+        Assert.Equal("frame-ancestors *", open.Headers.GetValues("Content-Security-Policy").Single());
+
+        // Flag kept but inert once the deck is no longer Public.
+        await owner.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { visibility = "Link" }));
+        var link = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site" }));
+        var id = JsonDocument.Parse(await link.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString();
+        var viaLink = await app.Client().SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={id}"));
+        Assert.Equal(HttpStatusCode.OK, viaLink.StatusCode);
+        Assert.Equal("SAMEORIGIN", viaLink.Headers.GetValues("X-Frame-Options").Single());
     }
 
     private static int CountOf(string haystack, string needle)

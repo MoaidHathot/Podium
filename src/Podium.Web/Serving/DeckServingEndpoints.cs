@@ -176,6 +176,14 @@ public static class DeckServingEndpoints
         headers["X-Podium-Variant"] = variant;
         // Variants differ per viewer: never let a shared cache serve one viewer's copy to another.
         headers[HeaderNames.Vary] = "Cookie";
+        // Embedding: Public decks that opted in may be framed by any site; everything else stays same-origin only
+        // (the baseline X-Frame-Options is set by the pipeline; CSP frame-ancestors is the modern equivalent).
+        if (deck.Visibility == Visibility.Public && deck.AllowEmbedding)
+        {
+            headers.Remove("X-Frame-Options");
+            headers.ContentSecurityPolicy = "frame-ancestors *";
+        }
+        else headers.ContentSecurityPolicy = "frame-ancestors 'self'";
 
         if (isIndex)
         {

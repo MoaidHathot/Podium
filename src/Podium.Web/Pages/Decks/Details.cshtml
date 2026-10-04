@@ -208,6 +208,8 @@
             <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="stripNotes" @(d.StripNotesForViewers ? "checked" : "") /> Hide speaker notes from viewers</label>
             <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Builds a second copy without notes for everyone except you and people granted <em>Present</em>. Notes are otherwise part of the deck bundle and visible in its presenter view.@(d.StripNotesForViewers && !d.CurrentHasPublicSite ? " The current build has no notes-free copy yet; rebuild to apply." : "")</p>
         }
+        <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="allowEmbedding" @(d.AllowEmbedding ? "checked" : "") /> Allow embedding in other sites</label>
+        <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Only effective while the deck is <strong>Public</strong>. Snippet: <code>&lt;iframe src="@Model.Origin/d/@(d.Slug)/" width="960" height="540" allowfullscreen&gt;&lt;/iframe&gt;</code></p>
         <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="offlineCache" @(d.OfflineCache ? "checked" : "") /> Offline cache</label>
         <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">A service worker keeps the deck available if the venue network drops: your browsers precache the whole build, viewers cache what they visit. Applies on the next page load.</p>
         <p class="faint" style="margin-top:.6rem; font-size:.85rem">Export changes apply to the next build.</p>
@@ -341,6 +343,15 @@
     </section>
 </div>
 
+@if (d.CurrentHasSlideSheet && d.CurrentSlideCount > 0 && servable)
+{
+<section class="panel" style="margin-top:1rem">
+    <h3>Slides</h3>
+    <p class="hint">Click a slide to copy a link that opens the deck right there.</p>
+    <div class="slide-strip" id="slide-strip" data-count="@d.CurrentSlideCount" data-sheet="/d/@(d.Slug)/slides.jpg?v=@d.CurrentBuildId" data-meta="/d/@(d.Slug)/slides.json?v=@d.CurrentBuildId" data-base="@Model.Origin/d/@(d.Slug)/"></div>
+</section>
+}
+
 @if (Model.Sessions.Any(s => s.EndedAt is not null))
 {
 <section class="panel" style="margin-top:1rem">
@@ -447,6 +458,7 @@
   document.querySelectorAll('[data-pptx-viewer]').forEach((r) => r.addEventListener('change', () => patch({ pptxViewer: r.value }, `Viewer: ${r.value === 'Office' ? 'PowerPoint Online' : 'PDF'}`)));
   document.getElementById('exportPdf').addEventListener('change', (e) => patch({ exportPdf: e.target.checked }));
   document.getElementById('exportPptx').addEventListener('change', (e) => patch({ exportPptx: e.target.checked }));
+  document.getElementById('allowEmbedding')?.addEventListener('change', (e) => patch({ allowEmbedding: e.target.checked }, e.target.checked ? 'Embedding allowed for Public decks' : 'Embedding disabled'));
   document.getElementById('offlineCache')?.addEventListener('change', (e) => patch({ offlineCache: e.target.checked }, e.target.checked ? 'Offline cache on' : 'Offline cache off (existing caches clear on the next visit)'));
   document.getElementById('stripNotes')?.addEventListener('change', (e) => patch({ stripNotesForViewers: e.target.checked }, e.target.checked ? 'Viewers will get a notes-free copy from the next build' : 'Viewers will see the full build'));
 
@@ -456,6 +468,26 @@
     await patch({ pinned: next }, next ? 'Pinned' : 'Unpinned');
     pin.setAttribute('aria-pressed', String(next)); pin.textContent = next ? 'Unpin' : 'Pin';
   });
+
+  // Slide strip: every slide as a tile cut from the sheet; click copies a deep link (/d/<slug>/<n>).
+  const strip = document.getElementById('slide-strip');
+  if (strip) {
+    fetch(strip.dataset.meta, { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : null).then((m) => {
+      if (!m) return;
+      for (let i = 0; i < m.count; i++) {
+        const tile = document.createElement('button');
+        tile.type = 'button'; tile.className = 'slide-tile'; tile.title = `Copy link to slide ${i + 1}`;
+        tile.setAttribute('data-copy', `${strip.dataset.base}${i + 1}`);
+        const img = document.createElement('div'); img.className = 'thumb';
+        img.style.backgroundImage = `url("${strip.dataset.sheet}")`;
+        img.style.backgroundSize = `${m.cols * 100}% auto`;
+        img.style.backgroundPosition = `${m.cols > 1 ? ((i % m.cols) / (m.cols - 1)) * 100 : 0}% ${m.rows > 1 ? (Math.floor(i / m.cols) / (m.rows - 1)) * 100 : 0}%`;
+        const n = document.createElement('span'); n.className = 'n'; n.textContent = String(i + 1);
+        tile.append(img, n);
+        strip.appendChild(tile);
+      }
+    }).catch(() => {});
+  }
 
   document.querySelectorAll('[data-decide]').forEach((b) => b.addEventListener('click', async () => {
     const row = b.closest('tr');
