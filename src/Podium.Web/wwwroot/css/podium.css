@@ -360,3 +360,16 @@ pre.log { max-height: 420px; overflow: auto; padding: .75rem; background: var(--
 .hits a { text-decoration: none; color: inherit; }
 .hits a:hover strong { text-decoration: underline; }
 .hits .snippet { font-size: .82rem; margin-top: .15rem; }
+/* Bulk selection + dialogs */
+.card { position: relative; }
+.card .select-box { position: absolute; top: .5rem; left: .5rem; width: 1.5rem; height: 1.5rem; border-radius: 6px; border: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 85%, transparent); color: transparent; cursor: pointer; opacity: 0; transition: opacity .12s; z-index: 2; font-size: .9rem; line-height: 1; }
+.card:hover .select-box, .card:focus-within .select-box, .card.selected .select-box { opacity: 1; }
+.card .select-box[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.card.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bulkbar { position: sticky; bottom: .75rem; z-index: 20; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; padding: .6rem .8rem; margin-top: 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.bulkbar.hidden { display: none; }
+dialog.dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 1.2rem 1.4rem; width: min(96vw, 34rem); }
+dialog.dialog::backdrop { background: rgba(0,0,0,.55); }
+dialog.dialog .field { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .7rem; font-size: .9rem; }
+.shortcuts td:first-child { white-space: nowrap; width: 9rem; }
+kbd { font: inherit; font-size: .78rem; padding: .05rem .4rem; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; background: var(--bg); }

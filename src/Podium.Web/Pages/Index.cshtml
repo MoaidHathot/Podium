@@ -9,7 +9,60 @@
         <h1>Library</h1>
         <p class="muted" style="margin:0">@Model.Decks.Count deck@(Model.Decks.Count == 1 ? "" : "s") across @Model.Sources.Count repositor@(Model.Sources.Count == 1 ? "y" : "ies")</p>
     </div>
-    <a class="btn" href="/sources">Manage sources</a>
+    <div class="row" style="gap:.5rem">
+        @if (Model.Sources.Any(s => s.Trusted))
+        {
+            <button class="btn btn-primary" id="new-deck">New deck</button>
+        }
+        <a class="btn" href="/sources">Manage sources</a>
+        <button class="btn btn-ghost" id="help-btn" title="Keyboard shortcuts (?)">?</button>
+    </div>
+</div>
+
+<dialog id="new-deck-dialog" class="dialog">
+    <form method="dialog">
+        <h3 style="margin-top:0">New deck</h3>
+        <p class="hint">Creates the first file in your repository on GitHub, pre-filled with a starter deck and a <code>.podium.yml</code>. Push (or commit on GitHub) and Podium picks it up within a minute.</p>
+        <label class="field">Repository
+            <select class="input" id="nd-repo">
+                @foreach (var s in Model.Sources.Where(s => s.Trusted)) { <option value="@s.FullName" data-ref="@(s.Ref ?? "")">@s.FullName</option> }
+            </select>
+        </label>
+        <label class="field">Folder <span class="faint">(becomes part of the URL)</span><input class="input" id="nd-folder" placeholder="talks/my-next-talk" required pattern="[A-Za-z0-9._\/-]+" maxlength="200" /></label>
+        <label class="field">Title<input class="input" id="nd-title" placeholder="My next talk" maxlength="200" /></label>
+        <label class="field">Kind
+            <select class="input" id="nd-kind"><option value="slidev">Slidev (slides.md)</option><option value="presenterm">presenterm (main.md + config.yaml)</option></select>
+        </label>
+        <div class="row" style="justify-content:flex-end; gap:.5rem; margin-top:.8rem">
+            <button class="btn" value="cancel">Cancel</button>
+            <button class="btn btn-primary" value="create" id="nd-create">Open on GitHub</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="help-dialog" class="dialog">
+    <h3 style="margin-top:0">Keyboard shortcuts</h3>
+    <table class="table shortcuts">
+        <tbody>
+            <tr><td><kbd>/</kbd></td><td>Search decks and slide text</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Clear search / close dialogs</td></tr>
+            <tr><td><kbd>Space</kbd> on a card</td><td>Select for bulk actions (<kbd>Shift</kbd>+click selects a range)</td></tr>
+            <tr><td><kbd>?</kbd></td><td>This help</td></tr>
+            <tr><td colspan="2" class="faint" style="padding-top:.6rem">In a deck: Slidev's own keys apply. On the phone remote: <kbd>←</kbd> <kbd>→</kbd> <kbd>Space</kbd> navigate, <kbd>B</kbd> blackout, <kbd>G</kbd> go to slide.</td></tr>
+        </tbody>
+    </table>
+    <form method="dialog" class="row" style="justify-content:flex-end"><button class="btn">Close</button></form>
+</dialog>
+
+<div class="bulkbar hidden" id="bulkbar" role="toolbar" aria-label="Bulk actions">
+    <strong id="bulk-count">0 selected</strong>
+    <select class="input" id="bulk-vis" aria-label="Set visibility"><option value="">Visibility…</option><option value="Private">Private</option><option value="Link">Link</option><option value="Shared">Shared</option><option value="Public">Public</option></select>
+    <input class="input" id="bulk-tags" placeholder="Add tags (comma-separated)" style="max-width:16rem" />
+    <button class="btn btn-sm" id="bulk-tags-apply">Add tags</button>
+    <button class="btn btn-sm" id="bulk-pin">Pin</button>
+    <button class="btn btn-sm" id="bulk-unpin">Unpin</button>
+    <button class="btn btn-sm" id="bulk-rebuild">Rebuild</button>
+    <button class="btn btn-ghost btn-sm" id="bulk-clear">Clear</button>
 </div>
 
 @if (Model.PendingRequests.Count > 0)
@@ -311,6 +364,73 @@ else
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 
+  // ---- Bulk selection: click the card's select box (or Space on a focused card); Shift+click selects a range. ----
+  const selected = new Set();
+  let lastSelected = null;
+  const bulkbar = document.getElementById('bulkbar');
+  // Shelves render their own copies of a deck's card; selection is by slug so every copy reflects it.
+  const allCards = [...document.querySelectorAll('.card[data-slug]')];
+  for (const c of allCards) {
+    c.tabIndex = 0;
+    const box = document.createElement('button');
+    box.type = 'button'; box.className = 'select-box'; box.title = 'Select'; box.setAttribute('aria-pressed', 'false'); box.textContent = '✓';
+    box.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleSelect(c, e.shiftKey); });
+    c.appendChild(box);
+  }
+  function toggleSelect(card, range = false) {
+    const visible = allCards.filter((c) => !c.classList.contains('hidden') && c.offsetParent !== null);
+    if (range && lastSelected && visible.includes(lastSelected) && visible.includes(card)) {
+      const [a, b] = [visible.indexOf(lastSelected), visible.indexOf(card)].sort((x, y) => x - y);
+      for (const c of visible.slice(a, b + 1)) selected.add(c.dataset.slug);
+    } else if (selected.has(card.dataset.slug)) selected.delete(card.dataset.slug);
+    else selected.add(card.dataset.slug);
+    lastSelected = card;
+    renderSelection();
+  }
+  function renderSelection() {
+    for (const c of allCards) { const on = selected.has(c.dataset.slug); c.classList.toggle('selected', on); c.querySelector('.select-box')?.setAttribute('aria-pressed', String(on)); }
+    bulkbar.classList.toggle('hidden', selected.size === 0);
+    document.getElementById('bulk-count').textContent = `${selected.size} selected`;
+  }
+  async function bulk(fn, done) {
+    const slugs = [...selected];
+    let ok = 0, failed = 0;
+    for (const slug of slugs) { try { await fn(slug, allCards.find((c) => c.dataset.slug === slug)); ok++; } catch { failed++; } }
+    Podium.toast(`${done}: ${ok} deck${ok === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`, failed ? 'error' : 'ok');
+    setTimeout(() => location.reload(), 700);
+  }
+  document.getElementById('bulk-clear').addEventListener('click', () => { selected.clear(); renderSelection(); });
+  document.getElementById('bulk-vis').addEventListener('change', (e) => { const v = e.target.value; if (!v) return; if (v === 'Public' && !confirm(`Make ${selected.size} deck(s) Public? Anyone with the URL will be able to open them.`)) { e.target.value = ''; return; } bulk((s) => Podium.api('PATCH', `/api/decks/${s}`, { visibility: v }), `Visibility set to ${v}`); });
+  document.getElementById('bulk-pin').addEventListener('click', () => bulk((s) => Podium.api('PATCH', `/api/decks/${s}`, { pinned: true }), 'Pinned'));
+  document.getElementById('bulk-unpin').addEventListener('click', () => bulk((s) => Podium.api('PATCH', `/api/decks/${s}`, { pinned: false }), 'Unpinned'));
+  document.getElementById('bulk-rebuild').addEventListener('click', () => bulk((s) => Podium.api('POST', `/api/decks/${s}/rebuild`), 'Rebuild queued'));
+  document.getElementById('bulk-tags-apply').addEventListener('click', () => {
+    const add = document.getElementById('bulk-tags').value.split(',').map((t) => t.trim()).filter(Boolean);
+    if (!add.length) return;
+    bulk((s, card) => Podium.api('PATCH', `/api/decks/${s}`, { tags: [...new Set([...(card.dataset.tags || '').split(' ').filter(Boolean), ...add])] }), 'Tags added');
+  });
+
+  // ---- New deck wizard: opens GitHub's new-file editor pre-filled with a starter deck. ----
+  document.getElementById('new-deck')?.addEventListener('click', () => document.getElementById('new-deck-dialog').showModal());
+  document.getElementById('help-btn').addEventListener('click', () => document.getElementById('help-dialog').showModal());
+  document.getElementById('new-deck-dialog').addEventListener('close', () => {
+    const dlg = document.getElementById('new-deck-dialog');
+    if (dlg.returnValue !== 'create') return;
+    const repo = document.getElementById('nd-repo');
+    const ref = repo.selectedOptions[0]?.dataset.ref || 'main';
+    const folder = document.getElementById('nd-folder').value.trim().replace(/^\/+|\/+$/g, '');
+    const title = document.getElementById('nd-title').value.trim() || 'My talk';
+    const kind = document.getElementById('nd-kind').value;
+    if (!folder) return;
+    const file = kind === 'slidev' ? 'slides.md' : 'main.md';
+    const content = kind === 'slidev'
+      ? `---\ntheme: default\ntitle: ${title}\ninfo: |\n  ## ${title}\nclass: text-center\ntransition: slide-left\n---\n\n# ${title}\n\nPress Space for the next slide\n\n<!--\nSpeaker notes go here; the audience never sees them.\n-->\n\n---\n\n# Second slide\n\n- Point one\n- Point two\n`
+      : `---\ntitle: ${title}\nauthor: me\n---\n\nFirst slide\n===\n\nHello!\n\n<!-- end_slide -->\n\nSecond slide\n===\n\n- Point one\n- Point two\n`;
+    const url = `https://github.com/${repo.value}/new/${encodeURIComponent(ref)}/${folder.split('/').map(encodeURIComponent).join('/')}?filename=${encodeURIComponent(file)}&value=${encodeURIComponent(content)}`;
+    window.open(url, '_blank', 'noopener');
+    Podium.toast(kind === 'presenterm' ? 'Also add a config.yaml next to main.md (presenterm needs one).' : 'Commit the file on GitHub; the deck appears here after the next sync.', 'ok');
+  });
+
   document.addEventListener('click', async (e) => {
     const del = e.target.closest('[data-delete-deck]');
     if (!del) return;
@@ -352,6 +472,8 @@ else
   document.addEventListener('keydown', (e) => {
     if (e.key === '/' && document.activeElement !== search && !/input|textarea|select/i.test(document.activeElement?.tagName || '')) { e.preventDefault(); search.focus(); search.select(); }
     if (e.key === 'Escape' && document.activeElement === search) { search.value = ''; render(); search.blur(); }
+    if (e.key === '?' && !/input|textarea|select/i.test(document.activeElement?.tagName || '')) { e.preventDefault(); document.getElementById('help-dialog').showModal(); }
+    if (e.key === ' ' && document.activeElement?.classList.contains('card')) { e.preventDefault(); toggleSelect(document.activeElement); }
   });
   render();
 
