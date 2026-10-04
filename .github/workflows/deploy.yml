@@ -152,3 +152,7 @@ jobs:
           else
             echo "web app not provisioned yet; skipping"
           fi
+          # The scheduled backup job runs the web image in export mode; keep it on the same digest.
+          if az containerapp job show -g "$RG" -n podium-backup -o none 2>/dev/null; then
+            az containerapp job update -g "$RG" -n podium-backup --image "$WEB" -o none && echo "backup job: $WEB"
+          fi
