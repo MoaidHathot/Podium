@@ -122,7 +122,7 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
             foreach (var (_, payload) in room.LastState)
                 await SendAsync(conn, payload, ct);
             if (room.Screen is { } screen) await SendAsync(conn, screen, ct);
-            if (room.Session is { EndedAt: null } live) await SendAsync(conn, SessionPayload(live, canPresent), ct);
+            if (room.Session is { EndedAt: null } live) await SendAsync(conn, SessionPayload(live, canPresent, replay: true), ct);
             await BroadcastPresenceAsync(room, slug, ct);
 
             var buffer = new byte[16 * 1024];
@@ -280,16 +280,18 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
     /// <summary>Decks that currently have at least one presenter connected.</summary>
     public IReadOnlyList<string> RoomsWithPresenters() => _rooms.Where(kv => kv.Value.Presenters > 0).Select(kv => kv.Key).ToList();
 
-    private string SessionPayload(Session s, bool forPresenter)
+    /// <param name="replay">True when sent to a newcomer about a session that was already running (no "started" toast).</param>
+    private string SessionPayload(Session s, bool forPresenter, bool replay = false)
     {
         var live = s.EndedAt is null;
-        if (!forPresenter) return JsonSerializer.Serialize(new { t = "session", live });
+        if (!forPresenter) return JsonSerializer.Serialize(new { t = "session", live, replay });
         if (live)
         {
             return JsonSerializer.Serialize(new
             {
                 t = "session",
                 live,
+                replay,
                 id = s.Id,
                 startedAt = s.StartedAt,
                 plannedMinutes = s.PlannedMinutes,

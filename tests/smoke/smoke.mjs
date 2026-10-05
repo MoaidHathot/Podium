@@ -48,22 +48,37 @@ try {
   check('details renders', (await op.locator('h3:has-text("Present")').count()) > 0);
   check('details go-live panel', (await op.locator('#session-start').count()) > 0);
 
-  // Deck page as presenter (owner) and as an anonymous viewer; relay must drive the viewer.
+  // Deck page as presenter (owner) and as an anonymous viewer; relay must drive the viewer. The fixture is a
+  // PDF-kind deck, so this exercises the server-served runtime (bridge.js + pages.js + live-ui.js) end to end.
   const presenter = await owner.newPage();
   presenter.on('pageerror', (e) => errors.push(`presenter: ${e.message}`));
   await presenter.goto(`${base}/d/fixture-deck/1`, { waitUntil: 'networkidle' });
-  await presenter.waitForFunction(() => document.body.dataset.canSend === 'true', null, { timeout: 10000 }).catch(() => {});
-  check('presenter socket may send', (await presenter.evaluate(() => document.body.dataset.canSend)) === 'true');
+  await presenter.waitForFunction(() => window.__podium && window.__podium.canSend === true, null, { timeout: 10000 }).catch(() => {});
+  check('presenter socket may send', await presenter.evaluate(() => !!(window.__podium && window.__podium.canSend)));
   check('live.js injected', await presenter.evaluate(() => !!document.querySelector('script[src*="/_podium/live.js"]')));
+  check('v3 runtime injected (bridge, pages viewer, live UI)', await presenter.evaluate(() => ['bridge.js', 'pages.js', 'live-ui.js'].every((f) => !!document.querySelector(`script[src*="/_podium/${f}"]`)) && !!document.querySelector('link[href*="/_podium/live-ui.css"]')));
+  check('pages viewer renders page 1', (await presenter.locator('#podium-pages img.pp-slide').getAttribute('src') || '').endsWith('/pages/001.jpg'));
+  check('presenter alone sees no pill', (await presenter.locator('#podium-live:not([hidden])').count()) === 0);
 
   const anon = await browser.newContext();
   const vp = await anon.newPage();
   vp.on('pageerror', (e) => errors.push(`viewer: ${e.message}`));
   await vp.goto(`${base}/d/fixture-deck/1`, { waitUntil: 'networkidle' });
-  await vp.waitForTimeout(800);
-  check('viewer socket is read-only', (await vp.evaluate(() => document.body.dataset.canSend)) === 'false');
+  await vp.waitForFunction(() => window.__podium && window.__podium.connected, null, { timeout: 10000 }).catch(() => {});
+  await vp.waitForTimeout(500);
+  check('viewer socket is read-only', (await vp.evaluate(() => window.__podium.canSend)) === false);
+  check('viewer sees the live pill, following', /following/.test(await vp.locator('#podium-live').innerText().catch(() => '')));
+  check('presenter pill shows the room', /1 watching/.test(await presenter.locator('#podium-live').innerText().catch(() => '')));
   await presenter.keyboard.press('ArrowRight'); await presenter.keyboard.press('ArrowRight'); await vp.waitForTimeout(1000);
-  check('viewer follows presenter to slide 3', (await vp.locator('#slide').innerText()) === '3', await vp.locator('#slide').innerText());
+  const viewerPage = () => vp.evaluate(() => window.__podium.position().page);
+  const presenterPage = () => presenter.evaluate(() => window.__podium.position().page);
+  check('viewer follows presenter to slide 3', (await viewerPage()) === 3, String(await viewerPage()));
+  check('deep link follows the slide', /\/fixture-deck\/3$/.test(vp.url()), vp.url());
+  // Browsing freely stops following; "Jump to live" re-attaches.
+  await vp.keyboard.press('ArrowLeft'); await vp.waitForTimeout(400);
+  check('viewer browsing shows where the presenter is', /browsing/.test(await vp.locator('#podium-live').innerText()) && /presenter on 3/.test(await vp.locator('#podium-live').innerText()), await vp.locator('#podium-live').innerText());
+  await vp.click('#podium-live button'); await vp.waitForTimeout(400);
+  check('jump to live re-attaches the viewer', (await viewerPage()) === 3 && /following/.test(await vp.locator('#podium-live').innerText()));
 
   // Remote: notes and navigation.
   const remote = await owner.newPage({ viewport: { width: 420, height: 860 } });
@@ -72,10 +87,11 @@ try {
   check('remote shows position', (await remote.locator('#page').innerText()) === '3', await remote.locator('#page').innerText());
   check('remote shows notes', await remote.locator('#notes').isVisible());
   await remote.click('#prev'); await remote.waitForTimeout(900);
-  check('remote prev moves presenter + viewer', (await presenter.locator('#slide').innerText()) === '2' && (await vp.locator('#slide').innerText()) === '2');
+  check('remote prev moves presenter + viewer', (await presenterPage()) === 2 && (await viewerPage()) === 2, `${await presenterPage()} / ${await viewerPage()}`);
   await remote.click('#black'); await remote.waitForTimeout(700);
-  check('blackout reaches viewer only', (await vp.locator('#screen').count()) === 1 && (await presenter.locator('#screen').count()) === 0);
+  check('blackout reaches the viewer and the presenting window', (await vp.locator('#podium-screen').count()) === 1 && (await presenter.locator('#podium-screen').count()) === 1);
   await remote.click('#black'); await remote.waitForTimeout(500);
+  check('blackout lifts everywhere', (await vp.locator('#podium-screen').count()) === 0 && (await presenter.locator('#podium-screen').count()) === 0);
 
   // Live session from the owner's remote: countdown + join code; the room joins a (now Private) deck through /j/CODE.
   await op.request.patch(`${base}/api/decks/fixture-deck`, { headers: { 'x-podium-request': '1' }, data: { visibility: 'Private' } });
@@ -88,9 +104,13 @@ try {
   check('remote shows join code', /^[A-Z2-9]{3}-[A-Z2-9]{3}$/.test(code), code);
   const joiner = await (await browser.newContext()).newPage();
   const jr = await joiner.goto(`${base}/j/${code.toLowerCase()}`, { waitUntil: 'load' });
-  await joiner.waitForTimeout(800);
+  await joiner.waitForFunction(() => window.__podium && window.__podium.connected, null, { timeout: 10000 }).catch(() => {});
+  await joiner.waitForTimeout(500);
   check('room joins private deck via code without sign-in', jr.ok() && new URL(joiner.url()).pathname.startsWith('/d/fixture-deck/'), joiner.url());
+  check('room member follows the presenter', (await joiner.evaluate(() => window.__podium.position().page)) === 2, String(await joiner.evaluate(() => window.__podium.position().page)));
   await op.request.post(`${base}/api/decks/fixture-deck/sessions/end?unfreeze=true`, { headers: { 'x-podium-request': '1' } });
+  await joiner.waitForSelector('#podium-ended', { timeout: 5000 }).catch(() => {});
+  check('room member is told the session ended', (await joiner.locator('#podium-ended').count()) === 1);
   check('code dies with the session', (await joiner.request.get(`${base}/j/${code}`)).status() === 404);
   await op.request.patch(`${base}/api/decks/fixture-deck`, { headers: { 'x-podium-request': '1' }, data: { visibility: 'Public' } });
 

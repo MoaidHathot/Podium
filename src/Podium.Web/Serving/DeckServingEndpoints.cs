@@ -70,7 +70,7 @@ public static class DeckServingEndpoints
         return app;
     }
 
-    private static async Task<IResult> ServeSite(string slug, string? path, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, IOptions<PodiumOptions> options, CancellationToken ct)
+    private static async Task<IResult> ServeSite(string slug, string? path, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, IOptions<PodiumOptions> options, Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider versions, CancellationToken ct)
     {
         path ??= "";
         // Slidev is built with base "/d/{slug}/"; relative URLs only resolve correctly from the slash-terminated form.
@@ -134,6 +134,10 @@ public static class DeckServingEndpoints
                 ? Results.Redirect($"/decks/{slug}?notBuilt=1")
                 : Results.NotFound();
         }
+        // Admitted through ?share=: the signed cookie now carries the grant, so drop the link id from the address bar
+        // (it would otherwise travel along when a viewer copies their URL or into browser history).
+        if (result.ViaShareLink && !onExternalHost && IsNavigation(http) && http.Request.Query.ContainsKey("share"))
+            return Results.Redirect($"/d/{slug}/{path}{QueryWithout(http, "share")}");
 
         var isIndex = path.Length == 0;
         var relative = isIndex ? "index.html" : path;
@@ -192,7 +196,7 @@ public static class DeckServingEndpoints
                 using var ms = new MemoryStream();
                 await file.Content.CopyToAsync(ms, ct);
                 var html = Encoding.UTF8.GetString(ms.ToArray());
-                html = InjectLiveScript(html, slug, deck.CurrentBuildId, deck.OfflineCache, result.CanPresent);
+                html = InjectLiveScript(html, slug, deck.CurrentBuildId, deck.OfflineCache, result.CanPresent, deck.Kind, onExternalHost, p => versions.AddFileVersionToPath(http.Request.PathBase, p));
                 // Link previews (Slack/Teams/Twitter) for decks anyone can open; private decks reveal nothing to crawlers anyway.
                 if (deck.Visibility == Visibility.Public && !onExternalHost)
                     html = InjectOpenGraph(html, deck, $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}");
@@ -245,10 +249,30 @@ public static class DeckServingEndpoints
             enableRangeProcessing: true);
     }
 
-    /// <summary>Adds the Podium live script (new-build detection + presenter sync bootstrap) before &lt;/head&gt;.</summary>
-    internal static string InjectLiveScript(string html, string slug, string buildId, bool offline = false, bool presenter = false)
+    /// <summary>
+    /// Adds Podium's scripts before &lt;/head&gt;: live.js (new-build detection, offline worker), the sync bridge and
+    /// adapter for deck kinds without a built-in addon (presenterm exports, the pages viewer), and live-ui.js (pill,
+    /// HUD, blackout, session UI). URLs carry a content hash so a deploy is picked up at once despite caching.
+    /// </summary>
+    internal static string InjectLiveScript(string html, string slug, string buildId, bool offline = false, bool presenter = false, DeckKind kind = DeckKind.Slidev, bool external = false, Func<string, string>? versioned = null)
     {
-        var tag = $"<script defer src=\"{LiveScriptPath}\" data-slug=\"{slug}\" data-build=\"{buildId}\"{(offline ? " data-offline=\"1\"" : "")}{(presenter ? " data-presenter=\"1\"" : "")}></script>";
+        versioned ??= p => p;
+        var kindName = kind switch { DeckKind.Presenterm => "presenterm", DeckKind.PowerPoint or DeckKind.Pdf => "pages", DeckKind.Static => "static", _ => "slidev" };
+        var sb = new StringBuilder();
+        sb.Append($"<script defer src=\"{versioned(LiveScriptPath)}\" data-slug=\"{slug}\" data-build=\"{buildId}\"{(offline ? " data-offline=\"1\"" : "")}{(presenter ? " data-presenter=\"1\"" : "")}></script>");
+        if (kindName is "presenterm" or "pages")
+        {
+            sb.Append($"<script defer src=\"{versioned("/_podium/bridge.js")}\"></script>");
+            sb.Append($"<script defer src=\"{versioned($"/_podium/{kindName}.js")}\"></script>");
+        }
+        if (kindName != "static")
+        {
+            var version = versioned("/_podium/live-ui.css");
+            var q = version.IndexOf("?v=", StringComparison.Ordinal);
+            var v = q < 0 ? "" : version[(q + 3)..];
+            sb.Append($"<script defer src=\"{versioned("/_podium/live-ui.js")}\" data-slug=\"{slug}\" data-build=\"{buildId}\" data-kind=\"{kindName}\"{(presenter ? " data-presenter=\"1\"" : "")}{(external ? " data-external=\"1\"" : "")} data-version=\"{System.Net.WebUtility.HtmlEncode(v)}\"></script>");
+        }
+        var tag = sb.ToString();
         var idx = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
         return idx < 0 ? tag + html : html.Insert(idx, tag);
     }

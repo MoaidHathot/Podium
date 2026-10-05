@@ -87,7 +87,9 @@ public static class PresenterToolsEndpoints
             if (result.Deck is null) return Results.NotFound();
             if (result.Decision == AccessDecision.RequireLogin) return Results.Redirect("/login?returnUrl=" + Uri.EscapeDataString(http.Request.Path));
             if (result.Decision != AccessDecision.Allow || !result.CanPresent) return Results.NotFound();
-            if (result.Deck.Kind != DeckKind.Slidev) return Results.NotFound();
+            // Every kind Podium can drive: Slidev (addon), presenterm (adapter), PowerPoint/PDF (pages viewer). Static
+            // HTML decks and GitPitch have nothing the remote could move.
+            if (result.Deck.Kind is not (DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf)) return Results.NotFound();
             http.Response.Headers[HeaderNames.CacheControl] = "no-store";
             return Results.Content(RemotePage(result.Deck, caller.IsOwner), "text/html; charset=utf-8");
         });

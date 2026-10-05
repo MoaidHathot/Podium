@@ -206,8 +206,8 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.NotNull(state.LiveSessionId);
         Assert.Equal(deck.CurrentBuildId, state.PinnedBuildId);
 
-        // The room joins through the link, anonymously, to a Private deck.
-        var joined = await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
+        // The room joins through the link, anonymously, to a Private deck (the link id is dropped from the address bar).
+        var (_, joined) = await PodiumWebFactory.AdmitAsync(anon, $"/d/{deck.Slug}/?share={linkId}");
         Assert.Equal(HttpStatusCode.OK, joined.StatusCode);
 
         var guard = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
@@ -309,7 +309,7 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         var hop = await anon.SendAsync(PodiumWebFactory.Navigation($"/j/{joinCode.Replace("-", "").ToLowerInvariant()}"));
         Assert.Equal(HttpStatusCode.Redirect, hop.StatusCode);
         Assert.StartsWith($"/d/{deck.Slug}/?share=", hop.Headers.Location!.ToString());
-        Assert.Equal(HttpStatusCode.OK, (await anon.SendAsync(PodiumWebFactory.Navigation(hop.Headers.Location!.ToString()))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PodiumWebFactory.AdmitAsync(anon, hop.Headers.Location!.ToString())).Page.StatusCode);
 
         // The join QR is for presenters only; the plain QR follows the deck's access.
         var qr = await owner.GetAsync($"/d/{deck.Slug}/qr.svg?join=1");
@@ -584,8 +584,9 @@ public sealed class ServingTests(PodiumWebFactory app)
         var id = doc.RootElement.GetProperty("link").GetProperty("id").GetString();
 
         var viewer = app.Client();
-        var first = await viewer.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={id}"));
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var (first, page) = await PodiumWebFactory.AdmitAsync(viewer, $"/d/{deck.Slug}/?share={id}");
+        Assert.Equal($"/d/{deck.Slug}/", first.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
         var cookie = first.Headers.GetValues("Set-Cookie").Single(v => v.StartsWith("podium_share_", StringComparison.Ordinal));
         Assert.Contains("path=/", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
@@ -619,9 +620,10 @@ public sealed class ServingTests(PodiumWebFactory app)
         var capped = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", expiresInDays = 7, maxUses = 2 }));
         var cappedId = JsonDocument.Parse(await capped.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString()!;
         var b1 = app.Client(); var b2 = app.Client(); var b3 = app.Client();
-        Assert.Equal(HttpStatusCode.OK, (await b1.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await b2.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
-        Assert.NotEqual(HttpStatusCode.OK, (await b3.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PodiumWebFactory.AdmitAsync(b1, $"/d/{deck.Slug}/?share={cappedId}")).Page.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PodiumWebFactory.AdmitAsync(b2, $"/d/{deck.Slug}/?share={cappedId}")).Page.StatusCode);
+        var third = await b3.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"));
+        Assert.True(third.StatusCode != HttpStatusCode.OK && !(third.Headers.Location?.ToString().StartsWith($"/d/{deck.Slug}/") ?? false)); // not admitted: bounced to login, not to the deck
         Assert.Equal(HttpStatusCode.OK, (await b1.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/5"))).StatusCode); // cookie, no ?share
         var cappedLink = (await links.GetAsync(cappedId))!;
         Assert.Equal(2, cappedLink.Opens);
@@ -769,7 +771,7 @@ public sealed class ServingTests(PodiumWebFactory app)
         await owner.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { visibility = "Link" }));
         var link = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site" }));
         var id = JsonDocument.Parse(await link.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString();
-        var viaLink = await app.Client().SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={id}"));
+        var (_, viaLink) = await PodiumWebFactory.AdmitAsync(app.Client(), $"/d/{deck.Slug}/?share={id}");
         Assert.Equal(HttpStatusCode.OK, viaLink.StatusCode);
         Assert.Equal("SAMEORIGIN", viaLink.Headers.GetValues("X-Frame-Options").Single());
     }

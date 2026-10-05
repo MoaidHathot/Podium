@@ -83,6 +83,20 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
 
     public static HttpRequestMessage Navigation(string url) => new(HttpMethod.Get, url) { Headers = { Accept = { new MediaTypeWithQualityHeaderValue("text/html") } } };
 
+    /// <summary>
+    /// Arrives through a share link the way a browser does: the first hop admits (signed cookie) and redirects to the
+    /// clean URL without the link id; the second serves the deck. Returns both so tests can inspect the cookie and the page.
+    /// </summary>
+    public static async Task<(HttpResponseMessage Admission, HttpResponseMessage Page)> AdmitAsync(HttpClient client, string urlWithShare)
+    {
+        var admission = await client.SendAsync(Navigation(urlWithShare));
+        Assert.Equal(HttpStatusCode.Redirect, admission.StatusCode);
+        var target = admission.Headers.Location!.ToString();
+        Assert.DoesNotContain("share=", target);
+        var page = await client.SendAsync(Navigation(target));
+        return (admission, page);
+    }
+
     /// <summary>Seeds a source + deck with a served build whose site has a single index.html.</summary>
     public async Task<Deck> SeedDeckAsync(string slug, Visibility visibility = Visibility.Private, bool trusted = true, string? alias = null, DeckKind kind = DeckKind.Slidev, string? html = null, bool archived = false)
     {

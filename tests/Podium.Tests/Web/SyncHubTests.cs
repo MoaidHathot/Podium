@@ -274,8 +274,8 @@ public sealed class SyncHubTests(PodiumWebFactory app)
 
         // A room member admitted by the join link: gets a bare live flag (no code), and a newcomer learns it on join.
         var roomClient = app.Client();
-        var admitted = await roomClient.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
-        Assert.Equal(System.Net.HttpStatusCode.OK, admitted.StatusCode);
+        var (admitted, roomPage) = await PodiumWebFactory.AdmitAsync(roomClient, $"/d/{deck.Slug}/?share={linkId}");
+        Assert.Equal(System.Net.HttpStatusCode.OK, roomPage.StatusCode);
         var shareCookie = admitted.Headers.GetValues("Set-Cookie").Single(v => v.StartsWith("podium_share_", StringComparison.Ordinal)).Split(';')[0];
         using var viewer = await ConnectAsync(deck.Slug, shareCookie);
         await ReceiveUntilAsync(viewer, "hello");
@@ -304,7 +304,7 @@ public sealed class SyncHubTests(PodiumWebFactory app)
         var linkId = minted.GetProperty("link").GetProperty("id").GetString()!;
 
         var guest = app.Client();
-        var admitted = await guest.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
+        var (admitted, _) = await PodiumWebFactory.AdmitAsync(guest, $"/d/{deck.Slug}/?share={linkId}");
         var shareCookie = admitted.Headers.GetValues("Set-Cookie").Single(v => v.StartsWith("podium_share_", StringComparison.Ordinal)).Split(';')[0];
         using var viewer = await ConnectAsync(deck.Slug, shareCookie);
         await ReceiveUntilAsync(viewer, "hello");

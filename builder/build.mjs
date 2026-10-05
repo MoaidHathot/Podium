@@ -559,10 +559,10 @@ async function writeViewerSite(outDir, result, fileName) {
   const metas = `<meta name="podium-build" content="${buildId}"><meta name="podium-slug" content="${slug}"><meta name="podium-addon" content="${pages ? ADDON_PROTOCOL : 0}">`;
   let body;
   if (pages) {
+    // The viewer runtime (/_podium/pages.js) and the sync bridge are injected by the server when the page is served.
     const data = escapeHtml(JSON.stringify(pages));
     body = `<main id="podium-pages" class="podium-pages" data-pages="${data}" aria-label="${title}" tabindex="0"></main>
-<noscript><p style="padding:2rem">This presentation needs JavaScript. <a href="deck.pdf">Open the PDF</a> instead.</p></noscript>
-<script defer src="/_podium/pages.js"></script>`;
+<noscript><p style="padding:2rem">This presentation needs JavaScript. <a href="deck.pdf">Open the PDF</a> instead.</p></noscript>`;
     result.slideCount = result.slideCount || pages.count;
   } else if (hasPdf) {
     body = `<iframe src="deck.pdf#view=Fit&amp;pagemode=none" title="${title}" allowfullscreen></iframe>`;
