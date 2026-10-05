@@ -453,6 +453,9 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Contains("frame-ancestors 'none'", csp);
         Assert.Contains("object-src 'none'", csp);
         Assert.DoesNotContain("unsafe-eval", csp);
+        // GitHub profile pictures are the one third-party image the UI shows.
+        Assert.Matches("img-src [^;]*https://avatars\\.githubusercontent\\.com", csp);
+        Assert.Contains("<img class=\"avatar\" src=\"https://avatars.githubusercontent.com/u/", await library.Content.ReadAsStringAsync());
         var html = await library.Content.ReadAsStringAsync();
         // Every inline script on the page carries this response's nonce; none is left bare.
         var inline = System.Text.RegularExpressions.Regex.Matches(html, "<script(?![^>]*\\ssrc=)[^>]*>");

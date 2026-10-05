@@ -31,6 +31,16 @@ try {
 
   await op.goto(`${base}/`, { waitUntil: 'networkidle' });
   check('library renders fixture card', (await op.locator('.card[data-slug="fixture-deck"]').count()) > 0);
+  check('profile picture loads under the CSP', await op.evaluate(() => { const i = document.querySelector('img.avatar'); return !!i && i.complete && i.naturalWidth > 0; }));
+  // Phone viewport: nothing may push the page wider than the screen.
+  await op.setViewportSize({ width: 390, height: 844 });
+  for (const path of ['/', '/decks/fixture-deck', '/sources', '/activity']) {
+    await op.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+    const o = await op.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    check(`no horizontal overflow on a phone: ${path}`, o <= 0, `${o}px`);
+  }
+  await op.setViewportSize({ width: 1400, height: 1000 });
+  await op.goto(`${base}/`, { waitUntil: 'networkidle' });
   await op.fill('#search', 'slide two'); await op.waitForTimeout(600);
   check('full-text search hits slide 2', (await op.locator('#slide-hits-list li a[href$="/fixture-deck/2"]').count()) > 0);
 

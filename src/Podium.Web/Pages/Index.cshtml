@@ -209,7 +209,7 @@ else
                 <span class="faint count">@Model.Archived.Count deck@(Model.Archived.Count == 1 ? "" : "s") no longer in their repositories; artifacts are purged after 30 days</span>
             </div>
             <div class="grid cards-grid">
-                <table class="table" style="grid-column:1/-1">
+                <div class="table-wrap" style="grid-column:1/-1"><table class="table">
                     <thead><tr><th>Deck</th><th>Repository</th><th>Archived</th><th></th></tr></thead>
                     <tbody>
                     @foreach (var r in Model.Archived)
@@ -222,7 +222,7 @@ else
                         </tr>
                     }
                     </tbody>
-                </table>
+                </table></div>
             </div>
         </section>
     }

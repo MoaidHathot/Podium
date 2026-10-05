@@ -25,7 +25,7 @@
 }
 
 <section class="panel">
-    <table class="table">
+    <div class="table-wrap"><table class="table">
         <thead><tr><th>Repository</th><th>Type</th><th>Branch</th><th>Decks</th><th>Last scanned</th><th></th></tr></thead>
         <tbody>
         @if (Model.Sources.Count == 0)
@@ -49,7 +49,7 @@
             </tr>
         }
         </tbody>
-    </table>
+    </table></div>
 </section>
 
 @if (Model.AllowExternal)

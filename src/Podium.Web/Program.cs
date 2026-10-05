@@ -337,7 +337,8 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
     app.MapGet("/dev-login", async (HttpContext http, IOptions<PodiumOptions> opts, string? returnUrl) =>
     {
         var id = opts.Value.OwnerGitHubId.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var identity = new ClaimsIdentity([new Claim(PodiumClaims.GitHubId, id), new Claim(ClaimTypes.NameIdentifier, id), new Claim(ClaimTypes.Name, "dev-owner"), new Claim(PodiumClaims.Login, "dev-owner")], CookieAuthenticationDefaults.AuthenticationScheme);
+        // Same claim set as the real GitHub login, avatar included, so the layout and CSP are exercised identically.
+        var identity = new ClaimsIdentity([new Claim(PodiumClaims.GitHubId, id), new Claim(ClaimTypes.NameIdentifier, id), new Claim(ClaimTypes.Name, "dev-owner"), new Claim(PodiumClaims.Login, "dev-owner"), new Claim(PodiumClaims.Avatar, $"https://avatars.githubusercontent.com/u/{id}?v=4")], CookieAuthenticationDefaults.AuthenticationScheme);
         await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
         return Results.Redirect(SafeReturnUrl(returnUrl));
     });

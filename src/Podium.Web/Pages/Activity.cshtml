@@ -12,7 +12,7 @@
 else
 {
 <section class="panel">
-    <table class="table">
+    <div class="table-wrap"><table class="table">
         <thead><tr><th>When</th><th>Who</th><th>What</th><th>Target</th><th>Details</th><th>IP</th></tr></thead>
         <tbody>
         @foreach (var a in Model.Entries)
@@ -27,6 +27,6 @@ else
             </tr>
         }
         </tbody>
-    </table>
+    </table></div>
 </section>
 }
