@@ -168,7 +168,13 @@
                 }
                 @if (drivable)
                 {
-                    <p class="hint" style="margin:.6rem 0 0"><strong style="color:var(--text)">Phone remote:</strong> <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a> &mdash; @(d.Kind == DeckKind.Slidev ? "notes, " : "")go-to grid, laser pointer, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                    <div class="row" style="margin:.8rem 0 0; gap:.9rem; align-items:flex-start; flex-wrap:wrap" id="phone-remote">
+                        <a href="/d/@d.Slug/qr.svg?remote=1" target="_blank" rel="noopener" title="Scan with your phone to open the remote"><img class="qr" src="/d/@d.Slug/qr.svg?remote=1" alt="QR code of the phone remote" width="96" height="96" /></a>
+                        <div style="flex:1; min-width:14rem">
+                            <strong style="color:var(--text)">Phone remote</strong>
+                            <p class="hint" style="margin:.2rem 0 .4rem">Scan the QR with your phone (you sign in with GitHub there once), or open <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a>. @(d.Kind == DeckKind.Slidev ? "Notes, " : "")go-to grid, laser pointer, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                        </div>
+                    </div>
                 }
             </div>
         }

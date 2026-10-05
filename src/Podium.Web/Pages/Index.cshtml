@@ -66,6 +66,24 @@
     <button class="btn btn-ghost btn-sm" id="bulk-clear">Clear</button>
 </div>
 
+@foreach (var (session, deck) in Model.LiveNow)
+{
+    var code = session.JoinCode is { } jc ? Podium.Core.Services.SessionService.FormatJoinCode(jc) : null;
+    <div class="alert live-banner" id="live-now" style="margin-bottom:1rem">
+        <span class="badge badge-live">● Live</span>
+        <strong><a href="/decks/@deck.Slug">@deck.Title</a></strong>
+        <span class="faint">since <time datetime="@session.StartedAt.UtcDateTime.ToString("o")">@session.StartedAt.ToString("HH:mm")</time>@(session.PlannedMinutes is { } pm ? $", planned {pm} min" : "")@(code is not null ? $" · join code {code}" : "")</span>
+        <span class="row" style="margin-left:auto; gap:.4rem">
+            <a class="btn btn-primary btn-sm" href="/d/@deck.Slug/remote">Open remote</a>
+            <a class="btn btn-sm" href="/d/@deck.Slug/" target="_blank" rel="noopener">Open deck</a>
+        </span>
+    </div>
+}
+@if (Model.Remote == "none" && Model.LiveNow.Count == 0)
+{
+    <div class="alert alert-info" style="margin-bottom:1rem">No session is live and nothing has been presented yet. Open a deck's page and tap <strong>Phone remote</strong> (or scan its QR); after that, the Remote shortcut brings you straight back here.</div>
+}
+
 @if (Model.PendingRequests.Count > 0)
 {
     <div class="alert alert-info" style="margin-bottom:1rem"><strong>@Model.PendingRequests.Count access request@(Model.PendingRequests.Count == 1 ? "" : "s") waiting:</strong>

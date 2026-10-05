@@ -142,12 +142,14 @@
         code: el('button', { type: 'button', class: 'podium-code', hidden: true, title: 'Show the join code and QR for the room' }),
         golive: el('button', { type: 'button', class: 'podium-btn podium-primary', text: 'Go live', hidden: true }),
         end: el('button', { type: 'button', class: 'podium-btn podium-danger', text: 'End', hidden: true, title: 'End the live session' }),
+        remote: el('button', { type: 'button', class: 'podium-btn', text: 'Remote', hidden: cfg.external, title: 'Open the phone remote: scan the QR with your phone' }),
         screen: el('span', { class: 'podium-muted', hidden: true, text: 'Screen black' }),
       };
       hudParts.code.addEventListener('click', function () { togglePop('join'); });
       hudParts.golive.addEventListener('click', function () { togglePop('golive'); });
+      hudParts.remote.addEventListener('click', function () { togglePop('remote'); });
       hudParts.end.addEventListener('click', endSession);
-      hud = el('div', { id: 'podium-hud', role: 'status' }, [hudParts.dot, hudParts.state, el('span', { class: 'podium-sep' }), hudParts.watching, hudParts.clock, hudParts.screen, hudParts.code, hudParts.golive, hudParts.end]);
+      hud = el('div', { id: 'podium-hud', role: 'status' }, [hudParts.dot, hudParts.state, el('span', { class: 'podium-sep' }), hudParts.watching, hudParts.clock, hudParts.screen, hudParts.code, hudParts.remote, hudParts.golive, hudParts.end]);
       ui.appendChild(hud);
     }
     function renderHud() {
@@ -199,8 +201,19 @@
       if (pop && popKind === kind) { closePop(); return; }
       closePop();
       popKind = kind;
-      pop = el('div', { id: 'podium-pop', role: 'dialog', 'aria-label': kind === 'join' ? 'Join this talk' : 'Go live' });
-      if (kind === 'join' && session && session.live) {
+      pop = el('div', { id: 'podium-pop', role: 'dialog', 'aria-label': kind === 'join' ? 'Join this talk' : kind === 'remote' ? 'Phone remote' : 'Go live' });
+      if (kind === 'remote' && !cfg.external) {
+        var remoteUrl = location.origin + '/d/' + encodeURIComponent(cfg.slug) + '/remote';
+        pop.appendChild(el('h3', { text: 'Phone remote' }));
+        pop.appendChild(el('img', { class: 'podium-qr', alt: 'QR code of the phone remote', src: '/d/' + encodeURIComponent(cfg.slug) + '/qr.svg?remote=1' }));
+        pop.appendChild(el('span', { class: 'podium-url', text: remoteUrl.replace(/^https?:\/\//, '') }));
+        pop.appendChild(el('p', { text: 'Scan with your phone. You sign in with GitHub there once; the remote then shows your notes, drives the slides, points the laser and runs the countdown.' }));
+        var rrow = el('div', { class: 'podium-row' });
+        var rclose = el('button', { type: 'button', class: 'podium-btn', text: 'Close' });
+        rclose.addEventListener('click', closePop);
+        rrow.append(rclose);
+        pop.appendChild(rrow);
+      } else if (kind === 'join' && session && session.live) {
         pop.appendChild(el('h3', { text: 'Let the room follow along' }));
         if (!cfg.external) pop.appendChild(el('img', { class: 'podium-qr', alt: 'QR code for ' + (session.joinUrl || 'the join link'), src: '/d/' + encodeURIComponent(cfg.slug) + '/qr.svg?join=1&v=' + encodeURIComponent(session.id || '') }));
         pop.appendChild(el('strong', { class: 'podium-bigcode', text: session.joinCode || '' }));

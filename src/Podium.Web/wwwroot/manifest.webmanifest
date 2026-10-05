@@ -15,6 +15,7 @@
     { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ],
   "shortcuts": [
+    { "name": "Remote", "short_name": "Remote", "description": "Phone remote for the deck that is live, or the one you presented last", "url": "/remote?source=pwa", "icons": [ { "src": "/icons/icon-192.png", "sizes": "192x192" } ] },
     { "name": "Library", "url": "/?source=pwa", "icons": [ { "src": "/icons/icon-192.png", "sizes": "192x192" } ] },
     { "name": "Activity", "url": "/activity", "icons": [ { "src": "/icons/icon-192.png", "sizes": "192x192" } ] }
   ]

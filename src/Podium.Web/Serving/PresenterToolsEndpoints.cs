@@ -22,14 +22,16 @@ public static class PresenterToolsEndpoints
     public static IEndpointRouteBuilder MapPresenterTools(this IEndpointRouteBuilder app)
     {
         // QR of the deck URL (same access rules as the deck). With ?join=1 and a live session, presenters get a QR of
-        // the short join URL instead, which admits the room without sign-in for as long as the session runs.
-        app.MapGet("/d/{slug}/qr.svg", async (string slug, [FromQuery] string? join, HttpContext http, DeckAccessService access, CallerResolver callers, SessionService sessions, Microsoft.Extensions.Options.IOptions<Configuration.PodiumOptions> options, CancellationToken ct) =>
+        // the short join URL instead, which admits the room without sign-in for as long as the session runs. With
+        // ?remote=1 presenters get a QR of the phone remote (the phone still signs in; the QR only saves the typing).
+        app.MapGet("/d/{slug}/qr.svg", async (string slug, [FromQuery] string? join, [FromQuery] string? remote, HttpContext http, DeckAccessService access, CallerResolver callers, SessionService sessions, Microsoft.Extensions.Options.IOptions<Configuration.PodiumOptions> options, CancellationToken ct) =>
         {
             var caller = callers.Resolve(http.User);
             var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
             if (result.Deck is null || result.Decision != AccessDecision.Allow) return Results.NotFound();
             // Always the public hostname: audience phones must not be sent to the platform FQDN.
             var url = $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{slug}/";
+            var presenterOnly = join is "1" or "true" || remote is "1" or "true";
             if (join is "1" or "true")
             {
                 if (!result.CanPresent) return Results.NotFound();
@@ -37,12 +39,37 @@ public static class PresenterToolsEndpoints
                 if (live?.JoinCode is null) return Results.NotFound();
                 url = SessionService.JoinUrl(options.Value.PublicBaseUrl, live.JoinCode);
             }
+            else if (remote is "1" or "true")
+            {
+                if (!result.CanPresent) return Results.NotFound();
+                url = $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{slug}/remote";
+            }
             using var generator = new QRCodeGenerator();
             using var data = generator.CreateQrCode(url, QRCodeGenerator.ECCLevel.M);
             var svg = new SvgQRCode(data).GetGraphic(8, "#0b0d12", "#ffffff", drawQuietZones: true);
-            http.Response.Headers[HeaderNames.CacheControl] = join is "1" or "true" ? "private, no-store" : "private, max-age=3600";
+            http.Response.Headers[HeaderNames.CacheControl] = presenterOnly ? "private, no-store" : "private, max-age=3600";
             return Results.Content(svg, "image/svg+xml; charset=utf-8");
         }).RequireRateLimiting("probe");
+
+        // One tap from the phone's home screen: the remote of the deck that is live right now, else of the deck most
+        // recently presented by this person, else the library. Owner only (it looks across every deck).
+        app.MapGet("/remote", async (HttpContext http, CallerResolver callers, ISessionStore sessionStore, IDeckStore decks, IViewHistoryStore views, CancellationToken ct) =>
+        {
+            var caller = callers.Resolve(http.User);
+            http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            var live = (await sessionStore.ListLiveAsync(ct)).OrderByDescending(s => s.StartedAt).FirstOrDefault();
+            if (live is not null) return Results.Redirect($"/d/{live.DeckSlug}/remote");
+            if (caller.Principal is not null)
+            {
+                foreach (var v in (await views.RecentForPrincipalAsync(caller.Principal, 100, ct)).Where(v => v.Artifact == ArtifactKind.Site).OrderByDescending(v => v.At))
+                {
+                    var deck = await decks.GetAsync(v.DeckSlug, ct);
+                    if (deck is { Archived: false, CurrentBuildId: not null } && deck.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf)
+                        return Results.Redirect($"/d/{deck.Slug}/remote");
+                }
+            }
+            return Results.Redirect("/?remote=none");
+        }).RequireAuthorization(PodiumClaims.OwnerPolicy);
 
         // The room types this: slides.example/j/ABC-123. Valid only while the session is live; afterwards (and for
         // codes that never existed) the same "ended" page, so nothing is learned from a guess.

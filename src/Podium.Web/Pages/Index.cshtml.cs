@@ -5,7 +5,7 @@ using Podium.Web.Security;
 
 namespace Podium.Web.Pages;
 
-public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHistoryStore views, CallerResolver callers, IAccessRequestStore accessRequests) : PageModel
+public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHistoryStore views, CallerResolver callers, IAccessRequestStore accessRequests, ISessionStore sessions) : PageModel
 {
     public IReadOnlyList<AccessRequest> PendingRequests { get; private set; } = [];
     public IReadOnlyList<DeckRow> Decks { get; private set; } = [];
@@ -13,8 +13,12 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
     public IReadOnlyList<DeckRow> RecentlyViewed { get; private set; } = [];
     public IReadOnlyList<Source> Sources { get; private set; } = [];
     public IReadOnlyList<DeckRow> Archived { get; private set; } = [];
+    /// <summary>Sessions running right now, newest first, with their decks (for the "Live now" banner).</summary>
+    public IReadOnlyList<(Session Session, Deck Deck)> LiveNow { get; private set; } = [];
     public bool AnyBuilding { get; private set; }
     public bool HasSources { get; private set; }
+    /// <summary>Set when /remote found nothing to open (no live session, nothing presented yet).</summary>
+    [Microsoft.AspNetCore.Mvc.BindProperty(SupportsGet = true)] public string? Remote { get; set; }
 
     public async Task OnGetAsync(CancellationToken ct)
     {
@@ -38,6 +42,9 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
         PendingRequests = await accessRequests.ListPendingAsync(ct);
         var everything = await decks.ListAsync(includeArchived: true, ct);
         var all = everything.Where(d => !d.Archived).ToList();
+        var bySlug = everything.ToDictionary(d => d.Slug, StringComparer.Ordinal);
+        LiveNow = (await sessions.ListLiveAsync(ct)).OrderByDescending(s => s.StartedAt)
+            .Where(s => bySlug.ContainsKey(s.DeckSlug)).Select(s => (s, bySlug[s.DeckSlug])).ToList();
         Archived = everything.Where(d => d.Archived).OrderByDescending(d => d.UpdatedAt).Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), null)).ToList();
         var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null)).ToList();
         Decks = rows.OrderByDescending(r => r.Deck.LastCommitAt ?? r.Deck.UpdatedAt).ToList();

@@ -355,6 +355,53 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Contains("id=\"install-app\"", html);
         var deck = await app.SeedDeckAsync("remote-card-deck");
         Assert.Contains($"href=\"/d/{deck.Slug}/remote\"", await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync());
+        Assert.Contains(doc.RootElement.GetProperty("shortcuts").EnumerateArray(), s => s.GetProperty("url").GetString()!.StartsWith("/remote"));
+    }
+
+    [Fact]
+    public async Task Remote_shortcut_opens_the_live_deck_then_the_last_presented_one_and_the_qr_is_for_presenters()
+    {
+        // Anonymous: sign in first (the PWA shortcut on a fresh phone).
+        var anon = app.Client();
+        var challenge = await anon.SendAsync(PodiumWebFactory.Navigation("/remote"));
+        Assert.Equal(HttpStatusCode.Redirect, challenge.StatusCode);
+        Assert.Contains("/login", challenge.Headers.Location!.ToString());
+        Assert.Contains("returnUrl=%2Fremote", challenge.Headers.Location!.ToString());
+
+        var owner = await app.OwnerClientAsync();
+        // Other tests may have left sessions running; the shortcut must reflect the state at this moment.
+        using (var scope = app.Services.CreateScope())
+        {
+            var svc = scope.ServiceProvider.GetRequiredService<Podium.Core.Services.SessionService>();
+            foreach (var s in await scope.ServiceProvider.GetRequiredService<ISessionStore>().ListLiveAsync()) await svc.EndAsync(s.DeckSlug, "manual", unfreeze: true);
+        }
+        var idle = await owner.SendAsync(PodiumWebFactory.Navigation("/remote"));
+        Assert.Equal(HttpStatusCode.Redirect, idle.StatusCode);
+        Assert.Matches("^/\\?remote=none$|^/d/[a-z0-9-]+/remote$", idle.Headers.Location!.ToString()); // nothing live: last presented deck, or the hint
+        Assert.Contains("nothing has been presented yet", await (await owner.SendAsync(PodiumWebFactory.Navigation("/?remote=none"))).Content.ReadAsStringAsync());
+
+        // Presenting a deck (opening it) makes it the shortcut's target.
+        var deck = await app.SeedDeckAsync("shortcut-deck", kind: DeckKind.Presenterm);
+        Assert.Equal(HttpStatusCode.OK, (await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/remote", (await owner.SendAsync(PodiumWebFactory.Navigation("/remote"))).Headers.Location!.ToString());
+        // The remote page itself exists for presenterm now, and the deck page carries the scan-to-open QR.
+        Assert.Equal(HttpStatusCode.OK, (await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/remote"))).StatusCode);
+        Assert.Contains($"/d/{deck.Slug}/qr.svg?remote=1", await (await owner.SendAsync(PodiumWebFactory.Navigation($"/decks/{deck.Slug}"))).Content.ReadAsStringAsync());
+
+        // A live session anywhere wins, and the library shows the live banner.
+        var other = await app.SeedDeckAsync("shortcut-live-deck");
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync($"/api/decks/{other.Slug}/sessions", JsonContent.Create(new { plannedMinutes = 10, holdDeploys = false, freeze = false }))).StatusCode);
+        Assert.Equal($"/d/{other.Slug}/remote", (await owner.SendAsync(PodiumWebFactory.Navigation("/remote"))).Headers.Location!.ToString());
+        var library = await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync();
+        Assert.Contains("id=\"live-now\"", library);
+        Assert.Contains($"href=\"/d/{other.Slug}/remote\"", library);
+        await owner.PostAsync($"/api/decks/{other.Slug}/sessions/end?unfreeze=true", null);
+
+        // The remote QR is a presenter tool: owner yes, anonymous visitor of a public deck no.
+        var pub = await app.SeedDeckAsync("shortcut-public-deck", Visibility.Public);
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync($"/d/{pub.Slug}/qr.svg?remote=1")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await app.Client().GetAsync($"/d/{pub.Slug}/qr.svg")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await app.Client().GetAsync($"/d/{pub.Slug}/qr.svg?remote=1")).StatusCode);
     }
 
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)

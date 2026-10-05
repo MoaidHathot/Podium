@@ -119,6 +119,13 @@ try {
   check('remote shows session countdown', /^44:\d\d$|^45:00$/.test(countdown), countdown);
   const code = (await remote.locator('.join-code').textContent().catch(() => '') || '').trim(); // inside a collapsed <details>
   check('remote shows join code', /^[A-Z2-9]{3}-[A-Z2-9]{3}$/.test(code), code);
+  // Library banner + the Remote shortcut route while live; the deck page carries the scan-to-open QR.
+  await op.goto(`${base}/`, { waitUntil: 'networkidle' });
+  check('library shows the live banner', (await op.locator('#live-now a[href="/d/fixture-deck/remote"]').count()) === 1);
+  const shortcut = await op.request.get(`${base}/remote`, { maxRedirects: 0 });
+  check('/remote shortcut points at the live deck', shortcut.status() === 302 && shortcut.headers()['location'] === '/d/fixture-deck/remote', `${shortcut.status()} ${shortcut.headers()['location']}`);
+  await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
+  check('deck page shows the remote QR', await op.evaluate(() => { const i = document.querySelector('#phone-remote img.qr'); return !!i && i.complete && i.naturalWidth > 0; }));
   const joiner = await (await browser.newContext()).newPage();
   const jr = await joiner.goto(`${base}/j/${code.toLowerCase()}`, { waitUntil: 'load' });
   await joiner.waitForFunction(() => window.__podium && window.__podium.connected, null, { timeout: 10000 }).catch(() => {});
