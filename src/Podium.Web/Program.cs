@@ -248,7 +248,9 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy("webhook", http => Sliding(http, 60));
     o.AddPolicy("probe", http => Sliding(http, 120));
     // Deck entry pages and artifact downloads (not assets): bounds share-link enumeration; far above human navigation.
-    o.AddPolicy("deck-entry", http => Sliding(http, 90));
+    // A conference room shares one NAT address; these must comfortably absorb a few hundred people opening a deck at once.
+    o.AddPolicy("deck-entry", http => Sliding(http, 300));
+    o.AddPolicy("join", http => Sliding(http, 300));
 });
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
@@ -298,7 +300,7 @@ app.Use(async (ctx, next) =>
 
 app.UseStaticFiles(new StaticFileOptions
 {
-    OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = "public, max-age=3600",
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl = ctx.File.Name is "sw.js" or "manifest.webmanifest" ? "no-cache" : "public, max-age=3600",
 });
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
 app.UseRouting();

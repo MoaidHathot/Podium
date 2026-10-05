@@ -278,6 +278,85 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.StartsWith("/login", PathOf(anon.Headers.Location!));
     }
 
+    [Fact]
+    public async Task Room_joins_through_the_short_code_and_presenters_see_the_session_state()
+    {
+        var deck = await app.SeedDeckAsync("join-deck"); // Private: only the session admits the room
+        var owner = await app.OwnerClientAsync();
+        var anon = app.Client();
+
+        // Before going live: no join QR, session.json says not live, codes resolve to the "not live" page.
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync($"/d/{deck.Slug}/qr.svg?join=1")).StatusCode);
+        var idle = await owner.GetFromJsonAsync<JsonElement>($"/d/{deck.Slug}/session.json");
+        Assert.False(idle.GetProperty("live").GetBoolean());
+        Assert.True(idle.GetProperty("isOwner").GetBoolean());
+        var bogus = await anon.GetAsync("/j/ABC-234");
+        Assert.Equal(HttpStatusCode.NotFound, bogus.StatusCode);
+        Assert.Contains("not live", await bogus.Content.ReadAsStringAsync());
+
+        var start = await owner.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { plannedMinutes = 45, holdDeploys = false, freeze = true }));
+        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
+        var state = await owner.GetFromJsonAsync<JsonElement>($"/d/{deck.Slug}/session.json");
+        Assert.True(state.GetProperty("live").GetBoolean());
+        Assert.Equal(45, state.GetProperty("plannedMinutes").GetInt32());
+        var joinCode = state.GetProperty("joinCode").GetString()!;
+        var joinUrl = state.GetProperty("joinUrl").GetString()!;
+        Assert.Matches("^[A-Z2-9]{3}-[A-Z2-9]{3}$", joinCode);
+        Assert.Equal($"{PodiumWebFactory.PublicOrigin}/j/{joinCode}", joinUrl);
+        Assert.True(state.TryGetProperty("serverTime", out _));
+
+        // Anyone types the code (case/dash-insensitive) and lands in the Private deck without signing in.
+        var hop = await anon.SendAsync(PodiumWebFactory.Navigation($"/j/{joinCode.Replace("-", "").ToLowerInvariant()}"));
+        Assert.Equal(HttpStatusCode.Redirect, hop.StatusCode);
+        Assert.StartsWith($"/d/{deck.Slug}/?share=", hop.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.OK, (await anon.SendAsync(PodiumWebFactory.Navigation(hop.Headers.Location!.ToString()))).StatusCode);
+
+        // The join QR is for presenters only; the plain QR follows the deck's access.
+        var qr = await owner.GetAsync($"/d/{deck.Slug}/qr.svg?join=1");
+        Assert.Equal(HttpStatusCode.OK, qr.StatusCode);
+        Assert.Equal("image/svg+xml", qr.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync($"/d/{deck.Slug}/qr.svg?join=1")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync($"/d/{deck.Slug}/session.json")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await (await app.GuestClientAsync(123456)).GetAsync($"/d/{deck.Slug}/session.json")).StatusCode);
+
+        // The organiser cut five minutes.
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/plan?minutes=40", null)).StatusCode);
+        Assert.Equal(40, (await owner.GetFromJsonAsync<JsonElement>($"/d/{deck.Slug}/session.json")).GetProperty("plannedMinutes").GetInt32());
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/plan?minutes=0", null)).StatusCode);
+
+        // Details shows the code; the remote carries the owner flag.
+        var details = await (await owner.SendAsync(PodiumWebFactory.Navigation($"/decks/{deck.Slug}"))).Content.ReadAsStringAsync();
+        Assert.Contains(joinCode, details);
+        Assert.Contains("data-share-url", details);
+        Assert.Contains("data-owner=\"1\"", await (await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/remote"))).Content.ReadAsStringAsync());
+
+        // End: the code dies immediately.
+        await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+        Assert.Equal(HttpStatusCode.NotFound, (await app.Client().GetAsync($"/j/{joinCode}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task App_is_installable_manifest_icons_and_shell_worker_are_served()
+    {
+        var c = app.Client();
+        var manifest = await c.GetAsync("/manifest.webmanifest");
+        Assert.Equal(HttpStatusCode.OK, manifest.StatusCode);
+        Assert.Equal("application/manifest+json", manifest.Content.Headers.ContentType!.MediaType);
+        using var doc = JsonDocument.Parse(await manifest.Content.ReadAsStringAsync());
+        Assert.Equal("standalone", doc.RootElement.GetProperty("display").GetString());
+        foreach (var icon in doc.RootElement.GetProperty("icons").EnumerateArray())
+            Assert.Equal(HttpStatusCode.OK, (await c.GetAsync(icon.GetProperty("src").GetString())).StatusCode);
+        var sw = await c.GetAsync("/sw.js");
+        Assert.Equal(HttpStatusCode.OK, sw.StatusCode);
+        Assert.Contains("no-cache", sw.Headers.CacheControl!.ToString());
+        var owner = await app.OwnerClientAsync();
+        var html = await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync();
+        Assert.Contains("rel=\"manifest\"", html);
+        Assert.Contains("id=\"install-app\"", html);
+        var deck = await app.SeedDeckAsync("remote-card-deck");
+        Assert.Contains($"href=\"/d/{deck.Slug}/remote\"", await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync());
+    }
+
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
@@ -777,9 +856,9 @@ public sealed class RateLimitTests(PodiumWebFactory app)
         var deck = await app.SeedDeckAsync("limited-deck", Visibility.Public);
         var c = app.Client(forwardedFor: "203.0.113.77");
         HttpStatusCode last = HttpStatusCode.OK;
-        for (var i = 0; i < 95 && last != HttpStatusCode.TooManyRequests; i++)
+        for (var i = 0; i < 320 && last != HttpStatusCode.TooManyRequests; i++)
             last = (await c.GetAsync($"/d/{deck.Slug}.pdf")).StatusCode;
-        Assert.Equal(HttpStatusCode.TooManyRequests, last);
+        Assert.Equal(HttpStatusCode.TooManyRequests, last); // 300/min per address: a room behind one NAT fits, a scraper does not
         // Another client is unaffected.
         var other = await app.Client(forwardedFor: "203.0.113.78").SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
         Assert.Equal(HttpStatusCode.OK, other.StatusCode);

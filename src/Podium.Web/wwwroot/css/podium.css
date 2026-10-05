@@ -373,3 +373,20 @@ dialog.dialog::backdrop { background: rgba(0,0,0,.55); }
 dialog.dialog .field { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .7rem; font-size: .9rem; }
 .shortcuts td:first-child { white-space: nowrap; width: 9rem; }
 kbd { font: inherit; font-size: .78rem; padding: .05rem .4rem; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; background: var(--bg); }
+/* Follow-along block */
+.follow { padding-top: .9rem; border-top: 1px solid var(--border); }
+.join-code { font: 700 2rem/1.1 ui-monospace, Consolas, monospace; letter-spacing: .12em; color: var(--text); }
+/* Phones and the installed app: tighter chrome, single-column cards, the remote as the lead action */
+@media (max-width: 640px) {
+  .page { padding: .8rem; }
+  .topbar { padding: .5rem .8rem; }
+  .cards-grid { grid-template-columns: 1fr; }
+  .toolbar { gap: .5rem; }
+  .card-actions .act-remote { order: -1; background: var(--accent); border-color: var(--accent); color: #0b0d12; font-weight: 600; }
+  .card-actions .act-presenter { display: none; }
+  .bulkbar { bottom: .4rem; }
+}
+@media (display-mode: standalone) {
+  body { padding-top: env(safe-area-inset-top); }
+  .footer { display: none; }
+}

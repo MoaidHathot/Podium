@@ -61,6 +61,13 @@
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-copy]');
     if (btn) { e.preventDefault(); copy(btn.getAttribute('data-copy')); }
+    const share = e.target.closest('[data-share-url]');
+    if (share) {
+      e.preventDefault();
+      const data = { url: share.getAttribute('data-share-url'), title: share.getAttribute('data-share-title') || document.title, text: share.getAttribute('data-share-text') || undefined };
+      // Native share sheet where available (phones, Edge/Chrome on Windows); otherwise copy.
+      if (navigator.share) navigator.share(data).catch(() => {}); else copy(data.url);
+    }
   });
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -69,4 +76,13 @@
   });
 
   window.Podium = { api, toast, relative, refreshTimes, copy };
+
+  // Installable app: app-shell worker + the browser's install prompt when it offers one (Chrome/Edge; iOS uses
+  // Share > Add to Home Screen, mentioned in the shortcuts help).
+  if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  let installPrompt = null;
+  const installBtn = document.getElementById('install-app');
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; installBtn?.classList.remove('hidden'); });
+  installBtn?.addEventListener('click', async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch {} installPrompt = null; installBtn.classList.add('hidden'); });
+  window.addEventListener('appinstalled', () => { installBtn?.classList.add('hidden'); toast('Podium installed', 'ok'); });
 })();

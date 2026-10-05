@@ -86,6 +86,14 @@ OpenTelemetry. Three alert rules e-mail the budget address: web container termin
 three or more failed builds in an hour, ten or more 5xx responses in 15 minutes. Alerts, the action group and App
 Insights are all in `infra/foundation.bicep`.
 
+## Letting the room in
+
+Deck visibility applies to the plain URL: a Private or Shared deck asks visitors to sign in. The way to let a whole
+room follow a talk is a **live session**: it mints a share link that admits anyone, plus a six-character join code
+(`/j/ABC-123`, letters/digits that cannot be confused when read aloud, 887 million combinations) that only resolves
+while the session is live. Ending the session revokes both. Codes and deck entry are rate limited per client
+address at 300/min so a conference room behind one NAT fits; the link ids themselves are 144-bit random.
+
 ## Live sessions and the deploy guard
 
 A live session can ask Podium to hold its own deployments (per session, off by default). The workflow polls

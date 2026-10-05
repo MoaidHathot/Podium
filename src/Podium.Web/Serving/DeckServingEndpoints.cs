@@ -350,7 +350,7 @@ public sealed class NavigationRateLimitFilter : IEndpointFilter
         var http = context.HttpContext;
         if (!DeckServingEndpoints.IsNavigationRequest(http)) return await next(context);
         var key = http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-        var limiter = Limiters.GetOrAdd(key, _ => new System.Threading.RateLimiting.SlidingWindowRateLimiter(new System.Threading.RateLimiting.SlidingWindowRateLimiterOptions { PermitLimit = 90, Window = TimeSpan.FromMinutes(1), SegmentsPerWindow = 6, QueueLimit = 0 }));
+        var limiter = Limiters.GetOrAdd(key, _ => new System.Threading.RateLimiting.SlidingWindowRateLimiter(new System.Threading.RateLimiting.SlidingWindowRateLimiterOptions { PermitLimit = 600, Window = TimeSpan.FromMinutes(1), SegmentsPerWindow = 6, QueueLimit = 0 }));
         using var lease = limiter.AttemptAcquire();
         if (!lease.IsAcquired)
         {

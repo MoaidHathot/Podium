@@ -194,6 +194,8 @@ public sealed record Session
     public bool HoldDeploys { get; init; }
     /// <summary>Join link minted for the session (revoked when it ends).</summary>
     public string? LinkId { get; init; }
+    /// <summary>Short code the room can type (/j/{code}); resolves to the join link while the session is live.</summary>
+    public string? JoinCode { get; init; }
     /// <summary>Whether the deck was frozen by the session start (and should be unfrozen at the end).</summary>
     public bool FrozeDeck { get; init; }
     public string? Title { get; init; }

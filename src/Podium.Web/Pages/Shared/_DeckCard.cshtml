@@ -68,6 +68,7 @@
             @if (Model.IsSlidev)
             {
                 <a class="btn btn-sm act-presenter" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" title="Presenter view (notes, timer, next slide)" aria-disabled="@(canPresent ? null : "true")">Presenter</a>
+                <a class="btn btn-sm act-remote" href="/d/@d.Slug/remote" title="Phone remote (notes, go-to, blackout, countdown, Go live)" aria-disabled="@(canPresent ? null : "true")">Remote</a>
             }
             <span class="spacer"></span>
             @if (d.CurrentHasPdf)

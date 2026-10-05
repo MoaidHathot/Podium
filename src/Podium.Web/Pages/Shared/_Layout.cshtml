@@ -14,6 +14,11 @@
     <meta name="color-scheme" content="dark light" />
     <title>@(ViewData["Title"] is string t && t.Length > 0 ? t + " · Podium" : "Podium")</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="stylesheet" href="/css/podium.css" asp-append-version="true" />
     @await RenderSectionAsync("Head", required: false)
 </head>
@@ -32,6 +37,7 @@
             </nav>
         }
         <div class="topbar-spacer"></div>
+        <button type="button" class="btn btn-ghost btn-sm hidden" id="install-app" title="Install Podium as an app">Install</button>
         @if (caller.IsAuthenticated)
         {
             <div class="user">

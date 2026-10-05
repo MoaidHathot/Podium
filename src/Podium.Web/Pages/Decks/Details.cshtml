@@ -116,17 +116,58 @@
         </div>
         @if (servable)
         {
-            <div class="row" style="margin-top:1rem; align-items:flex-start; gap:1.25rem">
-                <a href="/d/@d.Slug/qr.svg" target="_blank" rel="noopener" title="Open the QR code full-screen for the room"><img class="qr" src="/d/@d.Slug/qr.svg" alt="QR code linking to this deck" width="132" height="132" /></a>
-                <div style="font-size:.88rem" class="muted">
-                    <strong style="color:var(--text)">Let the room follow along.</strong><br />
-                    Show this QR code (click to enlarge); phones that scan it open the deck and follow your navigation live.
-                    Visibility applies: for a Private deck only signed-in people with access can open it.
-                    @if (d.Kind == DeckKind.Slidev)
+            var live = Model.LiveSession;
+            var joinCode = live?.JoinCode is { } jc ? Podium.Core.Services.SessionService.FormatJoinCode(jc) : null;
+            var joinUrl = live?.JoinCode is { } jc2 ? Podium.Core.Services.SessionService.JoinUrl(new Uri(Model.PublicOrigin), jc2) : null;
+            var plainWorksForRoom = d.Visibility == Visibility.Public;
+            <div class="follow" id="follow-along" style="margin-top:1rem">
+                <strong>Let the room follow along</strong>
+                @if (live is not null && joinUrl is not null)
+                {
+                    <p class="hint" style="margin:.2rem 0 .6rem">You are live. Anyone who opens this link follows your navigation; no sign-in needed, even for a Private deck. It stops working when you end the session.</p>
+                    <div class="row" style="align-items:flex-start; gap:1.25rem; flex-wrap:wrap">
+                        <a href="/d/@d.Slug/qr.svg?join=1" target="_blank" rel="noopener" title="Open the QR code full-screen for the room"><img class="qr" src="/d/@d.Slug/qr.svg?join=1" alt="QR code of the join link" width="132" height="132" /></a>
+                        <div style="flex:1; min-width:16rem">
+                            <div class="join-code" title="Read this aloud">@joinCode</div>
+                            <div class="url-box" style="margin-top:.4rem"><code>@joinUrl</code><button class="btn btn-sm" data-copy="@joinUrl">Copy</button></div>
+                            <div class="row" style="margin-top:.5rem; gap:.4rem; flex-wrap:wrap">
+                                <button class="btn btn-sm" data-share-url="@joinUrl" data-share-title="@d.Title" data-share-text="Follow along: @joinUrl">Share…</button>
+                                <a class="btn btn-sm" href="mailto:?subject=@Uri.EscapeDataString(d.Title)&body=@Uri.EscapeDataString($"Follow along live: {joinUrl}")">Email</a>
+                                <a class="btn btn-sm" href="/d/@d.Slug/qr.svg?join=1" target="_blank" rel="noopener">QR full-screen</a>
+                            </div>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <p class="hint" style="margin:.2rem 0 .6rem">
+                        @if (plainWorksForRoom)
+                        {
+                            <text>This deck is Public, so the plain link and QR work for anyone. <strong>Go live</strong> below to also get a short join code (<code>@Model.PublicOrigin.Replace("https://", "").Replace("http://", "")/j/ABC-123</code>) and a countdown on the phone remote.</text>
+                        }
+                        else
+                        {
+                            <text>This deck is <strong>@d.Visibility</strong>: the plain link only works for people who already have access. <strong>Go live</strong> below and you get a join link and a short code that admit the whole room without sign-in, for as long as the session runs.</text>
+                        }
+                    </p>
+                    @if (plainWorksForRoom)
                     {
-                        <span><br /><br /><strong style="color:var(--text)">Phone remote:</strong> <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a> &mdash; prev/next, slide counter and a timer; drives every open instance of the deck.</span>
+                        <div class="row" style="align-items:flex-start; gap:1.25rem; flex-wrap:wrap">
+                            <a href="/d/@d.Slug/qr.svg" target="_blank" rel="noopener" title="Open the QR code full-screen for the room"><img class="qr" src="/d/@d.Slug/qr.svg" alt="QR code linking to this deck" width="132" height="132" /></a>
+                            <div style="flex:1; min-width:16rem">
+                                <div class="url-box"><code>@Model.PublicOrigin/d/@d.Slug/</code><button class="btn btn-sm" data-copy="@Model.PublicOrigin/d/@d.Slug/">Copy</button></div>
+                                <div class="row" style="margin-top:.5rem; gap:.4rem; flex-wrap:wrap">
+                                    <button class="btn btn-sm" data-share-url="@Model.PublicOrigin/d/@d.Slug/" data-share-title="@d.Title" data-share-text="Follow along: @Model.PublicOrigin/d/@d.Slug/">Share…</button>
+                                    <a class="btn btn-sm" href="mailto:?subject=@Uri.EscapeDataString(d.Title)&body=@Uri.EscapeDataString($"Follow along: {Model.PublicOrigin}/d/{d.Slug}/")">Email</a>
+                                </div>
+                            </div>
+                        </div>
                     }
-                </div>
+                }
+                @if (d.Kind == DeckKind.Slidev)
+                {
+                    <p class="hint" style="margin:.6rem 0 0"><strong style="color:var(--text)">Phone remote:</strong> <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a> &mdash; notes, go-to grid, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                }
             </div>
         }
         @if (d.Kind == DeckKind.Slidev && servable)
@@ -139,13 +180,7 @@
                         <strong>Session running</strong>
                         <span class="faint">since <time datetime="@live.StartedAt.UtcDateTime.ToString("o")">@live.StartedAt.ToString("HH:mm")</time>@(live.PlannedMinutes is { } pm ? $", planned {pm} min" : "")@(live.HoldDeploys ? ", holding deployments" : "")</span>
                     </div>
-                    @if (live.LinkId is not null)
-                    {
-                        <div class="field" style="margin-top:.6rem">
-                            <label>Join link for the room <span class="faint">(dies when the session ends)</span></label>
-                            <div class="url-box"><code>@Model.Origin/d/@d.Slug/?share=@live.LinkId</code><button class="btn btn-sm" data-copy="@Model.Origin/d/@d.Slug/?share=@live.LinkId">Copy</button></div>
-                        </div>
-                    }
+                    <p class="hint" style="margin:.4rem 0 0">The join code, link and QR for the room are above under <em>Let the room follow along</em>; the phone remote shows the countdown.</p>
                     <div class="row" style="margin-top:.6rem">
                         <button class="btn btn-primary btn-sm" id="session-end">End session</button>
                         <label class="row" style="gap:.3rem; font-size:.85rem"><input type="checkbox" id="session-unfreeze" checked /> unfreeze the deck when ending</label>
@@ -154,9 +189,9 @@
                 else
                 {
                     <strong>Go live</strong>
-                    <p class="hint" style="margin:.2rem 0 .6rem">Freezes the served version for the talk, mints a join link that expires when you end, and records pacing per slide for the recap. Ends by itself if no presenter is connected for 15 minutes.</p>
+                    <p class="hint" style="margin:.2rem 0 .6rem">Freezes the served version for the talk, gives the room a join link and short code (no sign-in needed), puts a countdown on the phone remote and records pacing per slide for the recap. Ends by itself if no presenter is connected for 15 minutes. You can also go live from the phone remote.</p>
                     <div class="row" style="gap:.6rem; flex-wrap:wrap; align-items:center">
-                        <label class="row" style="gap:.3rem; font-size:.85rem">Planned <input class="input" id="session-minutes" type="number" min="1" max="600" placeholder="min" style="width:5rem" /></label>
+                        <label class="row" style="gap:.3rem; font-size:.85rem">Planned <input class="input" id="session-minutes" type="number" min="1" max="600" value="45" style="width:5rem" /> min</label>
                         <label class="row" style="gap:.3rem; font-size:.85rem"><input type="checkbox" id="session-freeze" checked /> freeze deck</label>
                         <label class="row" style="gap:.3rem; font-size:.85rem" title="Pushes to Podium itself wait until this session ends (max 45 min); deck builds are never affected"><input type="checkbox" id="session-hold" @(d.HoldDeploysWhileLive ? "checked" : "") /> hold Podium deployments</label>
                         <button class="btn btn-primary btn-sm" id="session-start">Go live</button>

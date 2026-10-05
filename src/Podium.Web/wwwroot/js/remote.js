@@ -34,11 +34,14 @@
   }
   function retry() { if (closed) return; setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 15000); }
 
+  let deckWindows = 0;
   function showPresence(presenters, viewers) {
     if (typeof viewers !== 'number') return;
-    // This remote is itself a presenter socket; count the other presenting instances (projector, laptop) separately.
-    const others = Math.max(0, (presenters || 1) - 1);
-    presence.textContent = `${viewers} watching${others ? ` · ${others} presenting` : ''}`;
+    // This remote is itself a presenter socket; the other presenting instances are the deck windows it drives.
+    deckWindows = Math.max(0, (presenters || 1) - 1);
+    presence.textContent = `${viewers} watching${deckWindows ? ` · ${deckWindows} deck window${deckWindows === 1 ? '' : 's'}` : ''}`;
+    if (!deckWindows && !current) clicks.textContent = 'no deck window connected: open the deck on the presenting machine';
+    else if (!deckWindows) clicks.textContent = 'deck window disconnected';
   }
 
   function show(p, t, c, ct) {
@@ -165,37 +168,115 @@
     else if (v === 'clear') { send({ t: 'screen', mode: 'none' }); $('black').setAttribute('aria-pressed', 'false'); }
   });
 
-  // ---- Timer + planned-duration countdown -----------------------------------------------------------------------
-  let startedAt = 0, accumulated = 0, ticking = null, plannedMs = 0;
-  const timerEl = $('timer'), toggle = $('timer-toggle'), countdown = $('countdown');
+  // ---- Stopwatch (independent of any session) ------------------------------------------------------------------
+  let startedAt = 0, accumulated = 0, ticking = null;
+  const timerEl = $('timer'), toggle = $('timer-toggle');
   const fmt = (ms) => { const s = Math.floor(Math.abs(ms) / 1000); return `${ms < 0 ? '-' : ''}${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
-  function render() {
-    const ms = accumulated + (startedAt ? Date.now() - startedAt : 0);
-    timerEl.textContent = fmt(ms);
-    if (plannedMs > 0) {
-      const left = plannedMs - ms;
-      countdown.hidden = false;
-      countdown.textContent = left >= 0 ? `${fmt(left)} left` : `${fmt(left)} over`;
-      countdown.className = 'countdown' + (left < 0 ? ' over' : left < plannedMs * 0.15 ? ' warn' : '');
-    } else countdown.hidden = true;
-  }
+  const fmtLong = (ms) => { const s = Math.floor(Math.abs(ms) / 1000); const h = Math.floor(s / 3600); return `${ms < 0 ? '-' : ''}${h ? h + ':' : ''}${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+  function renderStopwatch() { timerEl.textContent = fmt(accumulated + (startedAt ? Date.now() - startedAt : 0)); }
   toggle.addEventListener('click', () => {
-    if (startedAt) { accumulated += Date.now() - startedAt; startedAt = 0; clearInterval(ticking); ticking = null; toggle.textContent = '▶ Timer'; timerEl.classList.remove('running'); }
-    else { startedAt = Date.now(); ticking = setInterval(render, 500); toggle.textContent = '⏸ Timer'; timerEl.classList.add('running'); }
-    render();
+    if (startedAt) { accumulated += Date.now() - startedAt; startedAt = 0; clearInterval(ticking); ticking = null; toggle.textContent = '▶ Stopwatch'; timerEl.classList.remove('running'); }
+    else { startedAt = Date.now(); ticking = setInterval(renderStopwatch, 500); toggle.textContent = '⏸ Stopwatch'; timerEl.classList.add('running'); }
+    renderStopwatch();
   });
-  $('timer-reset').addEventListener('click', () => { accumulated = 0; if (startedAt) startedAt = Date.now(); render(); });
-  $('plan').addEventListener('click', () => { $('plan-minutes').value = plannedMs ? String(plannedMs / 60000) : ''; $('plan-dialog').showModal(); });
-  $('plan-dialog').addEventListener('close', () => {
-    const v = $('plan-dialog').returnValue;
-    if (v === 'set') { const m = Number($('plan-minutes').value); plannedMs = m > 0 && m <= 600 ? m * 60000 : 0; }
-    else if (v === 'clear') plannedMs = 0;
-    try { localStorage.setItem(`podium-plan-${slug}`, String(plannedMs)); } catch {}
-    render();
-  });
-  try { plannedMs = Number(localStorage.getItem(`podium-plan-${slug}`)) || 0; } catch {}
-  render();
+  $('timer-reset').addEventListener('click', () => { accumulated = 0; if (startedAt) startedAt = Date.now(); renderStopwatch(); });
 
+  // ---- Live session: countdown from the server's clock, join code, Go live / Adjust / End (owner) ----------------
+  const isOwner = document.body.dataset.owner === '1';
+  const sessionEl = $('session');
+  let session = null;          // { live, startedAt, plannedMinutes, joinCode, joinUrl, ... }
+  let clockOffset = 0;         // serverTime - Date.now() at fetch, so phones with a wrong clock still count right
+  let sessionTick = null;
+  async function ownerApi(method, path, body) {
+    const res = await fetch(path, { method, credentials: 'same-origin', headers: { 'x-podium-request': '1', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined });
+    if (!res.ok) { let msg = `HTTP ${res.status}`; try { msg = (await res.json()).error || msg; } catch {} throw new Error(msg); }
+    return res.status === 204 ? null : res.json();
+  }
+  async function loadSession() {
+    try {
+      const res = await fetch(`/d/${encodeURIComponent(slug)}/session.json`, { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) { sessionEl.hidden = true; return; }
+      session = await res.json();
+      clockOffset = new Date(session.serverTime).getTime() - Date.now();
+      renderSession();
+    } catch { /* keep the previous state */ }
+  }
+  function remainingMs() {
+    if (!session || !session.live) return null;
+    const elapsed = Date.now() + clockOffset - new Date(session.startedAt).getTime();
+    return session.plannedMinutes ? session.plannedMinutes * 60000 - elapsed : -elapsed; // no plan: negative = elapsed
+  }
+  function renderSession() {
+    sessionEl.hidden = false;
+    sessionEl.innerHTML = '';
+    if (!session || !session.live) {
+      if (isOwner) {
+        const b = el('button', 'small primary', '● Go live'); b.id = 'go-live';
+        b.addEventListener('click', () => { $('golive-minutes').value = localStorage.getItem(`podium-plan-${slug}`) || '45'; $('golive-dialog').showModal(); });
+        const hint = el('span', 'faint', 'countdown + join code for the room');
+        sessionEl.append(b, hint);
+      } else sessionEl.append(el('span', 'faint', 'Not live'));
+      clearInterval(sessionTick); sessionTick = null;
+      return;
+    }
+    const big = el('div', 'countdown-big'); big.id = 'countdown-big';
+    const meta = el('div', 'session-meta');
+    const left = el('span'); left.id = 'countdown-meta';
+    meta.append(left);
+    if (isOwner) {
+      const adjust = el('button', 'small', 'Adjust'); adjust.addEventListener('click', () => { $('plan-minutes').value = session.plannedMinutes || ''; $('plan-dialog').showModal(); });
+      const end = el('button', 'small danger', 'End'); end.addEventListener('click', endSession);
+      meta.append(adjust, end);
+    }
+    const join = document.createElement('details'); join.className = 'join';
+    const summary = el('summary', '', `Join: ${session.joinUrl.replace(/^https?:\/\//, '')}`);
+    const code = el('div', 'join-code', session.joinCode);
+    const qr = document.createElement('img'); qr.className = 'join-qr'; qr.alt = 'QR code of the join link'; qr.src = `/d/${encodeURIComponent(slug)}/qr.svg?join=1&v=${encodeURIComponent(session.id)}`;
+    const actions = el('div', 'row');
+    const share = el('button', 'small', 'Share…'); share.addEventListener('click', () => { if (navigator.share) navigator.share({ title: document.title, text: `Follow along: ${session.joinUrl}`, url: session.joinUrl }).catch(() => {}); else copyText(session.joinUrl); });
+    const copy = el('button', 'small', 'Copy link'); copy.addEventListener('click', () => copyText(session.joinUrl));
+    actions.append(share, copy);
+    join.append(summary, code, qr, actions);
+    sessionEl.append(big, meta, join);
+    tickSession();
+    clearInterval(sessionTick); sessionTick = setInterval(tickSession, 1000);
+  }
+  function tickSession() {
+    const big = $('countdown-big'), meta = $('countdown-meta');
+    if (!big || !session || !session.live) return;
+    const r = remainingMs();
+    if (session.plannedMinutes) {
+      big.textContent = fmtLong(r);
+      big.className = 'countdown-big' + (r < 0 ? ' over' : r < session.plannedMinutes * 60000 * 0.15 ? ' warn' : '');
+      meta.textContent = r >= 0 ? `left of ${session.plannedMinutes} min` : `over the planned ${session.plannedMinutes} min`;
+    } else { big.textContent = fmtLong(-r); big.className = 'countdown-big'; meta.textContent = 'elapsed · no planned length'; }
+  }
+  async function copyText(text) { try { await navigator.clipboard.writeText(text); flash('Copied'); } catch { flash('Copy failed'); } }
+  function flash(text) { setConn(text, 'ok'); setTimeout(() => setConn(socket && socket.readyState === WebSocket.OPEN ? 'connected' : 'disconnected', socket && socket.readyState === WebSocket.OPEN ? 'ok' : 'bad'), 1500); }
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  $('golive-dialog').addEventListener('close', async () => {
+    if ($('golive-dialog').returnValue !== 'start') return;
+    const minutes = Number($('golive-minutes').value) || null;
+    try {
+      await ownerApi('POST', `/api/decks/${encodeURIComponent(slug)}/sessions`, { plannedMinutes: minutes, holdDeploys: $('golive-hold').checked, freeze: $('golive-freeze').checked });
+      if (minutes) try { localStorage.setItem(`podium-plan-${slug}`, String(minutes)); } catch {}
+      await loadSession();
+      if (session && session.live) { const d = sessionEl.querySelector('details'); if (d) d.open = true; }
+      if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+    } catch (e) { flash(e.message); }
+  });
+  $('plan-dialog').addEventListener('close', async () => {
+    if ($('plan-dialog').returnValue !== 'set') return;
+    const minutes = Number($('plan-minutes').value);
+    if (!minutes) return;
+    try { await ownerApi('POST', `/api/decks/${encodeURIComponent(slug)}/sessions/plan?minutes=${minutes}`); await loadSession(); } catch (e) { flash(e.message); }
+  });
+  async function endSession() {
+    if (!confirm('End the live session? The join link stops working.')) return;
+    try { await ownerApi('POST', `/api/decks/${encodeURIComponent(slug)}/sessions/end?unfreeze=true`); await loadSession(); } catch (e) { flash(e.message); }
+  }
+  setInterval(loadSession, 30000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadSession(); });
   // Keep the screen awake while presenting, when the browser allows it.
   let wakeLock = null;
   async function keepAwake() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
@@ -205,4 +286,5 @@
   connect();
   loadNotes();
   loadSheet();
+  loadSession();
 })();

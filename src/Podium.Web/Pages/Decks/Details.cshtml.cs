@@ -5,7 +5,7 @@ using Podium.Core.Models;
 
 namespace Podium.Web.Pages.Decks;
 
-public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links, IViewHistoryStore views, ISessionStore sessions, IAccessRequestStore accessRequests, IAuditStore audit) : PageModel
+public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links, IViewHistoryStore views, ISessionStore sessions, IAccessRequestStore accessRequests, IAuditStore audit, Microsoft.Extensions.Options.IOptions<Podium.Web.Configuration.PodiumOptions> options) : PageModel
 {
     public IReadOnlyList<AuditEntry> Activity { get; private set; } = [];
     public IReadOnlyList<AccessRequest> PendingRequests { get; private set; } = [];
@@ -23,6 +23,8 @@ public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildS
     public Build? CurrentBuild { get; private set; }
     [BindProperty(SupportsGet = true)] public bool NotBuilt { get; set; }
     public string Origin => $"{Request.Scheme}://{Request.Host}";
+    /// <summary>The public hostname (what the room should type), independent of how the owner reached this page.</summary>
+    public string PublicOrigin => options.Value.PublicBaseUrl.ToString().TrimEnd('/');
 
     public async Task<IActionResult> OnGetAsync(string slug, CancellationToken ct)
     {

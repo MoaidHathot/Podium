@@ -121,6 +121,33 @@ public class SessionServiceTests
     }
 
     [Fact]
+    public async Task Join_codes_are_unambiguous_resolve_only_while_live_and_plans_can_be_adjusted()
+    {
+        await SeedAsync();
+        var (session, _) = await _svc.StartAsync("talk", 45, false, true, null);
+        var code = session!.JoinCode!;
+        Assert.Equal(6, code.Length);
+        Assert.All(code, ch => Assert.Contains(ch, "ABCDEFGHJKMNPQRSTUVWXYZ23456789"));
+        Assert.Equal($"{code[..3]}-{code[3..]}", SessionService.FormatJoinCode(code));
+        Assert.Equal("https://slides.example/j/" + SessionService.FormatJoinCode(code), SessionService.JoinUrl(new Uri("https://slides.example/"), code));
+
+        // Typed by the room: dashes, spaces and case do not matter.
+        Assert.Equal(session.Id, (await _svc.FindLiveByJoinCodeAsync($" {code[..3].ToLowerInvariant()}-{code[3..]} "))!.Id);
+        Assert.Null(await _svc.FindLiveByJoinCodeAsync("ZZZZZZ"));
+        Assert.Null(SessionService.NormalizeJoinCode("ABC-10X")); // 0/1/I/L/O are never issued, so never accepted
+        Assert.Null(SessionService.NormalizeJoinCode("ABCDE"));
+
+        var updated = await _svc.UpdatePlanAsync("talk", 40);
+        Assert.Equal(40, updated!.PlannedMinutes);
+        Assert.Null(await _svc.UpdatePlanAsync("talk", 0));
+        Assert.Null(await _svc.UpdatePlanAsync("talk", 601));
+
+        await _svc.EndAsync("talk", "manual", false);
+        Assert.Null(await _svc.FindLiveByJoinCodeAsync(code)); // dead with the session
+        Assert.Null(await _svc.UpdatePlanAsync("talk", 30));
+    }
+
+    [Fact]
     public async Task Holding_deploys_reflects_only_live_opted_in_sessions()
     {
         await SeedAsync("a"); await SeedAsync("b"); await SeedAsync("c");

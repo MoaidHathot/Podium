@@ -208,6 +208,12 @@ public static partial class ApiEndpoints
             return Results.Ok(session);
         });
 
+        owner.MapPost("/decks/{slug}/sessions/plan", async (string slug, [FromQuery] int minutes, SessionService sessions, CancellationToken ct) =>
+        {
+            var s = await sessions.UpdatePlanAsync(slug, minutes, ct);
+            return s is null ? Results.NotFound(new { error = "No live session, or minutes out of range (1-600)" }) : Results.Ok(s);
+        });
+
         owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
 
         // Audit trail (owner only): newest first, optionally for one deck.

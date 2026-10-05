@@ -67,6 +67,23 @@ try {
   check('blackout reaches viewer only', (await vp.locator('#screen').count()) === 1 && (await presenter.locator('#screen').count()) === 0);
   await remote.click('#black'); await remote.waitForTimeout(500);
 
+  // Live session from the owner's remote: countdown + join code; the room joins a (now Private) deck through /j/CODE.
+  await op.request.patch(`${base}/api/decks/fixture-deck`, { headers: { 'x-podium-request': '1' }, data: { visibility: 'Private' } });
+  const sess = await op.request.post(`${base}/api/decks/fixture-deck/sessions`, { headers: { 'x-podium-request': '1' }, data: { plannedMinutes: 45, holdDeploys: false, freeze: true } });
+  check('session started', sess.ok(), String(sess.status()));
+  await remote.reload({ waitUntil: 'networkidle' }); await remote.waitForTimeout(1200);
+  const countdown = await remote.locator('#countdown-big').innerText().catch(() => '');
+  check('remote shows session countdown', /^44:\d\d$|^45:00$/.test(countdown), countdown);
+  const code = (await remote.locator('.join-code').textContent().catch(() => '') || '').trim(); // inside a collapsed <details>
+  check('remote shows join code', /^[A-Z2-9]{3}-[A-Z2-9]{3}$/.test(code), code);
+  const joiner = await (await browser.newContext()).newPage();
+  const jr = await joiner.goto(`${base}/j/${code.toLowerCase()}`, { waitUntil: 'load' });
+  await joiner.waitForTimeout(800);
+  check('room joins private deck via code without sign-in', jr.ok() && new URL(joiner.url()).pathname.startsWith('/d/fixture-deck/'), joiner.url());
+  await op.request.post(`${base}/api/decks/fixture-deck/sessions/end?unfreeze=true`, { headers: { 'x-podium-request': '1' } });
+  check('code dies with the session', (await joiner.request.get(`${base}/j/${code}`)).status() === 404);
+  await op.request.patch(`${base}/api/decks/fixture-deck`, { headers: { 'x-podium-request': '1' }, data: { visibility: 'Public' } });
+
   // Anonymous access rules.
   const r1 = await vp.request.get(`${base}/d/fixture-deck/notes.json`);
   check('notes hidden from viewers', r1.status() === 404, String(r1.status()));

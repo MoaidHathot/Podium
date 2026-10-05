@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
 using Podium.Core.Abstractions;
 using Podium.Core.Models;
+using Podium.Core.Services;
 using Podium.Core.Security;
 using Podium.Web.Security;
 using QRCoder;
@@ -20,18 +21,63 @@ public static class PresenterToolsEndpoints
 {
     public static IEndpointRouteBuilder MapPresenterTools(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/d/{slug}/qr.svg", async (string slug, HttpContext http, DeckAccessService access, CallerResolver callers, Microsoft.Extensions.Options.IOptions<Configuration.PodiumOptions> options, CancellationToken ct) =>
+        // QR of the deck URL (same access rules as the deck). With ?join=1 and a live session, presenters get a QR of
+        // the short join URL instead, which admits the room without sign-in for as long as the session runs.
+        app.MapGet("/d/{slug}/qr.svg", async (string slug, [FromQuery] string? join, HttpContext http, DeckAccessService access, CallerResolver callers, SessionService sessions, Microsoft.Extensions.Options.IOptions<Configuration.PodiumOptions> options, CancellationToken ct) =>
         {
             var caller = callers.Resolve(http.User);
             var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
             if (result.Deck is null || result.Decision != AccessDecision.Allow) return Results.NotFound();
             // Always the public hostname: audience phones must not be sent to the platform FQDN.
             var url = $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{slug}/";
+            if (join is "1" or "true")
+            {
+                if (!result.CanPresent) return Results.NotFound();
+                var live = await sessions.GetLiveAsync(slug, ct);
+                if (live?.JoinCode is null) return Results.NotFound();
+                url = SessionService.JoinUrl(options.Value.PublicBaseUrl, live.JoinCode);
+            }
             using var generator = new QRCodeGenerator();
             using var data = generator.CreateQrCode(url, QRCodeGenerator.ECCLevel.M);
             var svg = new SvgQRCode(data).GetGraphic(8, "#0b0d12", "#ffffff", drawQuietZones: true);
-            http.Response.Headers[HeaderNames.CacheControl] = "private, max-age=3600";
+            http.Response.Headers[HeaderNames.CacheControl] = join is "1" or "true" ? "private, no-store" : "private, max-age=3600";
             return Results.Content(svg, "image/svg+xml; charset=utf-8");
+        }).RequireRateLimiting("probe");
+
+        // The room types this: slides.example/j/ABC-123. Valid only while the session is live; afterwards (and for
+        // codes that never existed) the same "ended" page, so nothing is learned from a guess.
+        app.MapGet("/j/{code}", async (string code, HttpContext http, SessionService sessions, CancellationToken ct) =>
+        {
+            var live = await sessions.FindLiveByJoinCodeAsync(code, ct);
+            http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            if (live?.LinkId is null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                return Results.Content(JoinEndedPage(), "text/html; charset=utf-8");
+            }
+            return Results.Redirect($"/d/{live.DeckSlug}/?share={Uri.EscapeDataString(live.LinkId)}");
+        }).RequireRateLimiting("join");
+
+        // Live-session state for presenter tooling (the remote's countdown, join code, Go live / End controls).
+        app.MapGet("/d/{slug}/session.json", async (string slug, HttpContext http, DeckAccessService access, CallerResolver callers, SessionService sessions, Microsoft.Extensions.Options.IOptions<Configuration.PodiumOptions> options, CancellationToken ct) =>
+        {
+            var caller = callers.Resolve(http.User);
+            var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
+            if (result.Deck is null || result.Decision != AccessDecision.Allow || !result.CanPresent) return Results.NotFound();
+            http.Response.Headers[HeaderNames.CacheControl] = "private, no-store";
+            var live = await sessions.GetLiveAsync(slug, ct);
+            return Results.Ok(new
+            {
+                live = live is not null,
+                id = live?.Id,
+                startedAt = live?.StartedAt,
+                plannedMinutes = live?.PlannedMinutes,
+                holdDeploys = live?.HoldDeploys,
+                joinCode = live?.JoinCode is { } jc ? SessionService.FormatJoinCode(jc) : null,
+                joinUrl = live?.JoinCode is { } jc2 ? SessionService.JoinUrl(options.Value.PublicBaseUrl, jc2) : null,
+                isOwner = caller.IsOwner,
+                serverTime = DateTimeOffset.UtcNow,
+            });
         }).RequireRateLimiting("probe");
 
         app.MapGet("/d/{slug}/remote", async (string slug, HttpContext http, DeckAccessService access, CallerResolver callers, CancellationToken ct) =>
@@ -43,7 +89,7 @@ public static class PresenterToolsEndpoints
             if (result.Decision != AccessDecision.Allow || !result.CanPresent) return Results.NotFound();
             if (result.Deck.Kind != DeckKind.Slidev) return Results.NotFound();
             http.Response.Headers[HeaderNames.CacheControl] = "no-store";
-            return Results.Content(RemotePage(result.Deck), "text/html; charset=utf-8");
+            return Results.Content(RemotePage(result.Deck, caller.IsOwner), "text/html; charset=utf-8");
         });
 
         // Speaker notes: the one artifact that must never reach a viewer. Owner / Present grantees only, main origin
@@ -148,6 +194,16 @@ public static class PresenterToolsEndpoints
             entityTag: file.ETag is null ? null : new EntityTagHeaderValue(DeckServingEndpoints.QuoteEtag(file.ETag)));
     }
 
+    private static string JoinEndedPage() => """
+        <!doctype html>
+        <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+        <title>Session ended</title><link rel="stylesheet" href="/css/podium.css"></head>
+        <body class="centered"><main class="card" style="max-width:26rem; margin:10vh auto; padding:1.5rem">
+        <h1 style="font-size:1.2rem; margin:0 0 .4rem">This session is not live</h1>
+        <p class="muted" style="margin:0">The code has expired or was typed wrong. Codes work only while the presenter is live; check the slide or ask for the current code.</p>
+        </main></body></html>
+        """;
+
     /// <summary>Only same-deck paths may be the continuation target (no open redirects).</summary>
     private static string SafeNext(string? next, string slug)
         => !string.IsNullOrEmpty(next) && next.StartsWith($"/d/{slug}", StringComparison.Ordinal) && !next.StartsWith("//", StringComparison.Ordinal) && !next.Contains('\\') && next.Length < 2000 ? next : $"/d/{slug}/";
@@ -207,23 +263,28 @@ public static class PresenterToolsEndpoints
             """;
     }
 
-    private static string RemotePage(Deck deck)
+    private static string RemotePage(Deck deck, bool isOwner)
     {
         var title = System.Net.WebUtility.HtmlEncode(deck.Title);
         var slug = deck.Slug;
         var hasNotes = deck.CurrentHasNotes ? "1" : "0";
         var hasSheet = deck.CurrentHasSlideSheet ? "1" : "0";
+        var owner = isOwner ? "1" : "0";
         return $$"""
             <!doctype html>
             <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
             <meta name="theme-color" content="#0b0d12"><title>Remote · {{title}}</title>
+            <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+            <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
             <link rel="stylesheet" href="/css/remote.css">
-            </head><body data-slug="{{slug}}" data-has-notes="{{hasNotes}}" data-has-sheet="{{hasSheet}}" data-build="{{deck.CurrentBuildId}}">
+            </head><body data-slug="{{slug}}" data-has-notes="{{hasNotes}}" data-has-sheet="{{hasSheet}}" data-build="{{deck.CurrentBuildId}}" data-owner="{{owner}}">
             <header>
+              <a class="back" href="/" aria-label="Library" title="Library">‹</a>
               <div class="title">{{title}}</div>
               <div class="status"><span class="presence" id="presence" title="People watching"></span><span class="conn" id="conn" aria-live="polite">connecting…</span></div>
             </header>
             <main>
+              <section class="session" id="session" hidden></section>
               <div class="counter"><span id="page">–</span><span class="of">/ <span id="total">–</span></span><span class="clicks" id="clicks"></span></div>
               <section class="notes" id="notes" hidden>
                 <div class="note-current" id="note-current"></div>
@@ -239,18 +300,24 @@ public static class PresenterToolsEndpoints
                 <button class="small" id="black" aria-pressed="false">■ Black</button>
                 <button class="small" id="message">💬 Message</button>
               </div>
-              <div class="row">
-                <button class="small" id="timer-toggle">▶ Timer</button>
-                <button class="small" id="timer-reset" title="Reset timer">↺</button>
+              <div class="row" id="stopwatch-row">
+                <button class="small" id="timer-toggle">▶ Stopwatch</button>
+                <button class="small" id="timer-reset" title="Reset">↺</button>
                 <span class="timer" id="timer">00:00</span>
-                <span class="countdown" id="countdown" hidden></span>
-                <button class="small" id="plan" title="Planned duration">⏱ Plan</button>
               </div>
               <div class="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B = black, G = go to.</div>
             </main>
             <dialog id="goto-dialog"><div class="goto-head"><strong>Go to slide</strong><button class="small" id="goto-close">✕</button></div><div class="goto-grid" id="goto-grid"></div></dialog>
             <dialog id="message-dialog"><form method="dialog"><label>Message for the audience<input id="message-text" maxlength="300" placeholder="Demo in progress, back in a minute"></label><div class="row"><button class="small" value="show">Show</button><button class="small" value="clear">Clear</button><button class="small" value="cancel">Cancel</button></div></form></dialog>
-            <dialog id="plan-dialog"><form method="dialog"><label>Planned length (minutes)<input id="plan-minutes" type="number" min="1" max="600" inputmode="numeric"></label><div class="row"><button class="small" value="set">Set</button><button class="small" value="clear">No countdown</button></div></form></dialog>
+            <dialog id="golive-dialog"><form method="dialog">
+              <strong>Go live</strong>
+              <p class="dialog-hint">Freezes the served version, gives the room a join code (no sign-in needed) and starts the countdown. Ends by itself 15 minutes after the last presenter disconnects.</p>
+              <label>Planned length (minutes)<input id="golive-minutes" type="number" min="1" max="600" inputmode="numeric" value="45"></label>
+              <label class="check"><input type="checkbox" id="golive-freeze" checked> Freeze the deck while live</label>
+              <label class="check"><input type="checkbox" id="golive-hold"> Hold Podium deployments while live</label>
+              <div class="row"><button class="small primary" value="start">Go live</button><button class="small" value="cancel">Cancel</button></div>
+            </form></dialog>
+            <dialog id="plan-dialog"><form method="dialog"><label>Planned length (minutes)<input id="plan-minutes" type="number" min="1" max="600" inputmode="numeric"></label><div class="row"><button class="small primary" value="set">Update</button><button class="small" value="cancel">Cancel</button></div></form></dialog>
             <script src="/js/remote.js"></script>
             </body></html>
             """;

@@ -103,6 +103,11 @@ public sealed class SessionService(
         };
         await links.UpsertAsync(link, ct);
 
+        // Short code for the room: unique among live sessions; letters/digits that cannot be confused when read aloud.
+        var live = await sessions.ListLiveAsync(ct);
+        string code;
+        do { code = NewJoinCode(); } while (live.Any(s => string.Equals(s.JoinCode, code, StringComparison.OrdinalIgnoreCase)));
+
         var session = new Session
         {
             Id = id,
@@ -110,6 +115,7 @@ public sealed class SessionService(
             PlannedMinutes = plannedMinutes,
             HoldDeploys = holdDeploys,
             LinkId = link.Id,
+            JoinCode = code,
             FrozeDeck = froze,
             Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim()[..Math.Min(120, title.Trim().Length)],
             LastPresenterSeenAt = DateTimeOffset.UtcNow,
@@ -175,6 +181,52 @@ public sealed class SessionService(
         }
         return ended;
     }
+
+    /// <summary>Resolves a join code typed by the room to its live session (case-insensitive, dashes ignored).</summary>
+    public async Task<Session?> FindLiveByJoinCodeAsync(string code, CancellationToken ct = default)
+    {
+        var normalized = NormalizeJoinCode(code);
+        if (normalized is null) return null;
+        return (await sessions.ListLiveAsync(ct)).FirstOrDefault(s => s.JoinCode is not null && string.Equals(s.JoinCode, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>The live session of a deck, or null.</summary>
+    public async Task<Session?> GetLiveAsync(string slug, CancellationToken ct = default)
+    {
+        var deck = await decks.GetAsync(slug, ct);
+        if (deck?.LiveSessionId is null) return null;
+        var s = await sessions.GetAsync(slug, deck.LiveSessionId, ct);
+        return s is { EndedAt: null } ? s : null;
+    }
+
+    /// <summary>Changes the planned length of a live session (the organiser just cut five minutes...).</summary>
+    public async Task<Session?> UpdatePlanAsync(string slug, int? plannedMinutes, CancellationToken ct = default)
+    {
+        if (plannedMinutes is < 1 or > 600) return null;
+        var s = await GetLiveAsync(slug, ct);
+        if (s is null) return null;
+        s = s with { PlannedMinutes = plannedMinutes };
+        await sessions.UpsertAsync(s, ct);
+        return s;
+    }
+
+    /// <summary>Public join URL for a session's code (short enough to read aloud and to make a sparse QR).</summary>
+    public static string JoinUrl(Uri publicBaseUrl, string joinCode) => $"{publicBaseUrl.ToString().TrimEnd('/')}/j/{FormatJoinCode(joinCode)}";
+
+    /// <summary>"ABC123" shown as "ABC-123".</summary>
+    public static string FormatJoinCode(string code) => code.Length == 6 ? $"{code[..3]}-{code[3..]}" : code;
+
+    public static string? NormalizeJoinCode(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return null;
+        var clean = new string(code.Where(char.IsAsciiLetterOrDigit).ToArray()).ToUpperInvariant();
+        return clean.Length == 6 && clean.All(JoinAlphabet.Contains) ? clean : null;
+    }
+
+    // No I/L/O/0/1: unambiguous on a projector and over the phone. 31^6 = 887 million codes.
+    private const string JoinAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    private static string NewJoinCode()
+        => string.Create(6, 0, (span, _) => { for (var i = 0; i < span.Length; i++) span[i] = JoinAlphabet[RandomNumberGenerator.GetInt32(JoinAlphabet.Length)]; });
 
     /// <summary>Live sessions that asked to hold deployments; used by the deploy guard endpoint.</summary>
     public async Task<IReadOnlyList<Session>> HoldingDeploysAsync(CancellationToken ct = default)
