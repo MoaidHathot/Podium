@@ -31,12 +31,14 @@ internal sealed class FakeRunner : IBuildRunner
     public List<BuildRequest> Started { get; } = [];
     public bool Fail { get; set; }
     public string Version { get; set; } = "builder-v1";
+    /// <summary>Simulates the seconds a real job start takes, to expose dispatch races.</summary>
+    public TimeSpan StartDelay { get; set; }
     public Task<string> GetBuilderVersionAsync(CancellationToken ct = default) => Task.FromResult(Version);
-    public Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
+    public async Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
     {
         if (Fail) throw new InvalidOperationException("runner down");
-        Started.Add(request);
-        return Task.FromResult("exec-" + Started.Count);
+        if (StartDelay > TimeSpan.Zero) await Task.Delay(StartDelay, ct);
+        lock (Started) { Started.Add(request); return "exec-" + Started.Count; }
     }
 }
 
@@ -495,6 +497,36 @@ public class DeckSyncServiceTests
         Assert.Equal(2, _runner.Started.Count);
         Assert.Equal(BuildStatus.Running, (await _builds.GetAsync("cap-b", second.Id))!.Status);
         Assert.Equal(BuildStatus.Running, (await _decks.GetAsync("cap-b"))!.LatestBuildStatus);
+    }
+
+    [Fact]
+    public async Task Overlapping_dispatches_start_a_queued_build_exactly_once()
+    {
+        // A finished-build callback and the maintenance tick used to dispatch concurrently; both saw the same queued
+        // build before its runner id was stored (starting a job takes seconds) and started it twice.
+        var opts = new BuildOptions { PublicBaseUrl = new Uri("https://x.test"), MaxConcurrentBuilds = 1 };
+        var svc = new BuildService(_builds, _decks, _artifacts, _repo, _runner, new FakeTokens(), Options.Create(opts), NullLogger<BuildService>.Instance, _sources);
+        await _sources.UpsertAsync(_source);
+        var a = new Deck { Slug = "race-a", SourceId = _source.Id, Path = "a", Entry = "slides.md", Kind = DeckKind.Slidev };
+        var b = new Deck { Slug = "race-b", SourceId = _source.Id, Path = "b", Entry = "slides.md", Kind = DeckKind.Slidev };
+        await _decks.UpsertAsync(a); await _decks.UpsertAsync(b);
+        var first = await svc.QueueAsync(a, _source, "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "test", []);
+        var second = await svc.QueueAsync(b, _source, "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "test", []);
+        Assert.Equal(BuildStatus.Queued, second.Status);
+
+        // Free the slot without dispatching (as a lost callback would), then dispatch from several places at once.
+        await _builds.UpsertAsync(first with { Status = BuildStatus.Succeeded, FinishedAt = DateTimeOffset.UtcNow });
+        _runner.StartDelay = TimeSpan.FromMilliseconds(150);
+        var ticks = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => svc.DispatchPendingAsync())));
+        Assert.Equal(1, ticks.Sum());
+        Assert.Equal(1, _runner.Started.Count(s => s.Build.Id == second.Id));
+        var stored = (await _builds.GetAsync("race-b", second.Id))!;
+        Assert.Equal(BuildStatus.Running, stored.Status);
+        Assert.StartsWith("exec-", stored.RunnerExecutionId);
+
+        // A later tick finds nothing to do.
+        _runner.StartDelay = TimeSpan.Zero;
+        Assert.Equal(0, await svc.DispatchPendingAsync());
     }
 
     [Fact]

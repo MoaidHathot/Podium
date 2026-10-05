@@ -88,38 +88,54 @@ public sealed class BuildService(
     /// <summary>
     /// Starts builds that are waiting for a slot, oldest first, up to <see cref="BuildOptions.MaxConcurrentBuilds"/>.
     /// Called when a build finishes and on every maintenance tick (so nothing is left behind if a callback is lost).
+    /// Runs are serialised within the process: two overlapping dispatches (a callback and the tick) used to both see the
+    /// same queued build before its runner id was recorded and start it twice. A second caller simply returns; the one
+    /// in flight picks up everything that is pending.
     /// </summary>
     public async Task<int> DispatchPendingAsync(CancellationToken ct = default)
     {
         if (sources is null) return 0;
-        var active = await builds.ListActiveAsync(ct);
-        var running = active.Count(b => b.Status == BuildStatus.Running);
-        var max = options.Value.MaxConcurrentBuilds;
-        var started = 0;
-        foreach (var pending in active.Where(b => b.Status == BuildStatus.Queued && b.RunnerExecutionId is null).OrderBy(b => b.Id, StringComparer.Ordinal))
+        if (!await _dispatchGate.WaitAsync(0, ct)) return 0;
+        try
         {
-            if (max > 0 && running + started >= max) break;
-            // Re-read: another replica or a manual rebuild may have taken care of it meanwhile.
-            var fresh = await builds.GetAsync(pending.DeckSlug, pending.Id, ct);
-            if (fresh is null || fresh.Status != BuildStatus.Queued || fresh.RunnerExecutionId is not null) continue;
-            var deck = await decks.GetAsync(pending.DeckSlug, ct);
-            var source = deck is null ? null : await sources.GetAsync(deck.SourceId, ct);
-            if (deck is null || source is null || deck.Archived)
+            var active = await builds.ListActiveAsync(ct);
+            var running = active.Count(b => b.Status == BuildStatus.Running);
+            var max = options.Value.MaxConcurrentBuilds;
+            var started = 0;
+            foreach (var pending in active.Where(b => b.Status == BuildStatus.Queued && b.RunnerExecutionId is null).OrderBy(b => b.Id, StringComparer.Ordinal))
             {
-                await builds.UpsertAsync(fresh with { Status = BuildStatus.Cancelled, FinishedAt = DateTimeOffset.UtcNow, Error = "Deck or source no longer exists" }, ct);
-                continue;
+                if (max > 0 && running + started >= max) break;
+                // Re-read: another replica or a manual rebuild may have taken care of it meanwhile.
+                var fresh = await builds.GetAsync(pending.DeckSlug, pending.Id, ct);
+                if (fresh is null || fresh.Status != BuildStatus.Queued || fresh.RunnerExecutionId is not null) continue;
+                var deck = await decks.GetAsync(pending.DeckSlug, ct);
+                var source = deck is null ? null : await sources.GetAsync(deck.SourceId, ct);
+                if (deck is null || source is null || deck.Archived)
+                {
+                    await builds.UpsertAsync(fresh with { Status = BuildStatus.Cancelled, FinishedAt = DateTimeOffset.UtcNow, Error = "Deck or source no longer exists" }, ct);
+                    continue;
+                }
+                var result = await StartAsync(fresh, deck, source, ct);
+                if (result.Status == BuildStatus.Running) started++;
             }
-            var result = await StartAsync(fresh, deck, source, ct);
-            if (result.Status == BuildStatus.Running) started++;
+            return started;
         }
-        return started;
+        finally { _dispatchGate.Release(); }
     }
+
+    private static readonly SemaphoreSlim _dispatchGate = new(1, 1);
+    private const string ClaimPrefix = "starting:";
 
     private async Task<Build> StartAsync(Build build, Deck deck, Source source, CancellationToken ct)
     {
         var sha = build.Sha;
         try
         {
+            // Claim first: starting a job takes seconds, and a dispatcher on another replica must not start the same
+            // build meanwhile. The marker is replaced by the real execution id (or cleared on failure).
+            var claim = ClaimPrefix + Guid.NewGuid().ToString("N");
+            await builds.UpsertAsync(build with { RunnerExecutionId = claim }, ct);
+
             var timeout = source.Trusted ? options.Value.TrustedTimeout : options.Value.UntrustedTimeout;
             var cloneUrl = await repos.GetAuthenticatedCloneUrlAsync(source, ct);
             var upload = await artifacts.CreateUploadUriAsync(deck.Slug, build.Id, timeout + TimeSpan.FromMinutes(5), ct);
