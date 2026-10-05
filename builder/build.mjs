@@ -4,7 +4,7 @@
 // (see BuilderEnvironment in Podium.Web). All secrets are removed from process.env before any deck code can run.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, readdirSync, statSync, lstatSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, cpSync, readdirSync, statSync, lstatSync, copyFileSync, renameSync } from 'node:fs';
 import { join, resolve, extname, relative, dirname, basename, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -274,14 +274,15 @@ async function buildSlidev(deckDir, outDir, result) {
   if (!existsSync(entryPath)) throw new Error(`Entry ${entry} not found in ${deckPath || '/'}`);
   const fm = readHeadmatter(entryPath);
   await ensureSlidevProject(deckDir);
-  injectPodiumAddon(deckDir, entryPath);
+  const addonInjected = injectPodiumAddon(deckDir, entryPath);
+  const addonProtocol = addonInjected ? ADDON_PROTOCOL : 0;
 
   const slidevBin = resolveSlidevBin(deckDir);
   const site = join(outDir, 'site');
   await run(process.execPath, [slidevBin, 'build', entry, '--base', basePath, '--out', site], { cwd: deckDir, envExtra: { NODE_OPTIONS: '--max-old-space-size=1536' } });
   if (!existsSync(join(site, 'index.html'))) throw new Error('Slidev build produced no index.html');
   result.hasSite = true;
-  injectPodiumMeta(join(site, 'index.html'));
+  injectPodiumMeta(join(site, 'index.html'), addonProtocol);
   await extractNotesAndLint(deckDir, outDir, result);
 
   if (stripNotes) {
@@ -289,7 +290,7 @@ async function buildSlidev(deckDir, outDir, result) {
     // the notes never reach a browser that is not the presenter's. Served from site-public/ by the web app.
     const publicSite = join(outDir, 'site-public');
     const r = await run(process.execPath, [slidevBin, 'build', entry, '--base', basePath, '--out', publicSite, '--without-notes'], { cwd: deckDir, allowFail: true, envExtra: { NODE_OPTIONS: '--max-old-space-size=1536' }, timeoutMs: Math.min(remainingMs(), 6 * 60 * 1000) });
-    if (r.code === 0 && existsSync(join(publicSite, 'index.html'))) { injectPodiumMeta(join(publicSite, 'index.html')); result.hasPublicSite = true; }
+    if (r.code === 0 && existsSync(join(publicSite, 'index.html'))) { injectPodiumMeta(join(publicSite, 'index.html'), addonProtocol); result.hasPublicSite = true; }
     else result.warnings.push('Notes-free copy for viewers could not be built; viewers get the full build (see build log)');
   }
 
@@ -369,10 +370,14 @@ function resolveSlidevBin(deckDir) {
   throw new Error('Slidev CLI not found (deck has no @slidev/cli and the builder has no bundled copy)');
 }
 
-function injectPodiumMeta(indexHtml) {
+// Protocol version of the bundled sync addon / bridge. Podium's live-ui.js stays inert on older builds, whose addon
+// still draws its own pill, so a deck is never decorated twice during the rebuild wave after an upgrade.
+const ADDON_PROTOCOL = 3;
+
+function injectPodiumMeta(indexHtml, addonProtocol = ADDON_PROTOCOL) {
   const html = readFileSync(indexHtml, 'utf8');
   if (html.includes('name="podium-build"')) return;
-  writeFileSync(indexHtml, html.replace('<head>', `<head><meta name="podium-build" content="${buildId}"><meta name="podium-slug" content="${slug}">`));
+  writeFileSync(indexHtml, html.replace('<head>', `<head><meta name="podium-build" content="${buildId}"><meta name="podium-slug" content="${slug}"><meta name="podium-addon" content="${addonProtocol}">`));
 }
 
 /**
@@ -381,7 +386,7 @@ function injectPodiumMeta(indexHtml) {
  */
 function injectPodiumAddon(deckDir, entryPath) {
   const source = join(here, 'addon');
-  if (!existsSync(join(source, 'setup', 'root.ts'))) { log('Podium addon not bundled with this builder; skipping sync addon'); return; }
+  if (!existsSync(join(source, 'setup', 'root.ts'))) { log('Podium addon not bundled with this builder; skipping sync addon'); return false; }
   const target = join(deckDir, '.podium-addon');
   rmSync(target, { recursive: true, force: true });
   cpSync(source, target, { recursive: true });
@@ -394,12 +399,12 @@ function injectPodiumAddon(deckDir, entryPath) {
   if (normalized.startsWith('---\n')) {
     const end = normalized.indexOf('\n---', 4);
     if (end >= 0) {
-      try { fm = yaml.load(normalized.slice(4, end), { schema: yaml.CORE_SCHEMA }) || {}; } catch (e) { log(`Cannot parse headmatter (${e.message}); sync addon not injected`); return; }
+      try { fm = yaml.load(normalized.slice(4, end), { schema: yaml.CORE_SCHEMA }) || {}; } catch (e) { log(`Cannot parse headmatter (${e.message}); sync addon not injected`); return false; }
       // Keep whatever follows the closing fence (usually a newline) exactly as it was.
       body = normalized.slice(end + 4);
     }
   }
-  if (typeof fm !== 'object' || Array.isArray(fm)) { log('Unexpected headmatter shape; sync addon not injected'); return; }
+  if (typeof fm !== 'object' || Array.isArray(fm)) { log('Unexpected headmatter shape; sync addon not injected'); return false; }
   const addons = Array.isArray(fm.addons) ? fm.addons : (typeof fm.addons === 'string' ? [fm.addons] : []);
   // '@/' is Slidev's syntax for a path relative to the deck root (absolute Windows paths are rejected as addon names).
   const ref = '@/.podium-addon';
@@ -407,7 +412,8 @@ function injectPodiumAddon(deckDir, entryPath) {
   fm.addons = addons;
   const dumped = yaml.dump(fm, { lineWidth: -1, noRefs: true, schema: yaml.CORE_SCHEMA });
   writeFileSync(entryPath, `---\n${dumped}---${body}`);
-  log('Injected Podium sync addon');
+  log(`Injected Podium sync addon (protocol ${ADDON_PROTOCOL})`);
+  return true;
 }
 
 async function buildPresenterm(deckDir, outDir, result) {
@@ -525,7 +531,7 @@ async function buildPowerPoint(deckDir, outDir, result) {
       else result.warnings.push('PDF conversion failed (see build log); the PowerPoint file can still be downloaded');
     }
   }
-  writeViewerSite(outDir, result, basename(entry));
+  await writeViewerSite(outDir, result, basename(entry));
 }
 
 async function buildPdfDeck(deckDir, outDir, result) {
@@ -533,27 +539,70 @@ async function buildPdfDeck(deckDir, outDir, result) {
   if (!existsSync(src)) throw new Error(`Entry ${entry} not found`);
   copyFileSync(src, join(outDir, 'deck.pdf'));
   result.hasPdf = true;
-  writeViewerSite(outDir, result, basename(entry));
+  await writeViewerSite(outDir, result, basename(entry));
 }
 
-/** A minimal site that shows the PDF with the browser's viewer; falls back to a download link. */
-function writeViewerSite(outDir, result, fileName) {
+/**
+ * The viewer site for PowerPoint/PDF decks. Pages are rendered to JPEGs (pdftoppm) and shown by Podium's own viewer
+ * (/_podium/pages.js), which gives these decks what Slidev decks have: keyboard/touch navigation, deep links to a
+ * page, cross-device sync, the phone remote, blackout, offline cache and the live session UI. Without pdftoppm (or
+ * without a PDF) the browser's PDF viewer is used in an iframe, as before.
+ */
+async function writeViewerSite(outDir, result, fileName) {
   const site = join(outDir, 'site');
   mkdirSync(site, { recursive: true });
-  const hasPdf = existsSync(join(outDir, 'deck.pdf'));
-  if (hasPdf) copyFileSync(join(outDir, 'deck.pdf'), join(site, 'deck.pdf'));
+  const pdf = join(outDir, 'deck.pdf');
+  const hasPdf = existsSync(pdf);
+  if (hasPdf) copyFileSync(pdf, join(site, 'deck.pdf'));
   const title = escapeHtml(env.PODIUM_DECK_TITLE || fileName);
-  const body = hasPdf
-    ? `<iframe src="deck.pdf#view=Fit&amp;pagemode=none" title="${title}" allowfullscreen></iframe>`
-    : `<main><h1>${title}</h1><p>This presentation could not be rendered in the browser.</p><p><a href="/d/${slug}.pptx">Download the PowerPoint file</a></p></main>`;
+  const pages = hasPdf ? await renderPages(pdf, join(site, 'pages')) : null;
+  const metas = `<meta name="podium-build" content="${buildId}"><meta name="podium-slug" content="${slug}"><meta name="podium-addon" content="${pages ? ADDON_PROTOCOL : 0}">`;
+  let body;
+  if (pages) {
+    const data = escapeHtml(JSON.stringify(pages));
+    body = `<main id="podium-pages" class="podium-pages" data-pages="${data}" aria-label="${title}" tabindex="0"></main>
+<noscript><p style="padding:2rem">This presentation needs JavaScript. <a href="deck.pdf">Open the PDF</a> instead.</p></noscript>
+<script defer src="/_podium/pages.js"></script>`;
+    result.slideCount = result.slideCount || pages.count;
+  } else if (hasPdf) {
+    body = `<iframe src="deck.pdf#view=Fit&amp;pagemode=none" title="${title}" allowfullscreen></iframe>`;
+  } else {
+    body = `<main><h1>${title}</h1><p>This presentation could not be rendered in the browser.</p><p><a href="/d/${slug}.pptx">Download the PowerPoint file</a></p></main>`;
+  }
   writeFileSync(join(site, 'index.html'), `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="podium-build" content="${buildId}"><meta name="podium-slug" content="${slug}">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+${metas}
 <title>${title}</title>
-<style>html,body{margin:0;height:100%;background:#0b0d12;color:#e6e9f0;font-family:system-ui,sans-serif}iframe{border:0;width:100%;height:100%;display:block}main{max-width:40rem;margin:15vh auto;padding:0 1.5rem}a{color:#7c9cff}</style>
+<style>html,body{margin:0;height:100%;background:#000;color:#e6e9f0;font-family:system-ui,sans-serif}iframe{border:0;width:100%;height:100%;display:block}main.podium-pages{position:fixed;inset:0;outline:0}main:not(.podium-pages){max-width:40rem;margin:15vh auto;padding:0 1.5rem}a{color:#7c9cff}</style>
 </head><body>${body}</body></html>
 `);
   result.hasSite = true;
+}
+
+/** Renders every PDF page to <dir>/001.jpg ... at projector resolution. Returns {count,width,height} or null. */
+async function renderPages(pdf, dir) {
+  const pdftoppm = which('pdftoppm');
+  if (!pdftoppm) { log('pdftoppm not available; the PDF is shown with the browser viewer'); return null; }
+  let count = 0, width = 0, height = 0;
+  const pdfinfo = which('pdfinfo');
+  if (pdfinfo) {
+    const info = await run(pdfinfo, [pdf], { allowFail: true, echo: false, timeoutMs: 30000 });
+    const m = /Pages:\s+(\d+)/.exec(info.out || '');
+    if (m) count = Number(m[1]);
+    const size = /Page size:\s+([\d.]+) x ([\d.]+)/.exec(info.out || '');
+    if (size) { width = Number(size[1]); height = Number(size[2]); }
+  }
+  if (count > SHEET_MAX_PAGES) { log(`${count} pages exceed the ${SHEET_MAX_PAGES}-page viewer limit; the PDF is shown with the browser viewer`); return null; }
+  rmSync(dir, { recursive: true, force: true });
+  mkdirForDeck(dir);
+  const r = await run(pdftoppm, ['-jpeg', '-jpegopt', 'quality=80', '-scale-to-x', '1920', '-scale-to-y', '-1', pdf, join(dir, 'p')], { allowFail: true, echo: false, timeoutMs: Math.min(remainingMs(), 5 * 60 * 1000) });
+  const produced = existsSync(dir) ? readdirSync(dir).filter((f) => /^p-\d+\.jpg$/.test(f)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) : [];
+  if (r.code !== 0 || !produced.length) { log('Page rendering failed; the PDF is shown with the browser viewer'); rmSync(dir, { recursive: true, force: true }); return null; }
+  produced.forEach((f, i) => renameSync(join(dir, f), join(dir, `${String(i + 1).padStart(3, '0')}.jpg`)));
+  const pages = { count: produced.length, aspect: width > 0 && height > 0 ? Number((width / height).toFixed(4)) : null };
+  writeFileSync(join(dir, 'index.json'), JSON.stringify(pages));
+  log(`Rendered ${pages.count} pages for the viewer`);
+  return pages;
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
