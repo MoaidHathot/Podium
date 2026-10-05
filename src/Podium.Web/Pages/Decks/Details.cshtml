@@ -6,6 +6,8 @@
     var kind = d.Kind.ToString().ToLowerInvariant();
     var servable = d.CurrentBuildId is not null && d.Kind != DeckKind.GitPitch;
     var isDoc = d.Kind is DeckKind.PowerPoint or DeckKind.Pdf;
+    // Kinds Podium can drive from the phone and keep a room in step with: Slidev (addon), presenterm (adapter), PowerPoint/PDF (pages viewer).
+    var drivable = d.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf;
     var kindLabel = d.Kind switch { DeckKind.Static => "HTML", DeckKind.PowerPoint => "PowerPoint", DeckKind.Pdf => "PDF", _ => d.Kind.ToString() };
     var building = d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running;
     string VisName(Visibility v) => v switch { Visibility.Public => "Public", Visibility.Link => "Link", Visibility.Shared => "Shared", _ => "Private" };
@@ -61,7 +63,7 @@
 }
 @if (Model.CurrentBuild?.Warnings.Count > 0)
 {
-    <div class="alert alert-info"><strong>Remote limitations:</strong>
+    <div class="alert alert-info"><strong>Build warnings:</strong>
         <ul style="margin:.3rem 0 0 1rem">@foreach (var w in Model.CurrentBuild.Warnings) { <li>@w</li> }</ul>
     </div>
 }
@@ -85,8 +87,8 @@
 
 <div class="two-col">
     <section class="panel">
-        <h3>@(isDoc ? "View" : "Present")</h3>
-        <p class="hint">@(isDoc ? "Opens the PDF rendition in the browser; the original file is available below." : "Open the deck on the presenting machine, and the presenter view on your own device. The presenter view drives all other open instances of this deck.")</p>
+        <h3>Present</h3>
+        <p class="hint">@(isDoc ? "Opens the slides in Podium's viewer (arrow keys, swipe, deep links); the original file is available below." : "Open the deck on the presenting machine, and the presenter view on your own device. The presenter view drives all other open instances of this deck.")</p>
         <div class="row">
             <a class="btn btn-primary" href="/d/@d.Slug/" target="_blank" rel="noopener" aria-disabled="@(servable ? null : "true")">@(isDoc ? "Open" : "Open deck")</a>
             @if (d.Kind == DeckKind.Slidev)
@@ -164,13 +166,19 @@
                         </div>
                     }
                 }
-                @if (d.Kind == DeckKind.Slidev)
+                @if (drivable)
                 {
-                    <p class="hint" style="margin:.6rem 0 0"><strong style="color:var(--text)">Phone remote:</strong> <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a> &mdash; notes, go-to grid, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                    <div class="row" style="margin:.8rem 0 0; gap:.9rem; align-items:flex-start; flex-wrap:wrap" id="phone-remote">
+                        <a href="/d/@d.Slug/qr.svg?remote=1" target="_blank" rel="noopener" title="Scan with your phone to open the remote"><img class="qr" src="/d/@d.Slug/qr.svg?remote=1" alt="QR code of the phone remote" width="96" height="96" /></a>
+                        <div style="flex:1; min-width:14rem">
+                            <strong style="color:var(--text)">Phone remote</strong>
+                            <p class="hint" style="margin:.2rem 0 .4rem">Scan the QR with your phone (you sign in with GitHub there once), or open <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a>. @(d.Kind == DeckKind.Slidev ? "Notes, " : "")go-to grid, laser pointer, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                        </div>
+                    </div>
                 }
             </div>
         }
-        @if (d.Kind == DeckKind.Slidev && servable)
+        @if (drivable && servable)
         {
             <div style="margin-top:1rem; padding-top:.9rem; border-top:1px solid var(--border)" id="session-panel">
                 @if (Model.LiveSession is { } live)

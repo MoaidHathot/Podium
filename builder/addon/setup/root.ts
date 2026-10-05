@@ -1,4 +1,4 @@
-// Podium addon root setup, injected at build time by the Podium builder (see builder/build.mjs).
+// Podium addon root setup, injected at build time by the Podium builder (see builder/build.mjs). Protocol v3.
 //
 // 1. Base-path rebasing for dynamic media URLs. Podium serves every deck under /d/<slug>/ and builds it with that
 //    base. Vite rewrites *static* asset references, but a runtime-bound `:src="'/screenshots/x.png'"` reaches the
@@ -11,36 +11,26 @@
 //    With this, the presenter view on a phone or laptop drives the audience view on another machine. The server
 //    decides who may send: only the deck owner's (and co-presenters') sockets may publish; everyone else receives.
 //
-// 3. Audience affordances: a small "Live" pill showing that the deck is being presented (with the viewer count for
-//    presenters), a way to browse freely and jump back to the presenter's slide, and a blackout/message overlay the
-//    presenter can raise from the phone remote.
+// 3. The bridge. This file contains no user interface. It exposes `window.__podium` (socket, navigation, laser
+//    pointer, timer, follow state) to Podium's server-served `/_podium/live-ui.js`, which draws the live pill, the
+//    blackout, the session HUD and the audience features for every deck kind. UI changes therefore never need the
+//    deck to be rebuilt.
 import { toRaw, watch } from 'vue'
 import { addSyncMethod } from '@slidev/client/state/syncState.ts'
 import { useNav } from '@slidev/client/composables/useNav.ts'
-import { patch as patchShared } from '@slidev/client/state/shared.ts'
+import { patch as patchShared, sharedState } from '@slidev/client/state/shared.ts'
 import { syncDirections } from '@slidev/client/state/storage.ts'
 
 type Handler = (data: Record<string, unknown>) => void
-type Message = {
-  t?: string
-  channel?: string
-  state?: Record<string, unknown>
-  build?: string
-  canSend?: boolean
-  presenters?: number
-  viewers?: number
-  action?: string
-  page?: number
-  mode?: string
-  text?: string
-}
+type Listener = (msg: Record<string, unknown>) => void
+type Message = Record<string, unknown> & { t?: string }
 
 declare const __PODIUM_SLUG__: string | undefined
 
 export default function setupPodium() {
   if (typeof window === 'undefined') return
   installBasePathRebase()
-  setupPodiumSync()
+  setupPodiumBridge()
 }
 
 function installBasePathRebase() {
@@ -66,7 +56,7 @@ function installBasePathRebase() {
   }, true)
 }
 
-function setupPodiumSync() {
+function setupPodiumBridge() {
   const slug = resolveSlug()
   if (!slug) return
   // Headless export / print renders must not try to sync.
@@ -76,18 +66,17 @@ function setupPodiumSync() {
   const handlers = new Map<string, Handler>()
   const lastSent = new Map<string, string>()
   const lastState = new Map<string, Record<string, unknown>>()
+  const listeners = new Map<string, Set<Listener>>()
   let socket: WebSocket | null = null
   let backoff = 1000
   let closedByPage = false
   let canSend = false
-  let presenters = 0
-  let viewers = 0
-  let presenterPage: number | null = null
-  let presenterClicks = 0
+  let connected = false
   const pending: string[] = []
-
-  // Slidev navigation, for executing remote-control commands and reporting the position to the remote.
   const nav = useNav()
+  const role = () => (nav.isPresenter.value ? 'presenter' : 'play')
+
+  // ---- Slidev navigation: executing remote-control commands and reporting the position ------------------------
   async function executeNav(action: string, page?: number) {
     switch (action) {
       case 'next': await nav.next(); break
@@ -102,8 +91,9 @@ function setupPodiumSync() {
   let lastInfo = ''
   const instanceId = `podium_${Math.random().toString(36).slice(2)}`
   function reportPosition(force = false) {
+    emit('position', position())
     if (!canSend) return
-    const payload = JSON.stringify({ t: 'info', page: nav.currentSlideNo.value, total: nav.total.value, clicks: nav.clicks.value, clicksTotal: nav.clicksTotal.value })
+    const payload = JSON.stringify({ t: 'info', page: nav.currentSlideNo.value, total: nav.total.value, clicks: nav.clicks.value, clicksTotal: nav.clicksTotal.value, role: role() })
     if (!force && payload === lastInfo) return
     lastInfo = payload
     send(payload)
@@ -117,7 +107,47 @@ function setupPodiumSync() {
       patchShared('lastUpdate', { id: instanceId, type: 'presenter', time: Date.now() })
     }
   }
-  watch([nav.currentSlideNo, nav.clicks, nav.clicksTotal], () => { reportPosition(); updatePill() })
+  const position = () => ({ page: nav.currentSlideNo.value, total: nav.total.value, clicks: nav.clicks.value, clicksTotal: nav.clicksTotal.value })
+  watch([nav.currentSlideNo, nav.clicks, nav.clicksTotal], () => reportPosition())
+  // Moving between the play route and /presenter inside the SPA changes what this window is to the room.
+  watch(nav.isPresenter, () => { if (canSend) send(JSON.stringify({ t: 'hi', role: role() })); reportPosition(true); emit('role', { role: role() }) })
+
+  // ---- Laser pointer and timer, driven from the phone --------------------------------------------------------
+  // Slidev renders `sharedState.cursor` on every non-presenter window (LaserPointer.vue), so a patch here lights the
+  // dot on the projector and on the audience's own screens. Coordinates are percentages of the slide.
+  function applyPointer(x: unknown, y: unknown) {
+    if (typeof x !== 'number' || typeof y !== 'number') { patchShared('cursor', undefined); return }
+    patchShared('cursor', { x: Math.min(100, Math.max(0, x)), y: Math.min(100, Math.max(0, y)), style: 'laser' })
+  }
+  // The presenter view owns a ticking timer display; clicking its own controls keeps that display honest. Windows
+  // without the control (play mode) patch the shared timer directly, which the remote and other windows read.
+  // Patched values must be plain objects: Slidev's own BroadcastChannel sync structured-clones the state, and a
+  // reactive proxy (e.g. the existing `slides` map) inside it would throw and abort every sync write.
+  function applyTimer(op: unknown) {
+    const raw = toRaw(sharedState.timer) as { status: 'stopped' | 'running' | 'paused'; startedAt: number; pausedAt: number } | undefined
+    const timer = { status: raw?.status ?? 'stopped', startedAt: raw?.startedAt ?? 0, pausedAt: raw?.pausedAt ?? 0 }
+    const running = timer.status === 'running'
+    if (nav.isPresenter.value) {
+      const toggle = document.querySelector('.slidev-presenter [class*="i-carbon:pause"], .slidev-presenter [class*="i-carbon:play"]')
+      const reset = document.querySelector('.slidev-presenter [class*="i-carbon:renew"]')
+      const click = (el: Element | null) => { if (!el) return false; el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true }
+      if (op === 'reset' && click(reset)) return
+      if ((op === 'toggle' || (op === 'start' && !running) || (op === 'pause' && running)) && click(toggle)) return
+      if (op === 'start' || op === 'pause') return
+    }
+    const now = Date.now()
+    const set = (status: 'stopped' | 'running' | 'paused', startedAt: number, pausedAt: number) => patchShared('timer', { status, slides: {}, startedAt, pausedAt })
+    switch (op) {
+      case 'reset': set('stopped', 0, 0); break
+      case 'pause': if (running) set('paused', timer.startedAt, now); break
+      case 'start':
+      case 'toggle':
+        if (running) { if (op === 'toggle') set('paused', timer.startedAt, now) }
+        else if (timer.status === 'paused') set('running', now - (timer.pausedAt - timer.startedAt), 0)
+        else set('running', now, 0)
+        break
+    }
+  }
 
   // After a reconnect the server may have forgotten this room (restart) or dropped the cached state when the last
   // presenter left; re-send everything we last published so viewers (and the remote) are back in sync at once.
@@ -125,10 +155,19 @@ function setupPodiumSync() {
     if (!canSend) return
     reportPosition(true)
     for (const [channel, state] of lastState) {
-      const payload = JSON.stringify({ t: 'state', channel, state })
+      const payload = JSON.stringify({ t: 'state', channel, state: wire(state) })
       lastSent.set(channel, payload)
       send(payload)
     }
+  }
+
+  // JSON drops `undefined`, so a cleared value (Slidev sets `cursor = undefined` when the mouse leaves the slide)
+  // would never reach the other windows and the laser dot would stay lit for the audience. Send `null` instead;
+  // Slidev's receiving side treats both the same.
+  function wire(state: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(state)) out[key] = state[key] === undefined ? null : state[key]
+    return out
   }
 
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/sync/${encodeURIComponent(slug)}`
@@ -143,8 +182,10 @@ function setupPodiumSync() {
     }
     socket.addEventListener('open', () => {
       backoff = 1000
+      connected = true
       while (pending.length && socket?.readyState === WebSocket.OPEN) socket.send(pending.shift()!)
       ;(window as any).__podiumSocketActive?.(true)
+      emit('open', {})
     })
     socket.addEventListener('message', (ev) => {
       let msg: Message
@@ -153,45 +194,39 @@ function setupPodiumSync() {
         case 'hello':
           // The server decides who may publish; presenting instances also execute remote commands and report position.
           canSend = !!msg.canSend
-          presenters = msg.presenters ?? 0
-          if (canSend) republish()
-          updatePill()
-          return
-        case 'presence':
-          presenters = msg.presenters ?? 0
-          viewers = msg.viewers ?? 0
-          updatePill()
-          return
-        case 'screen':
-          // Blackout / message raised by a presenter. Presenting instances keep their own view untouched.
-          if (!canSend) showScreen(msg.mode, msg.text)
-          return
+          if (canSend) { send(JSON.stringify({ t: 'hi', role: role() })); republish() }
+          break
         case 'build':
           // New build being served: live.js decides whether to reload now, later, or just show a notice.
           if (msg.build) (window as any).__podiumNewBuild?.(msg.build)
-          return
+          break
         case 'nav':
-          // Phone remote. Only presenting instances act (viewers follow through Slidev's shared state as usual).
-          if (canSend && msg.action) void executeNav(msg.action, msg.page)
-          return
-        case 'info':
-          if (typeof msg.page === 'number') { presenterPage = msg.page; presenterClicks = Number((msg as any).clicks) || 0; updatePill() }
-          return
+          // Phone remote. The server already routes commands to exactly one deck window; the guard is belt and braces.
+          if (canSend && typeof msg.action === 'string') void executeNav(msg.action, typeof msg.page === 'number' ? msg.page : undefined)
+          break
+        case 'pointer':
+          if (canSend) applyPointer(msg.x, msg.y)
+          break
+        case 'timer':
+          if (canSend) applyTimer(msg.op)
+          break
         case 'state': {
-          if (!msg.channel || !msg.state) return
-          if (typeof msg.state.page === 'number') { presenterPage = msg.state.page as number; presenterClicks = Number(msg.state.clicks) || 0; updatePill() }
+          if (typeof msg.channel !== 'string' || !msg.state || typeof msg.state !== 'object') break
           const h = handlers.get(msg.channel)
-          if (h) h(msg.state)
-          return
+          if (h) h(msg.state as Record<string, unknown>)
+          break
         }
       }
+      emit(String(msg.t || ''), msg)
+      emit('*', msg)
     })
     socket.addEventListener('close', (ev) => {
       socket = null
+      connected = false
       ;(window as any).__podiumSocketActive?.(false)
-      updatePill()
-      // 4403 = not allowed to join (private deck, no access); do not retry.
-      if (ev.code === 4403 || ev.code === 4404) return
+      emit('close', { code: ev.code })
+      // 4403/4404 = not allowed to join (private deck, no access); 4410 = the session that admitted us has ended.
+      if (ev.code === 4403 || ev.code === 4404 || ev.code === 4410) return
       scheduleReconnect()
     })
     socket.addEventListener('error', () => { /* close follows */ })
@@ -208,6 +243,12 @@ function setupPodiumSync() {
     else { pending.push(payload); if (pending.length > 20) pending.shift() }
   }
 
+  function emit(type: string, data: Record<string, unknown>) {
+    const set = listeners.get(type)
+    if (!set) return
+    for (const fn of [...set]) { try { fn(data) } catch { /* a listener must never break the relay */ } }
+  }
+
   window.addEventListener('pagehide', () => { closedByPage = true; socket?.close() })
 
   addSyncMethod({
@@ -220,7 +261,7 @@ function setupPodiumSync() {
         if (updating) return
         const raw = toRaw(state) as Record<string, unknown>
         lastState.set(channelKey, raw)
-        const payload = JSON.stringify({ t: 'state', channel: channelKey, state: raw })
+        const payload = JSON.stringify({ t: 'state', channel: channelKey, state: wire(raw) })
         if (lastSent.get(channelKey) === payload) return
         lastSent.set(channelKey, payload)
         send(payload)
@@ -228,88 +269,38 @@ function setupPodiumSync() {
     },
   })
 
-  // ---- Live pill: shows that a presenter is driving, lets a viewer browse freely and jump back to live. ----------
-  let pill: HTMLDivElement | null = null
-  let pillLabel: HTMLSpanElement | null = null
-  let pillButton: HTMLButtonElement | null = null
   const following = () => (nav.isPresenter.value ? syncDirections.value.presenterReceive : syncDirections.value.viewerReceive)
-
-  function ensurePill() {
-    if (pill) return
-    pill = document.createElement('div')
-    pill.id = 'podium-live'
-    pill.setAttribute('role', 'status')
-    Object.assign(pill.style, {
-      position: 'fixed', left: '12px', bottom: '12px', zIndex: '2147483000', display: 'none', alignItems: 'center', gap: '8px',
-      padding: '6px 10px 6px 12px', borderRadius: '999px', background: 'rgba(17,17,19,.86)', color: '#fff', font: '500 12px/1 system-ui, sans-serif',
-      boxShadow: '0 4px 16px rgba(0,0,0,.35)', backdropFilter: 'blur(6px)', pointerEvents: 'auto', userSelect: 'none',
-    } as CSSStyleDeclaration)
-    const dot = document.createElement('span')
-    Object.assign(dot.style, { width: '8px', height: '8px', borderRadius: '50%', background: '#f0506e', boxShadow: '0 0 0 3px rgba(240,80,110,.25)', display: 'inline-block' } as CSSStyleDeclaration)
-    pillLabel = document.createElement('span')
-    pillButton = document.createElement('button')
-    Object.assign(pillButton.style, { border: '0', borderRadius: '999px', padding: '4px 9px', background: 'rgba(255,255,255,.14)', color: '#fff', font: 'inherit', cursor: 'pointer' } as CSSStyleDeclaration)
-    pillButton.addEventListener('click', () => {
-      if (following()) {
-        setFollowing(false)
-      } else {
-        setFollowing(true)
-        // Re-attach where the presenter is now; Slidev's own onPatch handler keeps following from here.
-        if (presenterPage) void nav.go(presenterPage, presenterClicks)
-      }
-      updatePill()
-    })
-    pill.append(dot, pillLabel, pillButton)
-    document.body.appendChild(pill)
-  }
-
   function setFollowing(on: boolean) {
     if (nav.isPresenter.value) syncDirections.value = { ...syncDirections.value, presenterReceive: on }
     else syncDirections.value = { ...syncDirections.value, viewerReceive: on }
   }
 
-  function updatePill() {
-    const live = presenters > 0 && !!socket
-    if (!live && !pill) return
-    ensurePill()
-    if (!pill || !pillLabel || !pillButton) return
-    if (!live) { pill.style.display = 'none'; return }
-    pill.style.display = 'flex'
-    if (canSend) {
-      pillLabel.textContent = `Live · ${viewers} watching`
-      pillButton.style.display = 'none'
-      return
-    }
-    pillButton.style.display = ''
-    if (following()) {
-      pillLabel.textContent = 'Live · following'
-      pillButton.textContent = 'Browse freely'
-    } else {
-      const behind = presenterPage && presenterPage !== nav.currentSlideNo.value ? ` · presenter on ${presenterPage}` : ''
-      pillLabel.textContent = `Live · browsing${behind}`
-      pillButton.textContent = 'Jump to live'
-    }
-  }
-
-  // ---- Blackout / message overlay (presenter-driven) -----------------------------------------------------------
-  let screen: HTMLDivElement | null = null
-  function showScreen(mode?: string, text?: string) {
-    if (mode !== 'black' && mode !== 'message') { screen?.remove(); screen = null; return }
-    if (!screen) {
-      screen = document.createElement('div')
-      screen.id = 'podium-screen'
-      Object.assign(screen.style, {
-        position: 'fixed', inset: '0', zIndex: '2147482000', background: '#000', color: '#ddd', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '8vw', textAlign: 'center', font: '500 clamp(20px, 4vw, 48px)/1.3 system-ui, sans-serif',
-      } as CSSStyleDeclaration)
-      document.body.appendChild(screen)
-    }
-    screen.textContent = mode === 'message' ? String(text || '').slice(0, 300) : ''
-  }
-
   // Offline cache: live.js registers the service worker (shared by every deck kind); nothing to do here beyond
   // exposing the current build so it can pick the right cache.
   ;(window as any).__podiumBuild = document.querySelector('meta[name="podium-build"]')?.getAttribute('content') || null
+
+  const bridge = {
+    protocol: 3,
+    kind: 'slidev',
+    slug,
+    get role() { return role() },
+    get canSend() { return canSend },
+    get connected() { return connected },
+    get following() { return following() },
+    setFollowing,
+    position,
+    send(message: Record<string, unknown>) { if (canSend) send(JSON.stringify(message)) },
+    on(type: string, fn: Listener) {
+      let set = listeners.get(type)
+      if (!set) { set = new Set(); listeners.set(type, set) }
+      set.add(fn)
+      return () => { set!.delete(fn) }
+    },
+    go(page: number, clicks?: number) { void nav.go(page, clicks) },
+    nav(action: string, page?: number) { void executeNav(action, page) },
+  }
+  ;(window as any).__podium = bridge
+  window.dispatchEvent(new CustomEvent('podium:bridge'))
 }
 
 function resolveSlug(): string | null {

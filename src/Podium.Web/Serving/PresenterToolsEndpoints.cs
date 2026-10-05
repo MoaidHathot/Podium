@@ -22,14 +22,16 @@ public static class PresenterToolsEndpoints
     public static IEndpointRouteBuilder MapPresenterTools(this IEndpointRouteBuilder app)
     {
         // QR of the deck URL (same access rules as the deck). With ?join=1 and a live session, presenters get a QR of
-        // the short join URL instead, which admits the room without sign-in for as long as the session runs.
-        app.MapGet("/d/{slug}/qr.svg", async (string slug, [FromQuery] string? join, HttpContext http, DeckAccessService access, CallerResolver callers, SessionService sessions, Microsoft.Extensions.Options.IOptions<Configuration.PodiumOptions> options, CancellationToken ct) =>
+        // the short join URL instead, which admits the room without sign-in for as long as the session runs. With
+        // ?remote=1 presenters get a QR of the phone remote (the phone still signs in; the QR only saves the typing).
+        app.MapGet("/d/{slug}/qr.svg", async (string slug, [FromQuery] string? join, [FromQuery] string? remote, HttpContext http, DeckAccessService access, CallerResolver callers, SessionService sessions, Microsoft.Extensions.Options.IOptions<Configuration.PodiumOptions> options, CancellationToken ct) =>
         {
             var caller = callers.Resolve(http.User);
             var result = await access.EvaluateAsync(http, slug, ArtifactKind.Site, caller, ct);
             if (result.Deck is null || result.Decision != AccessDecision.Allow) return Results.NotFound();
             // Always the public hostname: audience phones must not be sent to the platform FQDN.
             var url = $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{slug}/";
+            var presenterOnly = join is "1" or "true" || remote is "1" or "true";
             if (join is "1" or "true")
             {
                 if (!result.CanPresent) return Results.NotFound();
@@ -37,12 +39,37 @@ public static class PresenterToolsEndpoints
                 if (live?.JoinCode is null) return Results.NotFound();
                 url = SessionService.JoinUrl(options.Value.PublicBaseUrl, live.JoinCode);
             }
+            else if (remote is "1" or "true")
+            {
+                if (!result.CanPresent) return Results.NotFound();
+                url = $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}/d/{slug}/remote";
+            }
             using var generator = new QRCodeGenerator();
             using var data = generator.CreateQrCode(url, QRCodeGenerator.ECCLevel.M);
             var svg = new SvgQRCode(data).GetGraphic(8, "#0b0d12", "#ffffff", drawQuietZones: true);
-            http.Response.Headers[HeaderNames.CacheControl] = join is "1" or "true" ? "private, no-store" : "private, max-age=3600";
+            http.Response.Headers[HeaderNames.CacheControl] = presenterOnly ? "private, no-store" : "private, max-age=3600";
             return Results.Content(svg, "image/svg+xml; charset=utf-8");
         }).RequireRateLimiting("probe");
+
+        // One tap from the phone's home screen: the remote of the deck that is live right now, else of the deck most
+        // recently presented by this person, else the library. Owner only (it looks across every deck).
+        app.MapGet("/remote", async (HttpContext http, CallerResolver callers, ISessionStore sessionStore, IDeckStore decks, IViewHistoryStore views, CancellationToken ct) =>
+        {
+            var caller = callers.Resolve(http.User);
+            http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            var live = (await sessionStore.ListLiveAsync(ct)).OrderByDescending(s => s.StartedAt).FirstOrDefault();
+            if (live is not null) return Results.Redirect($"/d/{live.DeckSlug}/remote");
+            if (caller.Principal is not null)
+            {
+                foreach (var v in (await views.RecentForPrincipalAsync(caller.Principal, 100, ct)).Where(v => v.Artifact == ArtifactKind.Site).OrderByDescending(v => v.At))
+                {
+                    var deck = await decks.GetAsync(v.DeckSlug, ct);
+                    if (deck is { Archived: false, CurrentBuildId: not null } && deck.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf)
+                        return Results.Redirect($"/d/{deck.Slug}/remote");
+                }
+            }
+            return Results.Redirect("/?remote=none");
+        }).RequireAuthorization(PodiumClaims.OwnerPolicy);
 
         // The room types this: slides.example/j/ABC-123. Valid only while the session is live; afterwards (and for
         // codes that never existed) the same "ended" page, so nothing is learned from a guess.
@@ -87,7 +114,9 @@ public static class PresenterToolsEndpoints
             if (result.Deck is null) return Results.NotFound();
             if (result.Decision == AccessDecision.RequireLogin) return Results.Redirect("/login?returnUrl=" + Uri.EscapeDataString(http.Request.Path));
             if (result.Decision != AccessDecision.Allow || !result.CanPresent) return Results.NotFound();
-            if (result.Deck.Kind != DeckKind.Slidev) return Results.NotFound();
+            // Every kind Podium can drive: Slidev (addon), presenterm (adapter), PowerPoint/PDF (pages viewer). Static
+            // HTML decks and GitPitch have nothing the remote could move.
+            if (result.Deck.Kind is not (DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf)) return Results.NotFound();
             http.Response.Headers[HeaderNames.CacheControl] = "no-store";
             return Results.Content(RemotePage(result.Deck, caller.IsOwner), "text/html; charset=utf-8");
         });
@@ -270,6 +299,7 @@ public static class PresenterToolsEndpoints
         var hasNotes = deck.CurrentHasNotes ? "1" : "0";
         var hasSheet = deck.CurrentHasSlideSheet ? "1" : "0";
         var owner = isOwner ? "1" : "0";
+        var kind = deck.Kind.ToString().ToLowerInvariant();
         return $$"""
             <!doctype html>
             <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
@@ -277,7 +307,7 @@ public static class PresenterToolsEndpoints
             <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/icons/icon-192.png">
             <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
             <link rel="stylesheet" href="/css/remote.css">
-            </head><body data-slug="{{slug}}" data-has-notes="{{hasNotes}}" data-has-sheet="{{hasSheet}}" data-build="{{deck.CurrentBuildId}}" data-owner="{{owner}}">
+            </head><body data-slug="{{slug}}" data-has-notes="{{hasNotes}}" data-has-sheet="{{hasSheet}}" data-build="{{deck.CurrentBuildId}}" data-owner="{{owner}}" data-total="{{deck.CurrentSlideCount}}" data-kind="{{kind}}" data-title="{{title}}">
             <header>
               <a class="back" href="/" aria-label="Library" title="Library">‹</a>
               <div class="title">{{title}}</div>
@@ -285,28 +315,47 @@ public static class PresenterToolsEndpoints
             </header>
             <main>
               <section class="session" id="session" hidden></section>
-              <div class="counter"><span id="page">–</span><span class="of">/ <span id="total">–</span></span><span class="clicks" id="clicks"></span></div>
+              <section class="stage" id="stage" aria-label="Current slide">
+                <div class="stage-current" id="stage-current">
+                  <div class="thumb" id="thumb-current" hidden></div>
+                  <div class="stage-counter"><span id="page">–</span><span class="of"> / <span id="total">–</span></span><span class="clicks" id="clicks"></span></div>
+                  <div class="laser-dot" id="laser-dot" hidden></div>
+                  <div class="laser-hint" id="laser-hint" hidden>Drag to point</div>
+                </div>
+                <button class="stage-next" id="stage-next" type="button" aria-label="Next slide preview"><div class="thumb" id="thumb-next" hidden></div><span class="next-label">Next</span></button>
+              </section>
               <section class="notes" id="notes" hidden>
+                <div class="notes-head"><span class="label">Notes</span><span class="notes-tools"><button class="tiny" id="notes-smaller" aria-label="Smaller text">A−</button><button class="tiny" id="notes-larger" aria-label="Larger text">A+</button></span></div>
                 <div class="note-current" id="note-current"></div>
                 <div class="note-next"><span class="label">Next</span> <span id="note-next-title"></span><div id="note-next"></div></div>
               </section>
-              <div class="pad">
+              <div class="pad" id="pad">
                 <button class="nav prev" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 5-7 7 7 7"/></svg></button>
                 <button class="nav next" id="next" aria-label="Next"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 5 7 7-7 7"/></svg></button>
               </div>
-              <div class="row">
-                <button class="small" id="first">⇤ First</button>
+              <div class="row tools">
+                <button class="small" id="first" title="First slide">⇤ First</button>
                 <button class="small" id="goto" hidden>⊞ Go to</button>
+                <button class="small" id="laser" aria-pressed="false" title="Laser pointer: drag on the slide above">◉ Laser</button>
                 <button class="small" id="black" aria-pressed="false">■ Black</button>
                 <button class="small" id="message">💬 Message</button>
+                <button class="small" id="lock" title="Lock the controls (hold to unlock)">🔒 Lock</button>
               </div>
-              <div class="row" id="stopwatch-row">
-                <button class="small" id="timer-toggle">▶ Stopwatch</button>
+              <div class="row" id="timer-row">
+                <button class="small" id="timer-toggle">▶ Timer</button>
                 <button class="small" id="timer-reset" title="Reset">↺</button>
+                <span class="timer-scope faint" id="timer-scope"></span>
                 <span class="timer" id="timer">00:00</span>
               </div>
-              <div class="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B = black, G = go to.</div>
+              <nav class="agenda" id="agenda" aria-label="Slides" hidden></nav>
+              <div class="hint" id="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B black, G go to, L laser, T timer.</div>
             </main>
+            <div class="locked" id="locked" hidden>
+              <div class="locked-clock" id="locked-clock"></div>
+              <div class="locked-pos" id="locked-pos"></div>
+              <div class="locked-next" id="locked-next"></div>
+              <button class="unlock" id="unlock" type="button">Hold to unlock</button>
+            </div>
             <dialog id="goto-dialog"><div class="goto-head"><strong>Go to slide</strong><button class="small" id="goto-close">✕</button></div><div class="goto-grid" id="goto-grid"></div></dialog>
             <dialog id="message-dialog"><form method="dialog"><label>Message for the audience<input id="message-text" maxlength="300" placeholder="Demo in progress, back in a minute"></label><div class="row"><button class="small" value="show">Show</button><button class="small" value="clear">Clear</button><button class="small" value="cancel">Cancel</button></div></form></dialog>
             <dialog id="golive-dialog"><form method="dialog">

@@ -206,8 +206,8 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.NotNull(state.LiveSessionId);
         Assert.Equal(deck.CurrentBuildId, state.PinnedBuildId);
 
-        // The room joins through the link, anonymously, to a Private deck.
-        var joined = await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
+        // The room joins through the link, anonymously, to a Private deck (the link id is dropped from the address bar).
+        var (_, joined) = await PodiumWebFactory.AdmitAsync(anon, $"/d/{deck.Slug}/?share={linkId}");
         Assert.Equal(HttpStatusCode.OK, joined.StatusCode);
 
         var guard = await anon.GetFromJsonAsync<JsonElement>("/healthz/live");
@@ -309,7 +309,7 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         var hop = await anon.SendAsync(PodiumWebFactory.Navigation($"/j/{joinCode.Replace("-", "").ToLowerInvariant()}"));
         Assert.Equal(HttpStatusCode.Redirect, hop.StatusCode);
         Assert.StartsWith($"/d/{deck.Slug}/?share=", hop.Headers.Location!.ToString());
-        Assert.Equal(HttpStatusCode.OK, (await anon.SendAsync(PodiumWebFactory.Navigation(hop.Headers.Location!.ToString()))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PodiumWebFactory.AdmitAsync(anon, hop.Headers.Location!.ToString())).Page.StatusCode);
 
         // The join QR is for presenters only; the plain QR follows the deck's access.
         var qr = await owner.GetAsync($"/d/{deck.Slug}/qr.svg?join=1");
@@ -355,6 +355,53 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Contains("id=\"install-app\"", html);
         var deck = await app.SeedDeckAsync("remote-card-deck");
         Assert.Contains($"href=\"/d/{deck.Slug}/remote\"", await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync());
+        Assert.Contains(doc.RootElement.GetProperty("shortcuts").EnumerateArray(), s => s.GetProperty("url").GetString()!.StartsWith("/remote"));
+    }
+
+    [Fact]
+    public async Task Remote_shortcut_opens_the_live_deck_then_the_last_presented_one_and_the_qr_is_for_presenters()
+    {
+        // Anonymous: sign in first (the PWA shortcut on a fresh phone).
+        var anon = app.Client();
+        var challenge = await anon.SendAsync(PodiumWebFactory.Navigation("/remote"));
+        Assert.Equal(HttpStatusCode.Redirect, challenge.StatusCode);
+        Assert.Contains("/login", challenge.Headers.Location!.ToString());
+        Assert.Contains("returnUrl=%2Fremote", challenge.Headers.Location!.ToString());
+
+        var owner = await app.OwnerClientAsync();
+        // Other tests may have left sessions running; the shortcut must reflect the state at this moment.
+        using (var scope = app.Services.CreateScope())
+        {
+            var svc = scope.ServiceProvider.GetRequiredService<Podium.Core.Services.SessionService>();
+            foreach (var s in await scope.ServiceProvider.GetRequiredService<ISessionStore>().ListLiveAsync()) await svc.EndAsync(s.DeckSlug, "manual", unfreeze: true);
+        }
+        var idle = await owner.SendAsync(PodiumWebFactory.Navigation("/remote"));
+        Assert.Equal(HttpStatusCode.Redirect, idle.StatusCode);
+        Assert.Matches("^/\\?remote=none$|^/d/[a-z0-9-]+/remote$", idle.Headers.Location!.ToString()); // nothing live: last presented deck, or the hint
+        Assert.Contains("nothing has been presented yet", await (await owner.SendAsync(PodiumWebFactory.Navigation("/?remote=none"))).Content.ReadAsStringAsync());
+
+        // Presenting a deck (opening it) makes it the shortcut's target.
+        var deck = await app.SeedDeckAsync("shortcut-deck", kind: DeckKind.Presenterm);
+        Assert.Equal(HttpStatusCode.OK, (await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/remote", (await owner.SendAsync(PodiumWebFactory.Navigation("/remote"))).Headers.Location!.ToString());
+        // The remote page itself exists for presenterm now, and the deck page carries the scan-to-open QR.
+        Assert.Equal(HttpStatusCode.OK, (await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/remote"))).StatusCode);
+        Assert.Contains($"/d/{deck.Slug}/qr.svg?remote=1", await (await owner.SendAsync(PodiumWebFactory.Navigation($"/decks/{deck.Slug}"))).Content.ReadAsStringAsync());
+
+        // A live session anywhere wins, and the library shows the live banner.
+        var other = await app.SeedDeckAsync("shortcut-live-deck");
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync($"/api/decks/{other.Slug}/sessions", JsonContent.Create(new { plannedMinutes = 10, holdDeploys = false, freeze = false }))).StatusCode);
+        Assert.Equal($"/d/{other.Slug}/remote", (await owner.SendAsync(PodiumWebFactory.Navigation("/remote"))).Headers.Location!.ToString());
+        var library = await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync();
+        Assert.Contains("id=\"live-now\"", library);
+        Assert.Contains($"href=\"/d/{other.Slug}/remote\"", library);
+        await owner.PostAsync($"/api/decks/{other.Slug}/sessions/end?unfreeze=true", null);
+
+        // The remote QR is a presenter tool: owner yes, anonymous visitor of a public deck no.
+        var pub = await app.SeedDeckAsync("shortcut-public-deck", Visibility.Public);
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync($"/d/{pub.Slug}/qr.svg?remote=1")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await app.Client().GetAsync($"/d/{pub.Slug}/qr.svg")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await app.Client().GetAsync($"/d/{pub.Slug}/qr.svg?remote=1")).StatusCode);
     }
 
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
@@ -584,8 +631,9 @@ public sealed class ServingTests(PodiumWebFactory app)
         var id = doc.RootElement.GetProperty("link").GetProperty("id").GetString();
 
         var viewer = app.Client();
-        var first = await viewer.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={id}"));
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var (first, page) = await PodiumWebFactory.AdmitAsync(viewer, $"/d/{deck.Slug}/?share={id}");
+        Assert.Equal($"/d/{deck.Slug}/", first.Headers.Location!.ToString());
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
         var cookie = first.Headers.GetValues("Set-Cookie").Single(v => v.StartsWith("podium_share_", StringComparison.Ordinal));
         Assert.Contains("path=/", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
@@ -619,9 +667,10 @@ public sealed class ServingTests(PodiumWebFactory app)
         var capped = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", expiresInDays = 7, maxUses = 2 }));
         var cappedId = JsonDocument.Parse(await capped.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString()!;
         var b1 = app.Client(); var b2 = app.Client(); var b3 = app.Client();
-        Assert.Equal(HttpStatusCode.OK, (await b1.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await b2.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
-        Assert.NotEqual(HttpStatusCode.OK, (await b3.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PodiumWebFactory.AdmitAsync(b1, $"/d/{deck.Slug}/?share={cappedId}")).Page.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PodiumWebFactory.AdmitAsync(b2, $"/d/{deck.Slug}/?share={cappedId}")).Page.StatusCode);
+        var third = await b3.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={cappedId}"));
+        Assert.True(third.StatusCode != HttpStatusCode.OK && !(third.Headers.Location?.ToString().StartsWith($"/d/{deck.Slug}/") ?? false)); // not admitted: bounced to login, not to the deck
         Assert.Equal(HttpStatusCode.OK, (await b1.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/5"))).StatusCode); // cookie, no ?share
         var cappedLink = (await links.GetAsync(cappedId))!;
         Assert.Equal(2, cappedLink.Opens);
@@ -769,7 +818,7 @@ public sealed class ServingTests(PodiumWebFactory app)
         await owner.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { visibility = "Link" }));
         var link = await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site" }));
         var id = JsonDocument.Parse(await link.Content.ReadAsStringAsync()).RootElement.GetProperty("link").GetProperty("id").GetString();
-        var viaLink = await app.Client().SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={id}"));
+        var (_, viaLink) = await PodiumWebFactory.AdmitAsync(app.Client(), $"/d/{deck.Slug}/?share={id}");
         Assert.Equal(HttpStatusCode.OK, viaLink.StatusCode);
         Assert.Equal("SAMEORIGIN", viaLink.Headers.GetValues("X-Frame-Options").Single());
     }
@@ -847,6 +896,33 @@ public sealed class ExternalHostTests(PodiumWebFactory app)
         Assert.NotEqual(HttpStatusCode.OK, cross.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, cross.StatusCode);
         Assert.StartsWith(PodiumWebFactory.PublicOrigin, cross.Headers.Location!.ToString());
+    }
+
+    [Fact]
+    public async Task Link_grant_on_the_external_origin_dies_with_the_link()
+    {
+        // A private deck from an untrusted source: the room is admitted by a share link, bounced to the external origin
+        // with a view token. Revoking the link must end that access at once, not when the 12-hour token expires.
+        var deck = await app.SeedDeckAsync("stranger-private-linked", trusted: false);
+        var api = await app.OwnerClientAsync();
+        var minted = await (await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/links", new { artifact = "Site" })).Content.ReadFromJsonAsync<JsonElement>();
+        var linkId = minted.GetProperty("link").GetProperty("id").GetString()!;
+
+        var primary = app.Client();
+        var hop = await primary.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
+        Assert.Equal(HttpStatusCode.Redirect, hop.StatusCode);
+        var target = hop.Headers.Location!;
+        Assert.Equal(new Uri(PodiumWebFactory.ExternalOrigin).Host, target.Host);
+        Assert.DoesNotContain("share=", target.Query);
+
+        var external = app.Client(PodiumWebFactory.ExternalOrigin);
+        var exchange = await external.SendAsync(PodiumWebFactory.Navigation(target.PathAndQuery));
+        Assert.Equal(HttpStatusCode.Redirect, exchange.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await external.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await api.PostAsync($"/api/decks/{deck.Slug}/links/{linkId}/revoke", null)).StatusCode);
+        var after = await external.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        Assert.NotEqual(HttpStatusCode.OK, after.StatusCode);
     }
 }
 

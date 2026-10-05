@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -130,21 +131,199 @@ public sealed class SyncHubTests(PodiumWebFactory app)
     }
 
     [Fact]
-    public async Task Flooding_presenter_is_throttled_not_disconnected()
+    public async Task Flooding_remote_is_throttled_not_disconnected()
     {
         var deck = await app.SeedDeckAsync("sync-flood-deck", Visibility.Public);
         var owner = await OwnerCookieAsync();
-        using var presenter = await ConnectAsync(deck.Slug, owner);
-        await ReceiveUntilAsync(presenter, "hello");
+        using var window = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(window, "hello");
+        await SendAsync(window, new { t = "hi", role = "play" });
+        using var remote = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(remote, "hello");
+        await SendAsync(remote, new { t = "hi", role = "remote" });
         using var viewer = await ConnectAsync(deck.Slug, null);
         await ReceiveUntilAsync(viewer, "hello");
 
-        for (var i = 0; i < 120; i++) await SendAsync(presenter, new { t = "nav", action = "next" });
+        for (var i = 0; i < 120; i++) await SendAsync(remote, new { t = "nav", action = "next" });
         var received = 0;
-        while (await ReceiveAsync(viewer, TimeSpan.FromMilliseconds(400)) is { } doc)
+        while (await ReceiveAsync(window, TimeSpan.FromMilliseconds(400)) is { } doc)
             if (doc.RootElement.GetProperty("t").GetString() == "nav") received++;
         Assert.InRange(received, 1, 45); // 40/s cap; the rest dropped
-        Assert.Equal(WebSocketState.Open, presenter.State);
+        Assert.Equal(WebSocketState.Open, remote.State);
+
+        // Commands are for the deck window only; the audience never sees them.
+        var leaked = 0;
+        while (await ReceiveAsync(viewer, TimeSpan.FromMilliseconds(300)) is { } doc)
+            if (doc.RootElement.GetProperty("t").GetString() == "nav") leaked++;
+        Assert.Equal(0, leaked);
+    }
+
+    [Fact]
+    public async Task Commands_run_once_on_the_presenter_view_when_present_else_on_the_oldest_play_window()
+    {
+        var deck = await app.SeedDeckAsync("sync-primary-deck", Visibility.Public);
+        var owner = await OwnerCookieAsync();
+        using var projector = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(projector, "hello");
+        await SendAsync(projector, new { t = "info", page = 1, total = 9, clicks = 0, clicksTotal = 0, role = "play" });
+        using var laptop = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(laptop, "hello");
+        await SendAsync(laptop, new { t = "info", page = 1, total = 9, clicks = 0, clicksTotal = 0, role = "play" });
+        using var remote = await ConnectAsync(deck.Slug, owner);
+        var hello = await ReceiveUntilAsync(remote, "hello");
+        Assert.Equal(3, hello.RootElement.GetProperty("protocol").GetInt32());
+        await SendAsync(remote, new { t = "hi", role = "remote" });
+        // Presence distinguishes deck windows from remotes so the phone knows whether anything can execute its commands.
+        JsonDocument presence;
+        do { presence = await ReceiveUntilAsync(remote, "presence"); } while (presence.RootElement.GetProperty("remotes").GetInt32() == 0);
+        Assert.Equal(2, presence.RootElement.GetProperty("windows").GetInt32());
+        Assert.Equal(1, presence.RootElement.GetProperty("remotes").GetInt32());
+
+        // Two play windows: only the oldest executes.
+        await SendAsync(remote, new { t = "nav", action = "next" });
+        var onProjector = await ReceiveUntilAsync(projector, "nav");
+        Assert.Equal("next", onProjector.RootElement.GetProperty("action").GetString());
+        Assert.Null(await ReceiveUntilAsync(laptop, "nav", 6).ContinueWith(t => t.IsFaulted ? null : t.Result));
+
+        // A presenter view joins: it becomes the authority, play windows follow through state.
+        using var presenterView = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(presenterView, "hello");
+        await SendAsync(presenterView, new { t = "hi", role = "presenter" });
+        await SendAsync(remote, new { t = "pointer", x = 42.5, y = 10 });
+        await SendAsync(remote, new { t = "timer", op = "toggle" });
+        var pointer = await ReceiveUntilAsync(presenterView, "pointer");
+        Assert.Equal(42.5, pointer.RootElement.GetProperty("x").GetDouble());
+        var timer = await ReceiveUntilAsync(presenterView, "timer");
+        Assert.Equal("toggle", timer.RootElement.GetProperty("op").GetString());
+        Assert.Null(await ReceiveUntilAsync(projector, "pointer", 6).ContinueWith(t => t.IsFaulted ? null : t.Result));
+
+        // Presenter view gone: the oldest play window is primary again. Invalid commands never reach anyone.
+        await presenterView.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
+        await Task.Delay(100);
+        await SendAsync(remote, new { t = "pointer", x = 150, y = 10 });      // out of range
+        await SendAsync(remote, new { t = "timer", op = "explode" });         // unknown op
+        await SendAsync(remote, new { t = "nav", action = "prev" });
+        var next = await ReceiveUntilAsync(projector, "nav");
+        Assert.Equal("prev", next.RootElement.GetProperty("action").GetString());
+        Assert.Null(await ReceiveUntilAsync(projector, "pointer", 3).ContinueWith(t => t.IsFaulted ? null : t.Result));
+
+        // A remote that predates the handshake (no role) is still recognised as a remote, never as the executor.
+        using var oldRemote = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(oldRemote, "hello");
+        await SendAsync(oldRemote, new { t = "nav", action = "first" });
+        Assert.Equal("first", (await ReceiveUntilAsync(projector, "nav")).RootElement.GetProperty("action").GetString());
+    }
+
+    [Fact]
+    public async Task Screen_is_replayed_to_every_newcomer_and_viewers_may_only_say_hi()
+    {
+        var deck = await app.SeedDeckAsync("sync-screen-all-deck", Visibility.Public);
+        var owner = await OwnerCookieAsync();
+        using var remote = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(remote, "hello");
+        await SendAsync(remote, new { t = "hi", role = "remote" });
+        await SendAsync(remote, new { t = "screen", mode = "black" });
+
+        // The projector (a presenting window) opened after the blackout was raised must also go dark.
+        using var projector = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(projector, "hello");
+        Assert.Equal("black", (await ReceiveUntilAsync(projector, "screen")).RootElement.GetProperty("mode").GetString());
+
+        using var viewer = await ConnectAsync(deck.Slug, null);
+        await ReceiveUntilAsync(viewer, "hello");
+        await ReceiveUntilAsync(viewer, "screen");
+        // Viewers may announce a client id but nothing they send is relayed or executed.
+        await SendAsync(viewer, new { t = "hi", cid = "abcdefgh12345678" });
+        await SendAsync(viewer, new { t = "hi", role = "presenter" });
+        await SendAsync(viewer, new { t = "nav", action = "next" });
+        await SendAsync(viewer, new { t = "screen", mode = "none" });
+        await SendAsync(viewer, new { t = "pointer", x = 1, y = 1 });
+        Assert.Null(await ReceiveUntilAsync(projector, "nav", 4).ContinueWith(t => t.IsFaulted ? null : t.Result));
+        Assert.Equal(WebSocketState.Open, viewer.State);
+
+        using var late = await ConnectAsync(deck.Slug, null);
+        await ReceiveUntilAsync(late, "hello");
+        Assert.Equal("black", (await ReceiveUntilAsync(late, "screen")).RootElement.GetProperty("mode").GetString()); // the viewer's "none" changed nothing
+    }
+
+    [Fact]
+    public async Task Session_changes_reach_every_window_and_link_viewers_are_cut_when_it_ends()
+    {
+        var deck = await app.SeedDeckAsync("sync-session-deck");
+        var owner = await OwnerCookieAsync();
+        var api = await app.OwnerClientAsync();
+
+        using var presenterView = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(presenterView, "hello");
+        await SendAsync(presenterView, new { t = "hi", role = "presenter" });
+
+        var started = await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/sessions", new { plannedMinutes = 30, holdDeploys = false, freeze = false });
+        Assert.Equal(System.Net.HttpStatusCode.OK, started.StatusCode);
+        var body = await started.Content.ReadFromJsonAsync<JsonElement>();
+        var linkId = body.GetProperty("session").GetProperty("linkId").GetString()!;
+        var joinCode = body.GetProperty("session").GetProperty("joinCode").GetString()!;
+
+        // Presenting sockets get the details the HUD needs; the plan change follows as it happens.
+        var live = await ReceiveUntilAsync(presenterView, "session");
+        Assert.True(live.RootElement.GetProperty("live").GetBoolean());
+        Assert.Equal(30, live.RootElement.GetProperty("plannedMinutes").GetInt32());
+        Assert.Equal($"{joinCode[..3]}-{joinCode[3..]}", live.RootElement.GetProperty("joinCode").GetString());
+        Assert.StartsWith($"{PodiumWebFactory.PublicOrigin}/j/", live.RootElement.GetProperty("joinUrl").GetString());
+        await api.PostAsync($"/api/decks/{deck.Slug}/sessions/plan?minutes=25", null);
+        Assert.Equal(25, (await ReceiveUntilAsync(presenterView, "session")).RootElement.GetProperty("plannedMinutes").GetInt32());
+
+        // A room member admitted by the join link: gets a bare live flag (no code), and a newcomer learns it on join.
+        var roomClient = app.Client();
+        var (admitted, roomPage) = await PodiumWebFactory.AdmitAsync(roomClient, $"/d/{deck.Slug}/?share={linkId}");
+        Assert.Equal(System.Net.HttpStatusCode.OK, roomPage.StatusCode);
+        var shareCookie = admitted.Headers.GetValues("Set-Cookie").Single(v => v.StartsWith("podium_share_", StringComparison.Ordinal)).Split(';')[0];
+        using var viewer = await ConnectAsync(deck.Slug, shareCookie);
+        await ReceiveUntilAsync(viewer, "hello");
+        var viewerSession = await ReceiveUntilAsync(viewer, "session");
+        Assert.True(viewerSession.RootElement.GetProperty("live").GetBoolean());
+        Assert.False(viewerSession.RootElement.TryGetProperty("joinCode", out _));
+
+        // End: presenters get the recap, the room's sockets are closed with 4410 and the link no longer admits.
+        await api.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+        var ended = await ReceiveUntilAsync(presenterView, "session");
+        Assert.False(ended.RootElement.GetProperty("live").GetBoolean());
+        Assert.Equal("manual", ended.RootElement.GetProperty("reason").GetString());
+        Assert.True(ended.RootElement.GetProperty("recap").GetProperty("durationSeconds").GetInt32() >= 0);
+
+        var closed = await WaitForCloseAsync(viewer);
+        Assert.Equal(4410, closed);
+        Assert.Equal(WebSocketState.Open, presenterView.State);
+    }
+
+    [Fact]
+    public async Task Revoking_a_share_link_disconnects_the_viewers_it_admitted()
+    {
+        var deck = await app.SeedDeckAsync("sync-revoke-deck");
+        var api = await app.OwnerClientAsync();
+        var minted = await (await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/links", new { artifact = "Site" })).Content.ReadFromJsonAsync<JsonElement>();
+        var linkId = minted.GetProperty("link").GetProperty("id").GetString()!;
+
+        var guest = app.Client();
+        var (admitted, _) = await PodiumWebFactory.AdmitAsync(guest, $"/d/{deck.Slug}/?share={linkId}");
+        var shareCookie = admitted.Headers.GetValues("Set-Cookie").Single(v => v.StartsWith("podium_share_", StringComparison.Ordinal)).Split(';')[0];
+        using var viewer = await ConnectAsync(deck.Slug, shareCookie);
+        await ReceiveUntilAsync(viewer, "hello");
+
+        Assert.Equal(System.Net.HttpStatusCode.NoContent, (await api.PostAsync($"/api/decks/{deck.Slug}/links/{linkId}/revoke", null)).StatusCode);
+        Assert.Equal(4410, await WaitForCloseAsync(viewer));
+    }
+
+    private static async Task<int> WaitForCloseAsync(WebSocket ws)
+    {
+        var buffer = new byte[4096];
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            var r = await ws.ReceiveAsync(buffer, cts.Token);
+            if (r.MessageType != WebSocketMessageType.Close) continue;
+            try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token); } catch (WebSocketException) { }
+            return (int)(r.CloseStatus ?? 0);
+        }
     }
 
     [Fact]

@@ -37,7 +37,8 @@ for (const [path, md] of Object.entries(data.markdownFiles)) {
 
 const notes = data.slides.map((s) => ({
   index: s.index + 1,
-  title: s.title || null,
+  // Titles may carry inline HTML/markdown from the heading (<code>, <span class="grad">); the remote shows plain text.
+  title: s.title ? plainText(s.title) || null : null,
   note: typeof s.note === 'string' && s.note.trim() ? s.note.trim() : null,
 }));
 

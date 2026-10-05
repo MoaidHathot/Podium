@@ -91,8 +91,36 @@ Insights are all in `infra/foundation.bicep`.
 Deck visibility applies to the plain URL: a Private or Shared deck asks visitors to sign in. The way to let a whole
 room follow a talk is a **live session**: it mints a share link that admits anyone, plus a six-character join code
 (`/j/ABC-123`, letters/digits that cannot be confused when read aloud, 887 million combinations) that only resolves
-while the session is live. Ending the session revokes both. Codes and deck entry are rate limited per client
-address at 300/min so a conference room behind one NAT fits; the link ids themselves are 144-bit random.
+while the session is live. Ending the session revokes both, and every socket admitted through the link is closed
+(code 4410) so the room's screens show "this session has ended" at once; revoking any share link closes its sockets
+the same way. Codes and deck entry are rate limited per client address at 300/min so a conference room behind one
+NAT fits; the link ids themselves are 144-bit random. View tokens on the external origin name the link that admitted
+the viewer, so a revoked link ends that access immediately rather than at the token's 12-hour expiry.
+
+## Sync protocol (v3)
+
+Every deck window and the phone remote talk to `/ws/sync/{slug}`. The server decides who may publish (owner and
+*Present* grantees); viewers only receive. Presenting sockets declare a role: `presenter` (the Slidev presenter
+view), `play` (a deck window such as the projector) or `remote` (the phone). Commands that must run exactly once
+(`nav`, `pointer`, `timer`) are delivered to the *primary* deck window only: the presenter view when one is
+connected, otherwise the longest-connected play window; everything else follows through the relayed shared state.
+The blackout (`screen`) is replayed to every newcomer and each window decides whether to go dark (deck windows do,
+the presenter view and the remote do not). Session start/plan/end are pushed as `session` messages (full details to
+presenters, a live flag to viewers), so nothing polls.
+
+Who provides the window side:
+
+- **Slidev**: the addon bundled by the builder (`builder/addon`, protocol in a `podium-addon` meta tag). It carries
+  no UI; it exposes `window.__podium` to Podium's server-served `/_podium/live-ui.js`, which draws the pill, HUD,
+  blackout, laser dot and toasts. UI changes therefore ship with the web app; only protocol changes rebuild decks.
+  Decks built with an older addon keep their built-in pill until the hourly builder-upgrade check rebuilds them.
+- **presenterm**: `/_podium/bridge.js` + `/_podium/presenterm.js`, injected when the page is served, drive the
+  export's own script with synthetic key events and observe which slide is shown.
+- **PowerPoint / PDF**: the builder renders pages to `site/pages/NNN.jpg` (pdftoppm, 1920 px wide) and writes a
+  shell that `/_podium/pages.js` turns into a viewer. Without pdftoppm the browser's PDF viewer is used instead.
+
+Rate limits: 40 messages/s per presenting socket (the laser sends at most 20/s), 5/s per viewer socket (handshake
+only), 200 sockets per room, 256 KB per message.
 
 ## Live sessions and the deploy guard
 

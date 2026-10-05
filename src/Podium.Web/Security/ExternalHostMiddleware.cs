@@ -67,6 +67,7 @@ public sealed class ExternalHostMiddleware(RequestDelegate next, ViewTokenServic
         {
             http.User = tokens.ToPrincipal(p);
             http.Items["podium.viewLinkSlug"] = p.LinkSlug;
+            if (p.LinkId is not null) http.Items["podium.viewLinkId"] = p.LinkId;
         }
         http.Items["podium.externalHost"] = true;
 
