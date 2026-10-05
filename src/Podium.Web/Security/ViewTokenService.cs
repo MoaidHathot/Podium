@@ -7,7 +7,7 @@ using Podium.Web.Configuration;
 namespace Podium.Web.Security;
 
 /// <summary>Identity and grants carried by a view token on the external deck origin.</summary>
-public sealed record ViewTokenPayload(string? Principal, bool IsOwner, string? DisplayName, string? LinkSlug, long Exp);
+public sealed record ViewTokenPayload(string? Principal, bool IsOwner, string? DisplayName, string? LinkSlug, long Exp, string? LinkId = null);
 
 /// <summary>
 /// Self-contained, HMAC-signed tokens that let the external deck origin know who the viewer is without sharing the
@@ -18,9 +18,9 @@ public sealed class ViewTokenService(HmacTokenService hmac, IOptions<PodiumOptio
     private const string Purpose = "view";
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(12);
 
-    public string Issue(string? principal, bool isOwner, string? displayName, string? linkSlug)
+    public string Issue(string? principal, bool isOwner, string? displayName, string? linkSlug, string? linkId = null)
     {
-        var payload = new ViewTokenPayload(principal, isOwner, displayName, linkSlug, DateTimeOffset.UtcNow.Add(Lifetime).ToUnixTimeSeconds());
+        var payload = new ViewTokenPayload(principal, isOwner, displayName, linkSlug, DateTimeOffset.UtcNow.Add(Lifetime).ToUnixTimeSeconds(), linkSlug is null ? null : linkId);
         var json = JsonSerializer.Serialize(payload);
         var body = Base64Url(Encoding.UTF8.GetBytes(json));
         return body + "." + hmac.SignFor(Purpose, body);

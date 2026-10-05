@@ -120,7 +120,7 @@ public static class DeckServingEndpoints
             if (external is null)
                 return Results.Content("<!doctype html><title>External deck</title><p style=\"font-family:system-ui;padding:2rem\">This deck comes from a repository you do not control. Set <code>Podium:ExternalBaseUrl</code> to a second hostname of this app to serve such decks from an isolated origin.</p>", "text/html; charset=utf-8", statusCode: 503);
             if (!IsNavigation(http)) return Results.NotFound();
-            var token = viewTokens.Issue(caller.Principal, caller.IsOwner, caller.DisplayName, result.ViaShareLink ? slug : null);
+            var token = viewTokens.Issue(caller.Principal, caller.IsOwner, caller.DisplayName, result.ViaShareLink ? slug : null, result.LinkId);
             var target = new UriBuilder(external) { Path = $"/d/{slug}/{path}" };
             var query = System.Web.HttpUtility.ParseQueryString(http.Request.QueryString.Value ?? "");
             query.Remove("share");

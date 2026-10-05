@@ -37,6 +37,12 @@ public sealed class SessionRecorders(ISessionStore sessions, IDeckStore decks)
 
     internal readonly ConcurrentDictionary<string, Recorder> Recorders = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Raised after a session starts, changes its plan or ends (the ended session carries its recap). The web host
+    /// uses it to tell every connected deck window and remote; failures are logged by the caller and never block.
+    /// </summary>
+    public Func<Session, Task>? OnSessionChanged { get; set; }
+
     /// <summary>Called by the sync hub whenever a presenter reports a position.</summary>
     public Task RecordPositionAsync(string slug, int page, int clicks, DateTimeOffset at)
     {
@@ -125,6 +131,7 @@ public sealed class SessionService(
         await decks.UpsertAsync(latest with { LiveSessionId = id, HoldDeploysWhileLive = holdDeploys, UpdatedAt = DateTimeOffset.UtcNow }, ct);
         _recorders[slug] = new SessionRecorders.Recorder { Since = DateTimeOffset.UtcNow };
         log.LogInformation("Session {Session} started for {Deck} (planned {Planned} min, hold deploys {Hold})", id, slug, plannedMinutes, holdDeploys);
+        await NotifyAsync(session);
         return (session, null);
     }
 
@@ -150,7 +157,15 @@ public sealed class SessionService(
         var latest = await decks.GetAsync(slug, ct) ?? deck;
         await decks.UpsertAsync(latest with { LiveSessionId = null, UpdatedAt = now }, ct);
         log.LogInformation("Session {Session} for {Deck} ended ({Reason}): {Duration}s, peak {Peak} viewers", session.Id, slug, reason, recap.DurationSeconds, recap.PeakViewers);
+        await NotifyAsync(session);
         return session;
+    }
+
+    private async Task NotifyAsync(Session session)
+    {
+        if (recorders.OnSessionChanged is not { } notify) return;
+        try { await notify(session); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Session change notification failed for {Deck}", session.DeckSlug); }
     }
 
     /// <summary>
@@ -207,6 +222,7 @@ public sealed class SessionService(
         if (s is null) return null;
         s = s with { PlannedMinutes = plannedMinutes };
         await sessions.UpsertAsync(s, ct);
+        await NotifyAsync(s);
         return s;
     }
 

@@ -57,9 +57,18 @@ public sealed class DeckAccessService(IDeckStore decks, ISourceStore sources, IG
         var viaLink = false;
         string? linkId = null;
         string? needsPasscode = null;
-        // On the external origin a view token may carry a link grant for exactly one deck.
+        // On the external origin a view token may carry a link grant for exactly one deck. Tokens name the link that
+        // admitted the viewer, so the grant dies with the link (revoked, expired, its session over) instead of living
+        // for the token's lifetime; tokens issued before that field existed keep the slug-only grant until they expire.
         if (!caller.IsOwner && http.Items.TryGetValue("podium.viewLinkSlug", out var granted) && granted is string gs && gs == slug)
-            viaLink = true;
+        {
+            if (http.Items.TryGetValue("podium.viewLinkId", out var lid) && lid is string tokenLinkId)
+            {
+                var link = await links.GetAsync(tokenLinkId, ct);
+                if (IsAlive(link, slug, artifact == ArtifactKind.Thumbnail ? ArtifactKind.Site : artifact)) { viaLink = true; linkId = tokenLinkId; }
+            }
+            else viaLink = true;
+        }
         if (!caller.IsOwner && !viaLink)
         {
             // A link for the deck itself also covers its thumbnail.

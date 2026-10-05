@@ -848,6 +848,33 @@ public sealed class ExternalHostTests(PodiumWebFactory app)
         Assert.Equal(HttpStatusCode.Redirect, cross.StatusCode);
         Assert.StartsWith(PodiumWebFactory.PublicOrigin, cross.Headers.Location!.ToString());
     }
+
+    [Fact]
+    public async Task Link_grant_on_the_external_origin_dies_with_the_link()
+    {
+        // A private deck from an untrusted source: the room is admitted by a share link, bounced to the external origin
+        // with a view token. Revoking the link must end that access at once, not when the 12-hour token expires.
+        var deck = await app.SeedDeckAsync("stranger-private-linked", trusted: false);
+        var api = await app.OwnerClientAsync();
+        var minted = await (await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/links", new { artifact = "Site" })).Content.ReadFromJsonAsync<JsonElement>();
+        var linkId = minted.GetProperty("link").GetProperty("id").GetString()!;
+
+        var primary = app.Client();
+        var hop = await primary.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/?share={linkId}"));
+        Assert.Equal(HttpStatusCode.Redirect, hop.StatusCode);
+        var target = hop.Headers.Location!;
+        Assert.Equal(new Uri(PodiumWebFactory.ExternalOrigin).Host, target.Host);
+        Assert.DoesNotContain("share=", target.Query);
+
+        var external = app.Client(PodiumWebFactory.ExternalOrigin);
+        var exchange = await external.SendAsync(PodiumWebFactory.Navigation(target.PathAndQuery));
+        Assert.Equal(HttpStatusCode.Redirect, exchange.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await external.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await api.PostAsync($"/api/decks/{deck.Slug}/links/{linkId}/revoke", null)).StatusCode);
+        var after = await external.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"));
+        Assert.NotEqual(HttpStatusCode.OK, after.StatusCode);
+    }
 }
 
 [Collection(nameof(WebCollection))]

@@ -288,11 +288,13 @@ public static partial class ApiEndpoints
             return Results.Ok(new { link, url = $"{http.Request.Scheme}://{http.Request.Host}{path}?share={id}" });
         });
 
-        owner.MapPost("/decks/{slug}/links/{id}/revoke", async (string slug, string id, IShareLinkStore links, CancellationToken ct) =>
+        owner.MapPost("/decks/{slug}/links/{id}/revoke", async (string slug, string id, IShareLinkStore links, Sync.SyncHub hub, CancellationToken ct) =>
         {
             var link = await links.GetAsync(id, ct);
             if (link is null || link.DeckSlug != slug) return Results.NotFound();
             await links.UpsertAsync(link with { Revoked = true }, ct);
+            // Revoking a link also cuts the live connections it admitted; the next page load is refused anyway.
+            await hub.CloseLinkAsync(slug, id, ct);
             return Results.NoContent();
         });
 

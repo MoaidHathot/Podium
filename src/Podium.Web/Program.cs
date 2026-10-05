@@ -270,12 +270,19 @@ if (args.Length > 0 && string.Equals(args[0], "export", StringComparison.Ordinal
     return await BackupCommand.RunAsync(tables, blobs, storage.TablePrefix, Console.Out, CancellationToken.None);
 }
 
-// Live sessions record pacing from the sync relay (no extra traffic from clients).
+// Live sessions record pacing from the sync relay (no extra traffic from clients); session changes reach every window.
 {
     var hub = app.Services.GetRequiredService<Podium.Web.Sync.SyncHub>();
     var recorders = app.Services.GetRequiredService<SessionRecorders>();
     hub.OnPresenterPosition = recorders.RecordPositionAsync;
     hub.OnPresence = recorders.RecordPresenceAsync;
+    recorders.OnSessionChanged = session => hub.NotifySessionAsync(session);
+    var scopes = app.Services.GetRequiredService<IServiceScopeFactory>();
+    hub.ResolveLiveSession = async slug =>
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<SessionService>().GetLiveAsync(slug);
+    };
 }
 app.Lifetime.ApplicationStopping.Register(() => app.Logger.LogInformation("Podium is shutting down (graceful stop requested)"));
 
