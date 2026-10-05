@@ -92,6 +92,23 @@ try {
   check('blackout reaches the viewer and the presenting window', (await vp.locator('#podium-screen').count()) === 1 && (await presenter.locator('#podium-screen').count()) === 1);
   await remote.click('#black'); await remote.waitForTimeout(500);
   check('blackout lifts everywhere', (await vp.locator('#podium-screen').count()) === 0 && (await presenter.locator('#podium-screen').count()) === 0);
+  // Laser pad: drag on the current-slide thumbnail -> dot on the viewer and the presenting window.
+  check('remote shows current + next thumbnails', !(await remote.locator('#thumb-current').isHidden()) && !(await remote.locator('#thumb-next').isHidden()));
+  await remote.click('#laser');
+  const stageBox = await remote.locator('#stage-current').boundingBox();
+  await remote.mouse.move(stageBox.x + stageBox.width * 0.3, stageBox.y + stageBox.height * 0.4);
+  await remote.mouse.down();
+  await remote.mouse.move(stageBox.x + stageBox.width * 0.5, stageBox.y + stageBox.height * 0.5, { steps: 4 });
+  await vp.waitForTimeout(400);
+  check('laser dot reaches the viewer', (await vp.locator('#podium-laser').count()) === 1 && (await vp.locator('#podium-laser').evaluate((e) => e.style.opacity)) === '1');
+  await remote.mouse.up(); await vp.waitForTimeout(400);
+  check('laser dot clears on release', (await vp.locator('#podium-laser').evaluate((e) => e.style.opacity)) === '0');
+  await remote.click('#laser');
+  // Shared timer: the phone starts the deck's timer; the deck window publishes it back.
+  await remote.click('#timer-toggle'); await remote.waitForTimeout(1600);
+  check('deck timer runs from the phone', /running/.test(await remote.locator('#timer').getAttribute('class')) && /00:0[1-9]/.test(await remote.locator('#timer').innerText()), await remote.locator('#timer').innerText());
+  await remote.click('#timer-reset'); await remote.waitForTimeout(400);
+  check('agenda strip marks the current slide', (await remote.locator('#agenda button.current').innerText()).startsWith('2'));
 
   // Live session from the owner's remote: countdown + join code; the room joins a (now Private) deck through /j/CODE.
   await op.request.patch(`${base}/api/decks/fixture-deck`, { headers: { 'x-podium-request': '1' }, data: { visibility: 'Private' } });

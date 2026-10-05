@@ -121,8 +121,11 @@ function setupPodiumBridge() {
   }
   // The presenter view owns a ticking timer display; clicking its own controls keeps that display honest. Windows
   // without the control (play mode) patch the shared timer directly, which the remote and other windows read.
+  // Patched values must be plain objects: Slidev's own BroadcastChannel sync structured-clones the state, and a
+  // reactive proxy (e.g. the existing `slides` map) inside it would throw and abort every sync write.
   function applyTimer(op: unknown) {
-    const timer = sharedState.timer || { status: 'stopped', slides: {}, startedAt: 0, pausedAt: 0 }
+    const raw = toRaw(sharedState.timer) as { status: 'stopped' | 'running' | 'paused'; startedAt: number; pausedAt: number } | undefined
+    const timer = { status: raw?.status ?? 'stopped', startedAt: raw?.startedAt ?? 0, pausedAt: raw?.pausedAt ?? 0 }
     const running = timer.status === 'running'
     if (nav.isPresenter.value) {
       const toggle = document.querySelector('.slidev-presenter [class*="i-carbon:pause"], .slidev-presenter [class*="i-carbon:play"]')
@@ -133,14 +136,15 @@ function setupPodiumBridge() {
       if (op === 'start' || op === 'pause') return
     }
     const now = Date.now()
+    const set = (status: 'stopped' | 'running' | 'paused', startedAt: number, pausedAt: number) => patchShared('timer', { status, slides: {}, startedAt, pausedAt })
     switch (op) {
-      case 'reset': patchShared('timer', { status: 'stopped', slides: {}, startedAt: 0, pausedAt: 0 }); break
-      case 'pause': if (running) patchShared('timer', { ...timer, status: 'paused', pausedAt: now }); break
+      case 'reset': set('stopped', 0, 0); break
+      case 'pause': if (running) set('paused', timer.startedAt, now); break
       case 'start':
       case 'toggle':
-        if (running) { if (op === 'toggle') patchShared('timer', { ...timer, status: 'paused', pausedAt: now }) }
-        else if (timer.status === 'paused') patchShared('timer', { ...timer, status: 'running', startedAt: now - (timer.pausedAt - timer.startedAt) })
-        else patchShared('timer', { ...timer, status: 'running', startedAt: now })
+        if (running) { if (op === 'toggle') set('paused', timer.startedAt, now) }
+        else if (timer.status === 'paused') set('running', now - (timer.pausedAt - timer.startedAt), 0)
+        else set('running', now, 0)
         break
     }
   }

@@ -369,15 +369,18 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
         for (var p = 1; p <= Podium.Web.Storage.FixtureDeck.Pages; p++)
             await File.WriteAllBytesAsync(Path.Combine(dir, "site", "pages", $"{p:000}.jpg"), Podium.Web.Storage.FixtureDeck.PageJpeg, ct);
         await File.WriteAllTextAsync(Path.Combine(dir, "site", "pages", "index.json"), Podium.Web.Storage.FixtureDeck.PagesJson, ct);
+        // Slide sheet (one tile per page) so the remote's thumbnails and go-to grid have something to show.
+        await File.WriteAllBytesAsync(Path.Combine(dir, "slides.jpg"), Podium.Web.Storage.FixtureDeck.PageJpeg, ct);
+        await File.WriteAllTextAsync(Path.Combine(dir, "slides.json"), $$"""{"count":{{Podium.Web.Storage.FixtureDeck.Pages}},"cols":{{Podium.Web.Storage.FixtureDeck.Pages}},"rows":1,"cellWidth":1,"cellHeight":1}""", ct);
         await File.WriteAllTextAsync(Path.Combine(dir, "notes.json"), "[{\"index\":1,\"title\":\"One\",\"note\":\"First note\"},{\"index\":2,\"title\":\"Two\",\"note\":\"Second note\"},{\"index\":3,\"title\":\"Three\",\"note\":null}]", ct);
         await File.WriteAllTextAsync(Path.Combine(dir, "text.json"), "[{\"index\":1,\"title\":\"One\",\"text\":\"fixture slide one\"},{\"index\":2,\"title\":\"Two\",\"text\":\"fixture slide two\"},{\"index\":3,\"title\":\"Three\",\"text\":\"fixture slide three\"}]", ct);
         await decks.UpsertAsync(new Deck
         {
             Slug = slug, SourceId = "fixture/slides", Path = "fixture", Entry = "slides.pdf", Kind = DeckKind.Pdf, Title = "Fixture deck", Tags = ["fixture"],
             Visibility = Visibility.Public, CurrentBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestSuccessfulBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildStatus = BuildStatus.Succeeded,
-            CurrentHasNotes = true, CurrentHasText = true, CurrentSlideCount = Podium.Web.Storage.FixtureDeck.Pages, LastCommitSha = new string('a', 40),
+            CurrentHasNotes = true, CurrentHasText = true, CurrentHasSlideSheet = true, CurrentSlideCount = Podium.Web.Storage.FixtureDeck.Pages, LastCommitSha = new string('a', 40),
         }, ct);
-        await builds.UpsertAsync(new Build { Id = Podium.Web.Storage.FixtureDeck.BuildId, DeckSlug = slug, Sha = new string('a', 40), Status = BuildStatus.Succeeded, HasSite = true, HasNotes = true, HasText = true, SlideCount = Podium.Web.Storage.FixtureDeck.Pages, FinishedAt = DateTimeOffset.UtcNow, StartedAt = DateTimeOffset.UtcNow.AddSeconds(-20) }, ct);
+        await builds.UpsertAsync(new Build { Id = Podium.Web.Storage.FixtureDeck.BuildId, DeckSlug = slug, Sha = new string('a', 40), Status = BuildStatus.Succeeded, HasSite = true, HasNotes = true, HasText = true, HasSlideSheet = true, SlideCount = Podium.Web.Storage.FixtureDeck.Pages, FinishedAt = DateTimeOffset.UtcNow, StartedAt = DateTimeOffset.UtcNow.AddSeconds(-20) }, ct);
         access.Invalidate(slug);
         await search.RefreshAsync((await decks.GetAsync(slug, ct))!, ct);
         return Results.Ok(new { slug });

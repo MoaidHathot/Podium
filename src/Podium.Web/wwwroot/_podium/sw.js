@@ -6,13 +6,18 @@
 //     everyone else caches what they visit.
 //   - Navigations: network first, cached index as the offline fallback (the slide number lives in the URL).
 //   - Hashed assets (/assets/): cache first. Other files: network first with cache fallback.
-//   - Never touched: Podium tooling under _podium/, speaker notes, slide sheets, the remote, QR codes, the version
-//     probe, anything carrying a share/view token, non-GET and cross-origin requests.
+//   - Never touched: Podium tooling under _podium/, speaker notes, slide sheets, session state, QR codes, the
+//     version probe, anything carrying a share/view token, non-GET and cross-origin requests.
+//   - The phone remote page and its stylesheet/script are kept network-first in a small side cache, so a reload
+//     during a wifi blip still shows the remote while its socket reconnects (the page carries no notes itself).
 'use strict';
 
 const scopePath = new URL(self.registration.scope).pathname;            // "/d/<slug>/"
 const slug = scopePath.split('/')[2];
-const NEVER = /\/(_podium\/|notes\.json$|slides\.(jpg|json)$|remote$|qr\.svg$)/;
+const NEVER = /\/(_podium\/|notes\.json$|slides\.(jpg|json)$|session\.json$|qr\.svg$)/;
+const REMOTE_PAGE = new RegExp(`^${scopePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}remote$`);
+const REMOTE_ASSETS = /^\/(css\/remote\.css|js\/remote\.js)$/;
+const remoteCacheName = `podium-${slug}-remote`;
 let currentBuild = null;
 
 const cacheName = (build) => `podium-${slug}-${build}`;
@@ -33,7 +38,7 @@ self.addEventListener('message', (e) => {
 
 async function dropOtherBuilds(build) {
   const keys = await caches.keys();
-  await Promise.all(keys.filter((k) => k.startsWith(`podium-${slug}-`) && k !== cacheName(build)).map((k) => caches.delete(k)));
+  await Promise.all(keys.filter((k) => k.startsWith(`podium-${slug}-`) && k !== cacheName(build) && k !== remoteCacheName).map((k) => caches.delete(k)));
 }
 
 async function precache(build, files) {
@@ -68,7 +73,11 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin || !url.pathname.startsWith(scopePath)) return;
+  if (url.origin !== self.location.origin) return;
+  // The remote (a page inside this scope) and the two files it loads from the app shell.
+  if (REMOTE_PAGE.test(url.pathname) && req.mode === 'navigate') { e.respondWith(sideCache(req)); return; }
+  if (REMOTE_ASSETS.test(url.pathname)) { e.respondWith(sideCache(req)); return; }
+  if (!url.pathname.startsWith(scopePath)) return;
   if (NEVER.test(url.pathname) || /(^|&)(share|podium_vt)=/.test(url.search.slice(1))) return;
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) return;
 
@@ -77,9 +86,20 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(networkFirst(req));
 });
 
+async function sideCache(req) {
+  const cache = await caches.open(remoteCacheName);
+  try {
+    const res = await fetch(req);
+    if (res.ok) cache.put(req.url, stripVary(res.clone()));
+    return res;
+  } catch {
+    return (await cache.match(req.url)) || Response.error();
+  }
+}
+
 async function currentCache() {
   if (currentBuild) return caches.open(cacheName(currentBuild));
-  const keys = (await caches.keys()).filter((k) => k.startsWith(`podium-${slug}-`)).sort();
+  const keys = (await caches.keys()).filter((k) => k.startsWith(`podium-${slug}-`) && k !== remoteCacheName).sort();
   return keys.length ? caches.open(keys[keys.length - 1]) : caches.open(cacheName('pending'));
 }
 

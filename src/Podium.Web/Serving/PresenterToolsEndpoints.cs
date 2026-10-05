@@ -272,6 +272,7 @@ public static class PresenterToolsEndpoints
         var hasNotes = deck.CurrentHasNotes ? "1" : "0";
         var hasSheet = deck.CurrentHasSlideSheet ? "1" : "0";
         var owner = isOwner ? "1" : "0";
+        var kind = deck.Kind.ToString().ToLowerInvariant();
         return $$"""
             <!doctype html>
             <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
@@ -279,7 +280,7 @@ public static class PresenterToolsEndpoints
             <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/icons/icon-192.png">
             <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
             <link rel="stylesheet" href="/css/remote.css">
-            </head><body data-slug="{{slug}}" data-has-notes="{{hasNotes}}" data-has-sheet="{{hasSheet}}" data-build="{{deck.CurrentBuildId}}" data-owner="{{owner}}">
+            </head><body data-slug="{{slug}}" data-has-notes="{{hasNotes}}" data-has-sheet="{{hasSheet}}" data-build="{{deck.CurrentBuildId}}" data-owner="{{owner}}" data-total="{{deck.CurrentSlideCount}}" data-kind="{{kind}}" data-title="{{title}}">
             <header>
               <a class="back" href="/" aria-label="Library" title="Library">‹</a>
               <div class="title">{{title}}</div>
@@ -287,28 +288,47 @@ public static class PresenterToolsEndpoints
             </header>
             <main>
               <section class="session" id="session" hidden></section>
-              <div class="counter"><span id="page">–</span><span class="of">/ <span id="total">–</span></span><span class="clicks" id="clicks"></span></div>
+              <section class="stage" id="stage" aria-label="Current slide">
+                <div class="stage-current" id="stage-current">
+                  <div class="thumb" id="thumb-current" hidden></div>
+                  <div class="stage-counter"><span id="page">–</span><span class="of"> / <span id="total">–</span></span><span class="clicks" id="clicks"></span></div>
+                  <div class="laser-dot" id="laser-dot" hidden></div>
+                  <div class="laser-hint" id="laser-hint" hidden>Drag to point</div>
+                </div>
+                <button class="stage-next" id="stage-next" type="button" aria-label="Next slide preview"><div class="thumb" id="thumb-next" hidden></div><span class="next-label">Next</span></button>
+              </section>
               <section class="notes" id="notes" hidden>
+                <div class="notes-head"><span class="label">Notes</span><span class="notes-tools"><button class="tiny" id="notes-smaller" aria-label="Smaller text">A−</button><button class="tiny" id="notes-larger" aria-label="Larger text">A+</button></span></div>
                 <div class="note-current" id="note-current"></div>
                 <div class="note-next"><span class="label">Next</span> <span id="note-next-title"></span><div id="note-next"></div></div>
               </section>
-              <div class="pad">
+              <div class="pad" id="pad">
                 <button class="nav prev" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 5-7 7 7 7"/></svg></button>
                 <button class="nav next" id="next" aria-label="Next"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 5 7 7-7 7"/></svg></button>
               </div>
-              <div class="row">
-                <button class="small" id="first">⇤ First</button>
+              <div class="row tools">
+                <button class="small" id="first" title="First slide">⇤ First</button>
                 <button class="small" id="goto" hidden>⊞ Go to</button>
+                <button class="small" id="laser" aria-pressed="false" title="Laser pointer: drag on the slide above">◉ Laser</button>
                 <button class="small" id="black" aria-pressed="false">■ Black</button>
                 <button class="small" id="message">💬 Message</button>
+                <button class="small" id="lock" title="Lock the controls (hold to unlock)">🔒 Lock</button>
               </div>
-              <div class="row" id="stopwatch-row">
-                <button class="small" id="timer-toggle">▶ Stopwatch</button>
+              <div class="row" id="timer-row">
+                <button class="small" id="timer-toggle">▶ Timer</button>
                 <button class="small" id="timer-reset" title="Reset">↺</button>
+                <span class="timer-scope faint" id="timer-scope"></span>
                 <span class="timer" id="timer">00:00</span>
               </div>
-              <div class="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B = black, G = go to.</div>
+              <nav class="agenda" id="agenda" aria-label="Slides" hidden></nav>
+              <div class="hint" id="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B black, G go to, L laser, T timer.</div>
             </main>
+            <div class="locked" id="locked" hidden>
+              <div class="locked-clock" id="locked-clock"></div>
+              <div class="locked-pos" id="locked-pos"></div>
+              <div class="locked-next" id="locked-next"></div>
+              <button class="unlock" id="unlock" type="button">Hold to unlock</button>
+            </div>
             <dialog id="goto-dialog"><div class="goto-head"><strong>Go to slide</strong><button class="small" id="goto-close">✕</button></div><div class="goto-grid" id="goto-grid"></div></dialog>
             <dialog id="message-dialog"><form method="dialog"><label>Message for the audience<input id="message-text" maxlength="300" placeholder="Demo in progress, back in a minute"></label><div class="row"><button class="small" value="show">Show</button><button class="small" value="clear">Clear</button><button class="small" value="cancel">Cancel</button></div></form></dialog>
             <dialog id="golive-dialog"><form method="dialog">
