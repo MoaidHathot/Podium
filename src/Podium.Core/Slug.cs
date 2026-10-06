@@ -22,6 +22,13 @@ public static partial class Slug
         return Normalize($"{repo}-{stem}");
     }
 
+    /// <summary>Slug for a variant deck: the folder's slug plus the variant label.</summary>
+    public static string ForVariant(string baseSlug, string variant) => Normalize($"{baseSlug}-{variant}");
+
+    /// <summary>Talk id: "{repo}-{folder}" by default, or "{repo}-{id}" when the talk declares its own id.</summary>
+    public static string ForTalk(string repo, string path, string? localId)
+        => string.IsNullOrWhiteSpace(localId) ? ForDeck(repo, path) : Normalize($"{repo}-{localId}");
+
     public static string Normalize(string input)
     {
         var s = input.Normalize(NormalizationForm.FormD);

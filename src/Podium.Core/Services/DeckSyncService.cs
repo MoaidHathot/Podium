@@ -6,14 +6,16 @@ using Podium.Core.Models;
 namespace Podium.Core.Services;
 
 /// <summary>
-/// Reconciles a source's repository tree with the deck index and queues builds for changed decks.
+/// Reconciles a source's repository tree with the deck index and queues builds for changed decks. Also indexes the
+/// talks described next to the decks (abstract.md + submissions/) and the speaker file at the repository root.
 /// </summary>
 public sealed class DeckSyncService(
     ISourceStore sources,
     IDeckStore decks,
     IRepositoryClient repos,
     BuildService builds,
-    ILogger<DeckSyncService> log)
+    ILogger<DeckSyncService> log,
+    ITalkStore? talks = null)
 {
     /// <summary>Scans a source. When <paramref name="changedPaths"/> is given (webhook), only decks touching those paths are rebuilt.</summary>
     public async Task<SyncResult> SyncAsync(Source source, IReadOnlyCollection<string>? changedPaths = null, bool forceRebuild = false, string? triggeredBy = null, CancellationToken ct = default)
@@ -21,9 +23,9 @@ public sealed class DeckSyncService(
         var (sha, committedAt) = await repos.GetHeadAsync(source, ct);
         var tree = await repos.ListTreeAsync(source, sha, ct);
         var treeSet = tree.Select(p => p.Replace('\\', '/').TrimStart('/')).ToHashSet(StringComparer.Ordinal);
-        var candidates = DeckDetector.Detect(tree);
-        // Directory-based decks are keyed by their directory; file-based ones (PowerPoint, PDF) by their full entry path.
-        var existing = (await decks.ListBySourceAsync(source.Id, ct)).ToDictionary(d => DeckKey(d.Kind, d.Path, d.Entry), StringComparer.Ordinal);
+        var candidates = DeckDetector.Detect(tree).ToList();
+        // Directory-based decks are keyed by their directory (plus variant); file-based ones (PowerPoint, PDF) by their full entry path.
+        var existing = (await decks.ListBySourceAsync(source.Id, ct)).ToDictionary(d => DeckKey(d.Kind, d.Path, d.Entry, d.Variant), StringComparer.Ordinal);
         var allDecks = await decks.ListAsync(includeArchived: true, ct);
         var takenSlugs = allDecks.Select(d => d.Slug).ToHashSet(StringComparer.Ordinal);
 
@@ -47,25 +49,51 @@ public sealed class DeckSyncService(
                 }
             }
         }
+        bool Touched(string path) => forceRebuild || effectiveChanged is null || effectiveChanged.Any(p => PathTouchesDeck(p, path));
 
         var result = new SyncResult();
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        // Repository-managed settings (.podium.yml), one per folder, honoured for trusted sources only. Read up front for
+        // every folder that changed, because the entry override decides which file is the main deck before slugs are given.
+        var configs = new Dictionary<string, DeckConfig?>(StringComparer.Ordinal);
+        foreach (var dir in candidates.Select(c => c.Path).Distinct(StringComparer.Ordinal))
+        {
+            var anyNew = candidates.Where(c => c.Path == dir).Any(c => !existing.ContainsKey(DeckKey(c.Kind, c.Path, c.Entry, c.Variant)));
+            if (source.Trusted && (anyNew || Touched(dir))) configs[dir] = await ReadConfigAsync(source, sha, dir, treeSet, ct);
+        }
+        candidates = ApplyEntryOverrides(candidates, configs);
+
+        // Talks, phase one: know every talk's id before decks are written, so members can point at it.
+        var talkDrafts = await LoadTalkDraftsAsync(source, sha, tree, Touched, forceRebuild, ct);
+        var talkIdByLocal = talkDrafts.Values.GroupBy(t => t.LocalId, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Id, StringComparer.Ordinal);
 
         // Aliases live in the slug namespace. Reserve every existing alias and assign all slugs up front, so an alias
         // declared by one deck can never collide with a slug minted for another deck later in the same pass.
         foreach (var a in allDecks.Select(d => d.Alias).Where(a => a is not null)) takenSlugs.Add(a!);
         var slugs = new Dictionary<DeckCandidate, string>();
-        foreach (var c in candidates)
+        foreach (var c in candidates.Where(c => c.Variant is null))
         {
-            existing.TryGetValue(DeckKey(c.Kind, c.Path, c.Entry), out var prevForSlug);
+            existing.TryGetValue(DeckKey(c.Kind, c.Path, c.Entry, null), out var prevForSlug);
             var s = prevForSlug?.Slug ?? UniqueSlug(DeckDetector.IsFileBased(c.Kind) ? Slug.ForFile(source.Repo, c.Entry) : Slug.ForDeck(source.Repo, c.Path), takenSlugs);
             takenSlugs.Add(s);
             slugs[c] = s;
         }
+        foreach (var c in candidates.Where(c => c.Variant is not null))
+        {
+            // Variants hang off their folder's main slug: "<folder-slug>-<variant>".
+            existing.TryGetValue(DeckKey(c.Kind, c.Path, c.Entry, c.Variant), out var prevForSlug);
+            var main = slugs.FirstOrDefault(kv => kv.Key.Path == c.Path && kv.Key.Variant is null && kv.Key.Kind == c.Kind).Value ?? Slug.ForDeck(source.Repo, c.Path);
+            var s = prevForSlug?.Slug ?? UniqueSlug(Slug.ForVariant(main, c.Variant!), takenSlugs);
+            takenSlugs.Add(s);
+            slugs[c] = s;
+        }
 
+        var written = new List<(DeckCandidate Candidate, Deck Deck, DeckConfig? Config)>();
+        var mainTitles = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var c in candidates)
         {
-            var key = DeckKey(c.Kind, c.Path, c.Entry);
+            var key = DeckKey(c.Kind, c.Path, c.Entry, c.Variant);
             seenKeys.Add(key);
             existing.TryGetValue(key, out var prev);
             var fileBased = DeckDetector.IsFileBased(c.Kind);
@@ -78,8 +106,14 @@ public sealed class DeckSyncService(
 
             var last = touched ? await repos.LastCommitForPathAsync(source, sha, fileBased ? c.EntryPath : c.Path, ct) : null;
 
-            // Repository-managed settings (.podium.yml next to the deck); honoured for trusted sources only.
-            var config = touched && source.Trusted && !fileBased ? await ReadConfigAsync(source, sha, c, treeSet, ct) : null;
+            configs.TryGetValue(c.Path, out var config);
+            // Folder-level settings apply to every deck in the folder; the title and alias name the folder's main deck only.
+            var folderConfig = fileBased ? null : config;
+            var titleConfig = c.Variant is null ? folderConfig?.Title : null;
+            var talkId = talkDrafts.TryGetValue(c.Path, out var homeTalk) ? homeTalk.Id
+                : config?.Talk is { } joined && talkIdByLocal.TryGetValue(joined, out var joinedId) ? joinedId
+                : config?.Talk is { } unknownTalk ? LogUnknownTalk(unknownTalk, c.Path) : (touched ? null : prev?.TalkId);
+            var variantTitle = c.Variant is not null && mainTitles.TryGetValue(c.Path, out var mt) ? $"{mt} ({c.Variant})" : null;
 
             var deck = (prev ?? new Deck
             {
@@ -88,29 +122,32 @@ public sealed class DeckSyncService(
                 Path = c.Path,
                 Entry = c.Entry,
                 Kind = c.Kind,
-                Visibility = config?.Visibility ?? Visibility.Private, // seeds new decks only; the UI wins afterwards
+                Visibility = folderConfig?.Visibility ?? Visibility.Private, // seeds new decks only; the UI wins afterwards
                 ExportPdf = c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf,
             }) with
             {
                 Entry = c.Entry,
                 Kind = c.Kind,
+                Variant = c.Variant,
+                TalkId = talkId,
                 Archived = false,
-                Title = config?.Title ?? metadata?.Title ?? prev?.Title ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
+                Title = titleConfig ?? metadata?.Title ?? prev?.Title ?? variantTitle ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
                 Author = metadata?.Author ?? prev?.Author,
                 Description = metadata?.Description ?? prev?.Description,
-                Tags = config?.Tags ?? metadata?.Tags ?? prev?.Tags ?? [],
-                ExportPdf = config?.ExportPdf ?? prev?.ExportPdf ?? (c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf),
-                ExportPptx = config?.ExportPptx ?? prev?.ExportPptx ?? false,
-                StripNotesForViewers = config?.StripNotes ?? prev?.StripNotesForViewers ?? true,
-                Audience = config?.Audience ?? prev?.Audience ?? AudienceSettings.Default,
-                Viewers = config?.Viewers ?? prev?.Viewers ?? ViewerSettings.Default,
+                Tags = folderConfig?.Tags ?? metadata?.Tags ?? prev?.Tags ?? [],
+                ExportPdf = folderConfig?.ExportPdf ?? prev?.ExportPdf ?? (c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf),
+                ExportPptx = folderConfig?.ExportPptx ?? prev?.ExportPptx ?? false,
+                StripNotesForViewers = folderConfig?.StripNotes ?? prev?.StripNotesForViewers ?? true,
+                Audience = folderConfig?.Audience ?? prev?.Audience ?? AudienceSettings.Default,
+                Viewers = folderConfig?.Viewers ?? prev?.Viewers ?? ViewerSettings.Default,
                 // Only declarative via .podium.yml (trusted repositories): a deck cannot grant itself scripts from the UI.
-                NpmScripts = source.Trusted && (config?.NpmScripts ?? prev?.NpmScripts ?? false),
+                NpmScripts = source.Trusted && (folderConfig?.NpmScripts ?? prev?.NpmScripts ?? false),
                 LastCommitSha = last?.Sha ?? prev?.LastCommitSha ?? sha,
                 LastCommitAt = last?.CommittedAt ?? prev?.LastCommitAt ?? committedAt,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
-            if (config?.Alias is { } alias && alias != deck.Alias)
+            if (c.Variant is null && !fileBased) mainTitles[c.Path] = deck.Title;
+            if (c.Variant is null && folderConfig?.Alias is { } alias && alias != deck.Alias)
             {
                 // A clash with any slug or another deck's alias is logged and skipped rather than hijacking a deck.
                 if (takenSlugs.Contains(alias)) log.LogWarning("Alias '{Alias}' for {Deck} is already in use; ignoring", alias, deck.Slug);
@@ -118,6 +155,7 @@ public sealed class DeckSyncService(
             }
 
             await decks.UpsertAsync(deck, ct);
+            written.Add((c, deck, config));
             if (prev is null) result.Added.Add(deck.Slug);
 
             var buildable = c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.Static or DeckKind.PowerPoint or DeckKind.Pdf;
@@ -140,9 +178,137 @@ public sealed class DeckSyncService(
             }
         }
 
+        // Talks, phase two: members (folder decks first, then joined decks), submission decks, Podium-side overlays.
+        if (talks is not null)
+        {
+            var existingTalks = (await talks.ListBySourceAsync(source.Id, ct)).ToDictionary(t => t.Path, StringComparer.Ordinal);
+            foreach (var (path, draft) in talkDrafts)
+            {
+                existingTalks.TryGetValue(path, out var prevTalk);
+                var members = written.Where(w => w.Deck.TalkId == draft.Id).OrderBy(w => w.Deck.Path == path ? 0 : 1).ThenBy(w => w.Deck.Variant is null ? 0 : 1).ThenBy(w => w.Deck.Slug, StringComparer.Ordinal).Select(w => w.Deck).ToList();
+                var mainMember = members.FirstOrDefault(m => m.Path == path && m.Variant is null) ?? members.FirstOrDefault();
+                var submissions = draft.Submissions.Select(s =>
+                {
+                    var prevSub = prevTalk?.Submissions.FirstOrDefault(p => p.Key == s.Key);
+                    return s with
+                    {
+                        DeckSlug = ResolveDeck(s.Deck, path, members, allDecks),
+                        SessionId = prevSub?.SessionId,
+                        SessionDeckSlug = prevSub?.SessionDeckSlug,
+                    };
+                }).ToList();
+                var talk = draft with
+                {
+                    Title = string.IsNullOrWhiteSpace(draft.Title) ? (mainMember?.Title is { Length: > 0 } mt2 ? mt2 : Humanize(path, source.Repo)) : draft.Title,
+                    Tags = draft.Tags.Count > 0 ? draft.Tags : (mainMember?.Tags ?? []),
+                    Submissions = submissions,
+                    DeckSlugs = members.Select(m => m.Slug).ToList(),
+                    LastCommitAt = draft.LastCommitAt ?? prevTalk?.LastCommitAt ?? committedAt,
+                    Archived = false,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                };
+                if (prevTalk is not null && prevTalk.Id != talk.Id) await talks.DeleteAsync(prevTalk.Id, ct); // id: changed in abstract.md
+                await talks.UpsertAsync(talk, ct);
+                if (prevTalk is null) result.TalksAdded.Add(talk.Id);
+            }
+            foreach (var (path, prevTalk) in existingTalks)
+            {
+                if (!talkDrafts.ContainsKey(path) && !prevTalk.Archived)
+                    await talks.UpsertAsync(prevTalk with { Archived = true, DeckSlugs = [], UpdatedAt = DateTimeOffset.UtcNow }, ct);
+            }
+
+            // Speaker file at the repository root.
+            var speakerPath = DeckDetector.DetectSpeaker(tree);
+            if (speakerPath is null) { if (await talks.GetSpeakerAsync(source.Id, ct) is not null) await talks.DeleteSpeakerAsync(source.Id, ct); }
+            else if (source.Trusted && (forceRebuild || effectiveChanged is null || effectiveChanged.Any(p => p.Replace('\\', '/').Equals(speakerPath, StringComparison.Ordinal)) || await talks.GetSpeakerAsync(source.Id, ct) is null))
+            {
+                try
+                {
+                    var text = await repos.ReadTextFileAsync(source, sha, speakerPath, ct);
+                    var speaker = text is null ? null : TalkFiles.ReadSpeaker(text, source.Id);
+                    if (speaker is null) log.LogWarning("Ignoring invalid speaker.md in {Source}", source.Id);
+                    else await talks.UpsertSpeakerAsync(speaker, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Failed reading speaker.md for {Source}", source.Id); }
+            }
+        }
+
         await sources.UpsertAsync(source with { LastSeenSha = sha, LastScannedAt = DateTimeOffset.UtcNow }, ct);
-        log.LogInformation("Synced {Source}@{Sha}: +{Added} ~{Queued} -{Archived}", source.Id, sha[..7], result.Added.Count, result.Queued.Count, result.Archived.Count);
+        log.LogInformation("Synced {Source}@{Sha}: +{Added} ~{Queued} -{Archived}, {Talks} talk(s)", source.Id, sha[..7], result.Added.Count, result.Queued.Count, result.Archived.Count, talkDrafts.Count);
         return result;
+    }
+
+    private string? LogUnknownTalk(string localId, string path)
+    {
+        log.LogWarning("{Path}/.podium.yml refers to talk '{Talk}', but no abstract.md declares it; the deck stays on its own", path, localId);
+        return null;
+    }
+
+    /// <summary>Reads abstract.md and submissions for every talk folder that is new or changed; keeps the stored talk otherwise.</summary>
+    private async Task<Dictionary<string, Talk>> LoadTalkDraftsAsync(Source source, string sha, IReadOnlyList<string> tree, Func<string, bool> touched, bool force, CancellationToken ct)
+    {
+        var drafts = new Dictionary<string, Talk>(StringComparer.Ordinal);
+        if (talks is null || !source.Trusted) return drafts;
+        var existing = (await talks.ListBySourceAsync(source.Id, ct)).ToDictionary(t => t.Path, StringComparer.Ordinal);
+        foreach (var tc in DeckDetector.DetectTalks(tree))
+        {
+            existing.TryGetValue(tc.Path, out var prev);
+            if (prev is not null && !force && !touched(tc.Path)) { drafts[tc.Path] = prev; continue; }
+            try
+            {
+                var text = await repos.ReadTextFileAsync(source, sha, tc.AbstractPath, ct);
+                var talk = text is null ? null : TalkFiles.ReadTalk(text, source.Repo, tc.Path, source.Id);
+                if (talk is null) { log.LogWarning("Ignoring invalid {File}", tc.AbstractPath); if (prev is not null) drafts[tc.Path] = prev; continue; }
+                var subs = new List<Submission>();
+                foreach (var file in tc.SubmissionFiles.Take(200))
+                {
+                    var st = await repos.ReadTextFileAsync(source, sha, tc.SubmissionPath(file), ct);
+                    var sub = st is null ? null : TalkFiles.ReadSubmission(st, file);
+                    if (sub is null) { log.LogWarning("Ignoring invalid submission {File}", tc.SubmissionPath(file)); continue; }
+                    subs.Add(sub);
+                }
+                var last = await repos.LastCommitForPathAsync(source, sha, tc.Path, ct);
+                drafts[tc.Path] = talk with { Submissions = subs.OrderByDescending(s => s.Date ?? DateOnly.MinValue).ThenBy(s => s.Key, StringComparer.Ordinal).ToList(), LastCommitAt = last?.CommittedAt };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogWarning(ex, "Failed reading talk files in {Path}", tc.Path);
+                if (prev is not null) drafts[tc.Path] = prev;
+            }
+        }
+        return drafts;
+    }
+
+    /// <summary>A submission's deck reference: an entry file name in the talk folder, a repository path, a slug or an alias.</summary>
+    private static string? ResolveDeck(string? reference, string talkPath, IReadOnlyList<Deck> members, IReadOnlyList<Deck> allDecks)
+    {
+        if (string.IsNullOrWhiteSpace(reference)) return null;
+        var r = reference.Trim().Replace('\\', '/').TrimStart('/').TrimEnd('/');
+        foreach (var m in members)
+        {
+            if (m.Entry.Equals(r, StringComparison.OrdinalIgnoreCase) || m.EntryPath.Equals(r, StringComparison.OrdinalIgnoreCase) || m.Path.Equals(r, StringComparison.OrdinalIgnoreCase)) return m.Slug;
+            if (m.Slug.Equals(r, StringComparison.OrdinalIgnoreCase) || (m.Alias is not null && m.Alias.Equals(r, StringComparison.OrdinalIgnoreCase))) return m.Slug;
+            if (m.Variant is not null && m.Variant.Equals(Slug.Normalize(r), StringComparison.Ordinal)) return m.Slug;
+        }
+        var byPath = allDecks.FirstOrDefault(d => !d.Archived && (d.EntryPath.Equals(r, StringComparison.OrdinalIgnoreCase) || (d.Path.Equals(r, StringComparison.OrdinalIgnoreCase) && d.Variant is null) || d.Slug.Equals(r, StringComparison.OrdinalIgnoreCase) || (d.Alias is not null && d.Alias.Equals(r, StringComparison.OrdinalIgnoreCase))));
+        return byPath?.Slug;
+    }
+
+    /// <summary>presenterm: <c>entry:</c> in .podium.yml names the file the plain deck URL serves; the detector's pick becomes a variant.</summary>
+    private static List<DeckCandidate> ApplyEntryOverrides(List<DeckCandidate> candidates, Dictionary<string, DeckConfig?> configs)
+    {
+        foreach (var (dir, cfg) in configs)
+        {
+            if (cfg?.Entry is not { } entry) continue;
+            var group = candidates.Where(c => c.Path == dir && c.Kind == DeckKind.Presenterm).ToList();
+            var wanted = group.FirstOrDefault(c => c.Entry.Equals(entry, StringComparison.OrdinalIgnoreCase));
+            var main = group.FirstOrDefault(c => c.Variant is null);
+            if (wanted is null || main is null || wanted == main) continue;
+            var stem = main.Entry[..^3];
+            candidates[candidates.IndexOf(main)] = main with { Variant = Slug.Normalize(stem) };
+            candidates[candidates.IndexOf(wanted)] = wanted with { Variant = null };
+        }
+        return candidates.OrderBy(c => c.Path, StringComparer.Ordinal).ThenBy(c => c.Variant is null ? 0 : 1).ThenBy(c => c.Entry, StringComparer.Ordinal).ToList();
     }
 
     private async Task<DeckMetadata?> ReadMetadataAsync(Source source, string sha, DeckCandidate c, CancellationToken ct)
@@ -165,27 +331,27 @@ public sealed class DeckSyncService(
         }
     }
 
-    private async Task<DeckConfig?> ReadConfigAsync(Source source, string sha, DeckCandidate c, IReadOnlySet<string> tree, CancellationToken ct)
+    private async Task<DeckConfig?> ReadConfigAsync(Source source, string sha, string dir, IReadOnlySet<string> tree, CancellationToken ct)
     {
         foreach (var name in DeckConfig.FileNames)
         {
-            var path = string.IsNullOrEmpty(c.Path) ? name : $"{c.Path}/{name}";
+            var path = string.IsNullOrEmpty(dir) ? name : $"{dir}/{name}";
             if (!tree.Contains(path)) continue; // no API call for the common case of no config file
             try
             {
                 var text = await repos.ReadTextFileAsync(source, sha, path, ct);
                 if (text is null) continue;
                 var cfg = DeckConfig.Parse(text);
-                if (cfg is null) log.LogWarning("Ignoring invalid {File} in {Deck}", name, c.Path);
+                if (cfg is null) log.LogWarning("Ignoring invalid {File} in {Deck}", name, dir);
                 return cfg;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Failed reading {File} for {Deck}", name, c.Path); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "Failed reading {File} for {Deck}", name, dir); }
         }
         return null;
     }
 
-    private static string DeckKey(DeckKind kind, string path, string entry)
-        => DeckDetector.IsFileBased(kind) ? $"file:{(string.IsNullOrEmpty(path) ? entry : $"{path}/{entry}")}" : $"dir:{path}";
+    private static string DeckKey(DeckKind kind, string path, string entry, string? variant)
+        => DeckDetector.IsFileBased(kind) ? $"file:{(string.IsNullOrEmpty(path) ? entry : $"{path}/{entry}")}" : variant is null ? $"dir:{path}" : $"dir:{path}#{variant}";
 
     private static bool PathIsFile(string changed, string entryPath)
     {
@@ -232,4 +398,5 @@ public sealed class SyncResult
     public List<string> Added { get; } = [];
     public List<string> Queued { get; } = [];
     public List<string> Archived { get; } = [];
+    public List<string> TalksAdded { get; } = [];
 }

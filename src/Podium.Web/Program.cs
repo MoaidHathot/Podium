@@ -47,6 +47,7 @@ if (string.Equals(storage.ConnectionString, "memory", StringComparison.OrdinalIg
     builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
     builder.Services.AddSingleton<IAccessRequestStore, InMemoryAccessRequestStore>();
     builder.Services.AddSingleton<IDeviceStore, InMemoryDeviceStore>();
+    builder.Services.AddSingleton<ITalkStore, InMemoryTalkStore>();
     builder.Services.AddSingleton<IAuditStore, InMemoryAuditStore>();
     builder.Services.AddSingleton<ISettingsStore, InMemorySettingsStore>();
     builder.Services.AddSingleton<IArtifactStore, LocalArtifactStore>();
@@ -75,6 +76,7 @@ else
     builder.Services.AddSingleton<ISessionStore, TableSessionStore>();
     builder.Services.AddSingleton<IAccessRequestStore, TableAccessRequestStore>();
     builder.Services.AddSingleton<IDeviceStore, TableDeviceStore>();
+    builder.Services.AddSingleton<ITalkStore, TableTalkStore>();
     builder.Services.AddSingleton<IAuditStore, TableAuditStore>();
     builder.Services.AddSingleton<ISettingsStore, TableSettingsStore>();
     builder.Services.AddSingleton<IArtifactStore, BlobArtifactStore>();

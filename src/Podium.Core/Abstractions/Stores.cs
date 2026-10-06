@@ -162,3 +162,16 @@ public interface IDeviceStore
     Task UpsertAsync(Device device, CancellationToken ct = default);
     Task DeleteAsync(string principal, string sid, CancellationToken ct = default);
 }
+
+public interface ITalkStore
+{
+    Task<Talk?> GetAsync(string id, CancellationToken ct = default);
+    Task<IReadOnlyList<Talk>> ListAsync(bool includeArchived = false, CancellationToken ct = default);
+    Task<IReadOnlyList<Talk>> ListBySourceAsync(string sourceId, CancellationToken ct = default);
+    Task UpsertAsync(Talk talk, CancellationToken ct = default);
+    Task DeleteAsync(string id, CancellationToken ct = default);
+    Task<Speaker?> GetSpeakerAsync(string sourceId, CancellationToken ct = default);
+    Task<IReadOnlyList<Speaker>> ListSpeakersAsync(CancellationToken ct = default);
+    Task UpsertSpeakerAsync(Speaker speaker, CancellationToken ct = default);
+    Task DeleteSpeakerAsync(string sourceId, CancellationToken ct = default);
+}

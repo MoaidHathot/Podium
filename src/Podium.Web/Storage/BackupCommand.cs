@@ -11,7 +11,7 @@ namespace Podium.Web.Storage;
 /// </summary>
 public static class BackupCommand
 {
-    public static readonly string[] Tables = ["sources", "decks", "builds", "activebuilds", "grants", "sharelinks", "views", "deckviews", "recentdismissals", "sessions", "livesessions", "accessrequests", "audit", "settings", "devices"];
+    public static readonly string[] Tables = ["sources", "decks", "builds", "activebuilds", "grants", "sharelinks", "views", "deckviews", "recentdismissals", "sessions", "livesessions", "accessrequests", "audit", "settings", "devices", "talks"];
 
     public static async Task<int> RunAsync(TableServiceClient tables, BlobServiceClient blobs, string prefix, TextWriter output, CancellationToken ct)
     {

@@ -134,3 +134,20 @@ public sealed class InMemoryDeviceStore : IDeviceStore
     public Task UpsertAsync(Device device, CancellationToken ct = default) { _items[(device.Principal, device.Sid)] = device; return Task.CompletedTask; }
     public Task DeleteAsync(string principal, string sid, CancellationToken ct = default) { _items.TryRemove((principal, sid), out _); return Task.CompletedTask; }
 }
+
+public sealed class InMemoryTalkStore : ITalkStore
+{
+    private readonly ConcurrentDictionary<string, Talk> _talks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Speaker> _speakers = new(StringComparer.Ordinal);
+    public Task<Talk?> GetAsync(string id, CancellationToken ct = default) => Task.FromResult(_talks.GetValueOrDefault(id));
+    public Task<IReadOnlyList<Talk>> ListAsync(bool includeArchived = false, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<Talk>>(_talks.Values.Where(t => includeArchived || !t.Archived).OrderBy(t => t.Title, StringComparer.OrdinalIgnoreCase).ToList());
+    public Task<IReadOnlyList<Talk>> ListBySourceAsync(string sourceId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<Talk>>(_talks.Values.Where(t => t.SourceId == sourceId).ToList());
+    public Task UpsertAsync(Talk talk, CancellationToken ct = default) { _talks[talk.Id] = talk; return Task.CompletedTask; }
+    public Task DeleteAsync(string id, CancellationToken ct = default) { _talks.TryRemove(id, out _); return Task.CompletedTask; }
+    public Task<Speaker?> GetSpeakerAsync(string sourceId, CancellationToken ct = default) => Task.FromResult(_speakers.GetValueOrDefault(sourceId));
+    public Task<IReadOnlyList<Speaker>> ListSpeakersAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Speaker>>(_speakers.Values.ToList());
+    public Task UpsertSpeakerAsync(Speaker speaker, CancellationToken ct = default) { _speakers[speaker.SourceId] = speaker; return Task.CompletedTask; }
+    public Task DeleteSpeakerAsync(string sourceId, CancellationToken ct = default) { _speakers.TryRemove(sourceId, out _); return Task.CompletedTask; }
+}

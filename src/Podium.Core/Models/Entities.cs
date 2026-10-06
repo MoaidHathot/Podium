@@ -36,6 +36,13 @@ public sealed record Deck
     public required string Slug { get; init; }
     /// <summary>Optional short alias (also unique across decks); /d/{alias}/ redirects to the canonical slug.</summary>
     public string? Alias { get; init; }
+    /// <summary>
+    /// Variant label for a deck that is one of several entry files in its folder (Slidev <c>slides.&lt;variant&gt;.md</c>,
+    /// presenterm dated files): null for the folder's main deck. Its slug is the folder slug plus the label.
+    /// </summary>
+    public string? Variant { get; init; }
+    /// <summary>The talk this deck belongs to (its folder has an abstract.md, or .podium.yml says <c>talk:</c>).</summary>
+    public string? TalkId { get; init; }
     public required string SourceId { get; init; }
     /// <summary>Directory of the deck relative to repo root, forward slashes, no leading/trailing slash. Empty for repo root.</summary>
     public required string Path { get; init; }
@@ -337,4 +344,110 @@ public sealed record Device
     public string? Ip { get; init; }
     public bool Revoked { get; init; }
     public DateTimeOffset? RevokedAt { get; init; }
+}
+
+/// <summary>A named section of a talk, submission or speaker file: the text under a <c>## Heading</c>.</summary>
+public sealed record TalkPart(string Name, string Markdown)
+{
+    /// <summary>Heading normalised for lookups: lower case, letters/digits only ("Short abstract" -> "shortabstract").</summary>
+    public string Key => Normalize(Name);
+    public static string Normalize(string name) => new(name.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+}
+
+/// <summary>
+/// A session you can give: the canonical abstract and its parts, how long it runs, which decks are its variants and
+/// where it was submitted or delivered. Read from <c>abstract.md</c> in a deck folder (trusted sources only) and the
+/// files under <c>submissions/</c> next to it; decks in other folders join with <c>talk:</c> in their .podium.yml.
+/// </summary>
+public sealed record Talk
+{
+    /// <summary>"{repo}-{folder}" by default, or "{repo}-{id}" when abstract.md sets <c>id:</c>; unique across sources.</summary>
+    public required string Id { get; init; }
+    /// <summary>The id as written in the repository (what <c>talk:</c> references), without the repo prefix.</summary>
+    public required string LocalId { get; init; }
+    public required string SourceId { get; init; }
+    /// <summary>Folder holding abstract.md (the talk's home).</summary>
+    public required string Path { get; init; }
+    public string Title { get; init; } = "";
+    /// <summary>beginner | intermediate | advanced (free text, lower case).</summary>
+    public string? Level { get; init; }
+    /// <summary>Formats you can do, in minutes.</summary>
+    public IReadOnlyList<int> Durations { get; init; } = [];
+    /// <summary>available | draft | retired.</summary>
+    public string Status { get; init; } = "available";
+    /// <summary>Listed on the public speaker page.</summary>
+    public bool Public { get; init; }
+    public IReadOnlyList<string> Tags { get; init; } = [];
+    /// <summary>The canonical abstract: the body of abstract.md before the first <c>##</c> heading.</summary>
+    public string Abstract { get; init; } = "";
+    /// <summary>Further sections (Short abstract, Outline, Takeaways, Bio, ...).</summary>
+    public IReadOnlyList<TalkPart> Parts { get; init; } = [];
+    public IReadOnlyList<Submission> Submissions { get; init; } = [];
+    /// <summary>Slugs of the decks that are variants of this talk (folder members first, then joined decks).</summary>
+    public IReadOnlyList<string> DeckSlugs { get; init; } = [];
+    public DateTimeOffset? LastCommitAt { get; init; }
+    public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public bool Archived { get; init; }
+
+    public TalkPart? Part(string name) { var k = TalkPart.Normalize(name); return Parts.FirstOrDefault(p => p.Key == k); }
+    /// <summary>The short abstract when there is one, else the first paragraph of the canonical abstract.</summary>
+    public string ShortAbstract => Part("short abstract")?.Markdown ?? Part("short")?.Markdown ?? FirstParagraph(Abstract);
+    public static string FirstParagraph(string markdown)
+    {
+        var text = markdown.Replace("\r\n", "\n").Trim();
+        var i = text.IndexOf("\n\n", StringComparison.Ordinal);
+        return i < 0 ? text : text[..i].Trim();
+    }
+}
+
+/// <summary>One event a talk was submitted to or delivered at: a file under <c>submissions/</c>.</summary>
+public sealed record Submission
+{
+    /// <summary>File name without extension; stable across syncs, so Podium-side links (the live session) survive edits.</summary>
+    public required string Key { get; init; }
+    public string Event { get; init; } = "";
+    public DateOnly? Date { get; init; }
+    /// <summary>submitted | accepted | declined | delivered | cancelled.</summary>
+    public string Status { get; init; } = "submitted";
+    /// <summary>talk | workshop | lightning | keynote | panel | course | webinar.</summary>
+    public string Format { get; init; } = "talk";
+    public int? Duration { get; init; }
+    /// <summary>Title as submitted, when it differs from the talk's.</summary>
+    public string? Title { get; init; }
+    /// <summary>The deck used: an entry file name in the talk folder, a repository path, or a deck slug.</summary>
+    public string? Deck { get; init; }
+    /// <summary>Resolved slug of <see cref="Deck"/> (null when it did not match a known deck).</summary>
+    public string? DeckSlug { get; init; }
+    public string? Location { get; init; }
+    public string? Url { get; init; }
+    public string? Recording { get; init; }
+    public string? Notes { get; init; }
+    /// <summary>Abstract exactly as submitted (empty: the talk's canonical abstract applied).</summary>
+    public string? Abstract { get; init; }
+    public IReadOnlyList<TalkPart> Parts { get; init; } = [];
+    /// <summary>Live session Podium matched to this delivery (set when a session on the deck ends around the date).</summary>
+    public string? SessionId { get; init; }
+    public string? SessionDeckSlug { get; init; }
+
+    public string EffectiveTitle(Talk talk) => string.IsNullOrWhiteSpace(Title) ? talk.Title : Title!;
+    public string EffectiveAbstract(Talk talk) => string.IsNullOrWhiteSpace(Abstract) ? talk.Abstract : Abstract!;
+    public bool IsPublicFact => Status is "accepted" or "delivered";
+    public TalkPart? Part(string name) { var k = TalkPart.Normalize(name); return Parts.FirstOrDefault(p => p.Key == k); }
+}
+
+/// <summary>The speaker, from <c>speaker.md</c> at the repository root: bio variants, photo, links.</summary>
+public sealed record Speaker
+{
+    public required string SourceId { get; init; }
+    public string Name { get; init; } = "";
+    public string? Tagline { get; init; }
+    public string? Photo { get; init; }
+    public IReadOnlyList<KeyValuePair<string, string>> Links { get; init; } = [];
+    /// <summary>Body before the first <c>##</c>: the default (long) bio.</summary>
+    public string Bio { get; init; } = "";
+    public IReadOnlyList<TalkPart> Parts { get; init; } = [];
+    public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    public TalkPart? Part(string name) { var k = TalkPart.Normalize(name); return Parts.FirstOrDefault(p => p.Key == k); }
+    public string ShortBio => Part("short bio")?.Markdown ?? Part("short")?.Markdown ?? Talk.FirstParagraph(Bio);
 }

@@ -18,9 +18,11 @@ namespace Podium.Core.Discovery;
 /// viewers:
 ///   presenterView: false   # non-presenters may open the presenter view / notes viewer
 ///   browseAhead: false     # while live, non-presenters may move past your slide
+/// talk: my-talk-id         # this deck is a variant of the talk whose abstract.md lives in another folder
+/// entry: 2025_11_18.md     # presenterm: which markdown file the plain deck URL serves (default: newest dated file)
 /// </code>
 /// </summary>
-public sealed record DeckConfig(string? Title, string? Alias, IReadOnlyList<string>? Tags, bool? ExportPdf, bool? ExportPptx, bool? StripNotes, Visibility? Visibility, bool? NpmScripts, AudienceSettings? Audience = null, ViewerSettings? Viewers = null)
+public sealed record DeckConfig(string? Title, string? Alias, IReadOnlyList<string>? Tags, bool? ExportPdf, bool? ExportPptx, bool? StripNotes, Visibility? Visibility, bool? NpmScripts, AudienceSettings? Audience = null, ViewerSettings? Viewers = null, string? Talk = null, string? Entry = null)
 {
     public static readonly string[] FileNames = [".podium.yml", ".podium.yaml", "podium.yml"];
 
@@ -70,7 +72,10 @@ public sealed record DeckConfig(string? Title, string? Alias, IReadOnlyList<stri
                 var dv = ViewerSettings.Default;
                 viewers = new ViewerSettings(VBool(dv.PresenterView, "presenterView", "presenter_view"), VBool(dv.BrowseAhead, "browseAhead", "browse_ahead"));
             }
-            return new DeckConfig(string.IsNullOrEmpty(title) ? null : title.Length > 200 ? title[..200] : title, alias, tags, Bool("exportPdf") ?? Bool("export_pdf"), Bool("exportPptx") ?? Bool("export_pptx"), Bool("stripNotes") ?? Bool("strip_notes"), vis, Bool("npmScripts") ?? Bool("npm_scripts"), audience, viewers);
+            var talkRef = Str("talk") is { } talkRaw && Core.Slug.Normalize(talkRaw) is { Length: >= 2 } talkNorm ? talkNorm : null;
+            var entry = Str("entry")?.Trim();
+            if (entry is not null && (entry.Length > 200 || entry.Contains('/') || entry.Contains('\\') || !entry.EndsWith(".md", StringComparison.OrdinalIgnoreCase))) entry = null;
+            return new DeckConfig(string.IsNullOrEmpty(title) ? null : title.Length > 200 ? title[..200] : title, alias, tags, Bool("exportPdf") ?? Bool("export_pdf"), Bool("exportPptx") ?? Bool("export_pptx"), Bool("stripNotes") ?? Bool("strip_notes"), vis, Bool("npmScripts") ?? Bool("npm_scripts"), audience, viewers, talkRef, entry);
         }
         catch (YamlDotNet.Core.YamlException) { return null; }
     }

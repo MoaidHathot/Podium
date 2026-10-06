@@ -601,3 +601,99 @@ public sealed class TableDeviceStore(TableClients tables) : IDeviceStore
         catch (RequestFailedException ex) when (ex.Status == 404) { }
     }
 }
+
+public sealed class TableTalkStore(TableClients tables) : ITalkStore
+{
+    private const string Table = "talks";
+    private const string SpeakerPartition = "speaker";
+
+    public async Task<Talk?> GetAsync(string id, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        // Ids are unique across sources; the partition is the source, so look the id up through the small index partition.
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.RowKey == TableJson.Key(id), cancellationToken: ct))
+        {
+            if (e.PartitionKey == SpeakerPartition) continue;
+            return TableJson.Deserialize<Talk>(e);
+        }
+        return null;
+    }
+
+    public async Task<IReadOnlyList<Talk>> ListAsync(bool includeArchived = false, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var list = new List<Talk>();
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey != SpeakerPartition, cancellationToken: ct))
+        {
+            var talk = TableJson.Deserialize<Talk>(e);
+            if (talk is not null && (includeArchived || !talk.Archived)) list.Add(talk);
+        }
+        return list.OrderBy(x => x.Title, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public async Task<IReadOnlyList<Talk>> ListBySourceAsync(string sourceId, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var pk = TableJson.Key(sourceId);
+        var list = new List<Talk>();
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey == pk, cancellationToken: ct))
+        {
+            var talk = TableJson.Deserialize<Talk>(e);
+            if (talk is not null) list.Add(talk);
+        }
+        return list;
+    }
+
+    public async Task UpsertAsync(Talk talk, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await t.UpsertEntityAsync(new TableEntity(TableJson.Key(talk.SourceId), TableJson.Key(talk.Id)) { ["Json"] = TableJson.Serialize(talk), ["Public"] = talk.Public, ["Archived"] = talk.Archived }, TableUpdateMode.Replace, ct);
+    }
+
+    public async Task DeleteAsync(string id, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.RowKey == TableJson.Key(id), cancellationToken: ct))
+        {
+            if (e.PartitionKey == SpeakerPartition) continue;
+            try { await t.DeleteEntityAsync(e.PartitionKey, e.RowKey, cancellationToken: ct); }
+            catch (RequestFailedException ex) when (ex.Status == 404) { }
+        }
+    }
+
+    public async Task<Speaker?> GetSpeakerAsync(string sourceId, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try
+        {
+            var e = await t.GetEntityAsync<TableEntity>(SpeakerPartition, TableJson.Key(sourceId), cancellationToken: ct);
+            return TableJson.Deserialize<Speaker>(e.Value);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+    }
+
+    public async Task<IReadOnlyList<Speaker>> ListSpeakersAsync(CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var list = new List<Speaker>();
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey == SpeakerPartition, cancellationToken: ct))
+        {
+            var s = TableJson.Deserialize<Speaker>(e);
+            if (s is not null) list.Add(s);
+        }
+        return list;
+    }
+
+    public async Task UpsertSpeakerAsync(Speaker speaker, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await t.UpsertEntityAsync(new TableEntity(SpeakerPartition, TableJson.Key(speaker.SourceId)) { ["Json"] = TableJson.Serialize(speaker) }, TableUpdateMode.Replace, ct);
+    }
+
+    public async Task DeleteSpeakerAsync(string sourceId, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try { await t.DeleteEntityAsync(SpeakerPartition, TableJson.Key(sourceId), cancellationToken: ct); }
+        catch (RequestFailedException ex) when (ex.Status == 404) { }
+    }
+}
