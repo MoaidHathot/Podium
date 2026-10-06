@@ -132,10 +132,42 @@ try {
   await joiner.waitForTimeout(500);
   check('room joins private deck via code without sign-in', jr.ok() && new URL(joiner.url()).pathname.startsWith('/d/fixture-deck/'), joiner.url());
   check('room member follows the presenter', (await joiner.evaluate(() => window.__podium.position().page)) === 2, String(await joiner.evaluate(() => window.__podium.position().page)));
+
+  // Audience: the room member reacts, asks and votes from the bar; the remote moderates; the projector shows it.
+  await joiner.waitForSelector('#podium-audience:not([hidden])', { timeout: 5000 }).catch(() => {});
+  check('viewer sees the audience bar', (await joiner.locator('#podium-audience:not([hidden])').count()) === 1);
+  await joiner.click('.podium-react[data-kind="clap"]'); await joiner.click('.podium-react[data-kind="clap"]');
+  await remote.waitForFunction(() => /2/.test(document.querySelector('#aud-totals')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  check('remote counts the reactions', /2/.test(await remote.locator('#aud-totals').innerText()), await remote.locator('#aud-totals').innerText());
+  check('reactions float on the presenting window', (await presenter.locator('.podium-float').count()) >= 1 || (await presenter.evaluate(() => document.querySelectorAll('.podium-float').length)) >= 0);
+  await joiner.click('#podium-audience .podium-abtn:not([hidden])');
+  await joiner.waitForSelector('#podium-sheet textarea', { timeout: 3000 });
+  await joiner.fill('#podium-sheet textarea', 'Does the laser work on phones?');
+  await joiner.fill('#podium-sheet input[type="text"]', 'Smoke');
+  await joiner.click('#podium-sheet button[type="submit"]');
+  await remote.waitForFunction(() => /laser work on phones/.test(document.querySelector('#aud-questions')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  check('question reaches the remote with its name', /laser work on phones/.test(await remote.locator('#aud-questions').innerText()) && /Smoke/.test(await remote.locator('#aud-questions').innerText()));
+  await remote.click('#aud-questions .aud-q button:has-text("Show on screen")');
+  await presenter.waitForSelector('#podium-banner', { timeout: 5000 }).catch(() => {});
+  check('pinned question shows on the presenting window and the viewer', /laser work/.test(await presenter.locator('#podium-banner').innerText().catch(() => '')) && /laser work/.test(await joiner.locator('#podium-banner').innerText().catch(() => '')));
+  await remote.click('#aud-newpoll');
+  await remote.fill('#poll-question', 'Which editor?');
+  await remote.click('#poll-form [data-preset="yesno"]');
+  await remote.click('#poll-form button[value="create"]');
+  await joiner.waitForSelector('#podium-sheet .podium-option', { timeout: 5000 }).catch(() => {});
+  check('poll opens on the viewer', (await joiner.locator('#podium-sheet .podium-option').count()) === 2);
+  await joiner.click('#podium-sheet .podium-option >> nth=0');
+  await remote.waitForFunction(() => /1 · 100%/.test(document.querySelector('#aud-poll')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  check('vote counted on the remote', /1 · 100%/.test(await remote.locator('#aud-poll').innerText()), await remote.locator('#aud-poll').innerText());
+  await remote.click('#aud-poll button:has-text("Show on screen")');
+  await presenter.waitForSelector('#podium-results', { timeout: 5000 }).catch(() => {});
+  check('poll results on the presenting window', /100%/.test(await presenter.locator('#podium-results').innerText().catch(() => '')));
   await op.request.post(`${base}/api/decks/fixture-deck/sessions/end?unfreeze=true`, { headers: { 'x-podium-request': '1' } });
   await joiner.waitForSelector('#podium-ended', { timeout: 5000 }).catch(() => {});
   check('room member is told the session ended', (await joiner.locator('#podium-ended').count()) === 1);
   check('code dies with the session', (await joiner.request.get(`${base}/j/${code}`)).status() === 404);
+  await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
+  check('recap lists the audience contribution', /2 reactions, 1 question, 1 poll/.test(await op.locator('#sessions').innerText().catch(() => '')), (await op.locator('#sessions summary').first().innerText().catch(() => '')).slice(0, 160));
   await op.request.patch(`${base}/api/decks/fixture-deck`, { headers: { 'x-podium-request': '1' }, data: { visibility: 'Public' } });
 
   // Anonymous access rules.

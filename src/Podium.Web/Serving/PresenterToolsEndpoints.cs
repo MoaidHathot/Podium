@@ -348,6 +348,18 @@ public static class PresenterToolsEndpoints
                 <span class="timer" id="timer">00:00</span>
               </div>
               <nav class="agenda" id="agenda" aria-label="Slides" hidden></nav>
+              <section class="audience" id="audience" hidden aria-label="Audience">
+                <div class="aud-head">
+                  <strong>Audience</strong>
+                  <span class="aud-totals" id="aud-totals"></span>
+                  <span class="aud-actions">
+                    <button class="small" id="aud-newpoll" title="Ask the room a question">＋ Poll</button>
+                    <button class="small" id="aud-mute" aria-pressed="false" title="Silence reactions, questions and votes">🔇 Mute</button>
+                  </span>
+                </div>
+                <div class="aud-poll" id="aud-poll" hidden></div>
+                <ul class="aud-questions" id="aud-questions"></ul>
+              </section>
               <div class="hint" id="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B black, G go to, L laser, T timer.</div>
             </main>
             <div class="locked" id="locked" hidden>
@@ -367,6 +379,14 @@ public static class PresenterToolsEndpoints
               <div class="row"><button class="small primary" value="start">Go live</button><button class="small" value="cancel">Cancel</button></div>
             </form></dialog>
             <dialog id="plan-dialog"><form method="dialog"><label>Planned length (minutes)<input id="plan-minutes" type="number" min="1" max="600" inputmode="numeric"></label><div class="row"><button class="small primary" value="set">Update</button><button class="small" value="cancel">Cancel</button></div></form></dialog>
+            <dialog id="poll-dialog"><form method="dialog" id="poll-form">
+              <strong>New poll</strong>
+              <p class="dialog-hint">The room votes on their phones; you decide when the results go on screen. One poll runs at a time.</p>
+              <label>Question<input id="poll-question" maxlength="200" placeholder="Which editor do you use?" autocomplete="off"></label>
+              <div class="row presets"><span class="faint">Presets:</span><button type="button" class="small" data-preset="yesno">Yes / No</button><button type="button" class="small" data-preset="scale">1 – 5</button><button type="button" class="small" data-preset="abcd">A B C D</button></div>
+              <div id="poll-options" class="poll-options"></div>
+              <div class="row"><button class="small primary" value="create">Start poll</button><button class="small" value="cancel">Cancel</button></div>
+            </form></dialog>
             <script src="/js/remote.js"></script>
             </body></html>
             """;

@@ -43,6 +43,7 @@
   function el(tag, attrs, children) {
     var e = document.createElement(tag);
     if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (attrs[k] === null || attrs[k] === undefined || attrs[k] === false) return;
       if (k === 'text') e.textContent = attrs[k];
       else if (k === 'class') e.className = attrs[k];
       else if (k === 'hidden') { if (attrs[k]) e.hidden = true; }
@@ -201,7 +202,7 @@
       if (pop && popKind === kind) { closePop(); return; }
       closePop();
       popKind = kind;
-      pop = el('div', { id: 'podium-pop', role: 'dialog', 'aria-label': kind === 'join' ? 'Join this talk' : kind === 'remote' ? 'Phone remote' : 'Go live' });
+      pop = el('div', { id: 'podium-pop', role: 'dialog', 'aria-label': kind === 'join' ? 'Join this talk' : kind === 'remote' ? 'Phone remote' : kind === 'audience' ? 'From the room' : 'Go live' });
       if (kind === 'remote' && !cfg.external) {
         var remoteUrl = location.origin + '/d/' + encodeURIComponent(cfg.slug) + '/remote';
         pop.appendChild(el('h3', { text: 'Phone remote' }));
@@ -251,6 +252,8 @@
         row2.append(cancel, startBtn);
         pop.appendChild(row2);
         setTimeout(function () { minutes.focus(); minutes.select(); }, 0);
+      } else if (kind === 'audience') {
+        renderAudiencePop();
       } else { pop = null; popKind = null; return; }
       ui.appendChild(pop);
       document.addEventListener('keydown', escClose);
@@ -319,9 +322,240 @@
       ]));
     }
 
+    // ---- Audience: reactions, questions, polls --------------------------------------------------------------
+    // Viewers get a bar (react / ask / vote), everyone sees floating reactions, the pinned question and shown poll
+    // results; the presenter view gets counters and a moderation popover. The server decides what is allowed.
+    var EMOJI = { clap: '\uD83D\uDC4F', heart: '\u2764\uFE0F', laugh: '\uD83D\uDE02', think: '\uD83E\uDD14', up: '\uD83D\uDC4D', party: '\uD83C\uDF89' };
+    var KINDS = ['clap', 'heart', 'laugh', 'think', 'up', 'party'];
+    var aud = { live: false, muted: false, settings: { reactions: false, questions: false, polls: false, floatReactions: false, nicknames: false }, totals: {}, questions: [], poll: null };
+    var cid = null, myQuestions = {}, myUpvotes = {}, myVotes = {};
+    try {
+      cid = localStorage.getItem('podium-cid');
+      if (!cid || !/^[A-Za-z0-9_-]{16,40}$/.test(cid)) { cid = Array.from(crypto.getRandomValues(new Uint8Array(20)), function (b) { return 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[b % 62]; }).join(''); localStorage.setItem('podium-cid', cid); }
+      myUpvotes = JSON.parse(localStorage.getItem('podium-upvotes-' + cfg.slug) || '{}'); myVotes = JSON.parse(localStorage.getItem('podium-votes-' + cfg.slug) || '{}');
+    } catch (e) { cid = cid || 'anon' + Math.random().toString(36).slice(2, 14) + Math.random().toString(36).slice(2, 8); }
+    var bar = null, barParts = null, sheet = null, sheetKind = null, banner = null, resultsEl = null, floatCount = 0;
+    var canReact = function () { return aud.live && !aud.muted && aud.settings.reactions; };
+    var canAsk = function () { return aud.live && !aud.muted && aud.settings.questions; };
+    var pollOpen = function () { return aud.live && aud.settings.polls && aud.poll && (aud.poll.open || aud.poll.shown); };
+    var isViewer = function () { return !bridge.canSend; };
+    var isProjector = function () { return bridge.canSend && !isPresenterView(); };
+
+    function ensureBar() {
+      if (bar) return;
+      barParts = { reactions: el('div', { class: 'podium-reactions' }), ask: el('button', { type: 'button', class: 'podium-abtn', text: 'Ask' }), poll: el('button', { type: 'button', class: 'podium-abtn podium-poll-chip', text: 'Poll', hidden: true }), muted: el('span', { class: 'podium-muted-note', text: 'The presenter has muted the room', hidden: true }) };
+      KINDS.forEach(function (k) {
+        var b = el('button', { type: 'button', class: 'podium-react', 'aria-label': 'React ' + k, text: EMOJI[k], 'data-kind': k });
+        b.addEventListener('click', function () { if (!canReact()) return; sendMsg({ t: 'react', kind: k }); ownPending[k] = (ownPending[k] || 0) + 1; floatEmoji(k, 1, true); b.classList.remove('podium-pop'); void b.offsetWidth; b.classList.add('podium-pop'); });
+        barParts.reactions.appendChild(b);
+      });
+      barParts.ask.addEventListener('click', function () { toggleSheet('ask'); });
+      barParts.poll.addEventListener('click', function () { toggleSheet('poll'); });
+      bar = el('div', { id: 'podium-audience', role: 'toolbar', 'aria-label': 'Audience' }, [barParts.reactions, barParts.ask, barParts.poll, barParts.muted]);
+      ui.appendChild(bar);
+    }
+    function renderAudience() {
+      if (ended) return;
+      var show = isViewer() && aud.live && aud.settings && (aud.settings.reactions || aud.settings.questions || aud.settings.polls);
+      if (!show) { if (bar) bar.hidden = true; ui.classList.remove('podium-has-bar'); if (sheet) closeSheet(); renderBanner(); renderResults(); return; }
+      ensureBar();
+      bar.hidden = false;
+      ui.classList.add('podium-has-bar');
+      barParts.reactions.hidden = !aud.settings.reactions || aud.muted;
+      barParts.ask.hidden = !aud.settings.questions || aud.muted;
+      barParts.ask.textContent = aud.questions.length ? 'Q&A \u00B7 ' + aud.questions.length : 'Ask';
+      barParts.poll.hidden = !pollOpen();
+      barParts.poll.textContent = aud.poll && myVotes[aud.poll.id] !== undefined ? 'Poll \u00B7 voted' : 'Poll';
+      barParts.poll.classList.toggle('podium-attn', !!(aud.poll && aud.poll.open && myVotes[aud.poll.id] === undefined));
+      barParts.muted.hidden = !aud.muted;
+      if (sheet) renderSheet();
+      renderBanner();
+      renderResults();
+    }
+
+    // Bottom sheet for Q&A and the poll.
+    function toggleSheet(kind) { if (sheet && sheetKind === kind) { closeSheet(); return; } closeSheet(); sheetKind = kind; sheet = el('div', { id: 'podium-sheet', role: 'dialog', 'aria-label': kind === 'ask' ? 'Questions' : 'Poll' }); ui.appendChild(sheet); ui.classList.add('podium-has-sheet'); renderSheet(); document.addEventListener('keydown', escSheet); }
+    function escSheet(e) { if (e.key === 'Escape') closeSheet(); }
+    function closeSheet() { if (sheet) sheet.remove(); sheet = null; sheetKind = null; ui.classList.remove('podium-has-sheet'); document.removeEventListener('keydown', escSheet); }
+    function renderSheet() {
+      if (!sheet) return;
+      var draft = sheet.querySelector('textarea') ? sheet.querySelector('textarea').value : '';
+      var nickDraft = sheet.querySelector('input') ? sheet.querySelector('input').value : (function () { try { return localStorage.getItem('podium-nick') || ''; } catch (e) { return ''; } })();
+      sheet.textContent = '';
+      var head = el('div', { class: 'podium-sheet-head' }, [el('strong', { text: sheetKind === 'ask' ? 'Questions' : 'Poll' })]);
+      var close = el('button', { type: 'button', class: 'podium-abtn', text: 'Close' }); close.addEventListener('click', closeSheet); head.appendChild(close);
+      sheet.appendChild(head);
+      if (sheetKind === 'ask') {
+        if (canAsk()) {
+          var form = el('form', { class: 'podium-ask' });
+          var ta = el('textarea', { maxlength: '280', rows: '2', placeholder: 'Ask the speaker\u2026', 'aria-label': 'Your question' }); ta.value = draft;
+          var row = el('div', { class: 'podium-row' });
+          var nick = null;
+          if (aud.settings.nicknames) { nick = el('input', { type: 'text', maxlength: '24', placeholder: 'Your name (optional)', 'aria-label': 'Your name' }); nick.value = nickDraft; row.appendChild(nick); }
+          var send = el('button', { type: 'submit', class: 'podium-abtn podium-primary', text: 'Send' });
+          row.appendChild(send);
+          form.append(ta, row);
+          form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            var text = ta.value.trim();
+            if (text.length < 2) return;
+            var msg = { t: 'question', text: text.slice(0, 280) };
+            if (nick && nick.value.trim()) { msg.nick = nick.value.trim().slice(0, 24); try { localStorage.setItem('podium-nick', msg.nick); } catch (x) { /* private mode */ } }
+            sendMsg(msg);
+            ta.value = '';
+            send.disabled = true; send.textContent = 'Sent'; setTimeout(function () { send.disabled = false; send.textContent = 'Send'; }, 20000);
+            toast('Question sent to the speaker');
+          });
+          sheet.appendChild(form);
+        } else sheet.appendChild(el('p', { class: 'podium-note', text: aud.muted ? 'The presenter has muted the room.' : 'Questions are closed.' }));
+        var list = el('ul', { class: 'podium-qlist' });
+        if (!aud.questions.length) list.appendChild(el('li', { class: 'podium-note', text: 'No questions yet. Yours could be the first.' }));
+        aud.questions.forEach(function (q) {
+          var li = el('li', { class: 'podium-q' + (q.pinned ? ' podium-pinned' : '') + (q.answered ? ' podium-answered' : '') });
+          var up = el('button', { type: 'button', class: 'podium-up' + (myUpvotes[q.id] ? ' podium-mine' : ''), text: '\u25B2 ' + q.upvotes, 'aria-label': 'Upvote' });
+          up.addEventListener('click', function () { if (!canAsk()) return; sendMsg({ t: 'upvote', id: q.id }); myUpvotes[q.id] = !myUpvotes[q.id]; try { localStorage.setItem('podium-upvotes-' + cfg.slug, JSON.stringify(myUpvotes)); } catch (x) { /* private mode */ } up.classList.toggle('podium-mine', !!myUpvotes[q.id]); });
+          var body = el('div', { class: 'podium-qbody' }, [el('div', { class: 'podium-qtext', text: q.text }), el('div', { class: 'podium-qmeta', text: (q.nick ? q.nick + ' \u00B7 ' : '') + 'slide ' + q.slide + (q.pinned ? ' \u00B7 on screen' : '') + (q.answered ? ' \u00B7 answered' : '') })]);
+          li.append(up, body);
+          list.appendChild(li);
+        });
+        sheet.appendChild(list);
+      } else {
+        var p = aud.poll;
+        if (!p) { sheet.appendChild(el('p', { class: 'podium-note', text: 'No poll right now.' })); return; }
+        sheet.appendChild(el('h3', { text: p.question }));
+        var reveal = p.options.some(function (o) { return typeof o.votes === 'number'; });
+        var total = reveal ? p.options.reduce(function (s, o) { return s + (o.votes || 0); }, 0) : 0;
+        var opts = el('div', { class: 'podium-options' });
+        p.options.forEach(function (o, i) {
+          var mine = myVotes[p.id] === i;
+          var b = el('button', { type: 'button', class: 'podium-option' + (mine ? ' podium-mine' : ''), disabled: !p.open || aud.muted ? 'true' : null });
+          var label = el('span', { class: 'podium-olabel', text: o.text });
+          b.appendChild(label);
+          if (reveal) { var pct = total ? Math.round((o.votes || 0) * 100 / total) : 0; b.appendChild(el('span', { class: 'podium-obar', style: 'width:' + pct + '%' })); b.appendChild(el('span', { class: 'podium-opct', text: pct + '%' })); }
+          if (p.open && !aud.muted) b.addEventListener('click', function () { sendMsg({ t: 'vote', poll: p.id, option: i }); myVotes[p.id] = i; try { localStorage.setItem('podium-votes-' + cfg.slug, JSON.stringify(myVotes)); } catch (x) { /* private mode */ } renderSheet(); renderAudience(); });
+          opts.appendChild(b);
+        });
+        sheet.appendChild(opts);
+        sheet.appendChild(el('p', { class: 'podium-note', text: !p.open ? 'Voting is closed.' + (reveal ? ' ' + total + ' votes.' : '') : myVotes[p.id] !== undefined ? 'Thanks, your vote is in. You can still change it while voting is open.' : 'Tap an answer to vote.' }));
+      }
+    }
+
+    // Floating reactions over the slide (projector and viewers), never in the presenter view.
+    function floatEmoji(kind, n, own) {
+      if (isPresenterView()) return;
+      if (!own && !aud.settings.floatReactions) return;
+      var count = Math.min(n, 6);
+      for (var i = 0; i < count; i++) {
+        if (floatCount > 40) return;
+        floatCount++;
+        var e = el('span', { class: 'podium-float', 'aria-hidden': 'true', text: EMOJI[kind] || '\u2728' });
+        e.style.left = (62 + Math.random() * 30) + '%';
+        e.style.animationDelay = (Math.random() * 400) + 'ms';
+        e.style.fontSize = (22 + Math.random() * 14) + 'px';
+        ui.appendChild(e);
+        setTimeout(function () { e.remove(); floatCount--; }, 3200);
+      }
+    }
+    // Pinned question banner (deck windows and viewers).
+    function renderBanner() {
+      var pinned = aud.live ? aud.questions.filter(function (q) { return q.pinned; })[0] : null;
+      if (!pinned || isPresenterView()) { if (banner) { banner.remove(); banner = null; } return; }
+      if (!banner) { banner = el('div', { id: 'podium-banner', role: 'status' }); ui.appendChild(banner); }
+      banner.textContent = '';
+      banner.append(el('span', { class: 'podium-qmark', text: 'Q' }), el('span', { class: 'podium-btext', text: pinned.text }));
+      if (pinned.nick) banner.appendChild(el('span', { class: 'podium-bnick', text: '\u2014 ' + pinned.nick }));
+    }
+    // Poll results on the projector when the presenter shows them.
+    function renderResults() {
+      var p = aud.live && aud.poll && aud.poll.shown ? aud.poll : null;
+      if (!p || !isProjector()) { if (resultsEl) { resultsEl.remove(); resultsEl = null; } return; }
+      if (!resultsEl) { resultsEl = el('div', { id: 'podium-results', role: 'status' }); ui.appendChild(resultsEl); }
+      resultsEl.textContent = '';
+      var total = p.options.reduce(function (s, o) { return s + (o.votes || 0); }, 0);
+      resultsEl.appendChild(el('h2', { text: p.question }));
+      p.options.forEach(function (o) {
+        var pct = total ? Math.round((o.votes || 0) * 100 / total) : 0;
+        resultsEl.appendChild(el('div', { class: 'podium-rrow' }, [el('span', { class: 'podium-rlabel', text: o.text }), el('span', { class: 'podium-rtrack' }, [el('span', { class: 'podium-rbar', style: 'width:' + pct + '%' })]), el('span', { class: 'podium-rpct', text: pct + '%' })]));
+      });
+      resultsEl.appendChild(el('p', { class: 'podium-rtotal', text: total + (total === 1 ? ' vote' : ' votes') + (p.open ? ' so far' : '') }));
+    }
+    // Presenter HUD counters + moderation popover.
+    function renderHudAudience() {
+      if (!hud || !hudParts) return;
+      if (!hudParts.audience) {
+        hudParts.audience = el('button', { type: 'button', class: 'podium-btn', hidden: true, title: 'Reactions and questions from the room' });
+        hudParts.audience.addEventListener('click', function () { togglePop('audience'); });
+        hud.insertBefore(hudParts.audience, hudParts.code);
+      }
+      var total = Object.keys(aud.totals).reduce(function (s, k) { return s + aud.totals[k]; }, 0);
+      var open = aud.questions.filter(function (q) { return !q.answered; }).length;
+      hudParts.audience.hidden = !(aud.live && (aud.settings.reactions || aud.settings.questions || aud.settings.polls));
+      hudParts.audience.textContent = EMOJI.clap + ' ' + total + ' \u00B7 ? ' + open + (aud.poll && aud.poll.open ? ' \u00B7 poll' : '');
+      hudParts.audience.classList.toggle('podium-attn', open > 0);
+      if (popKind === 'audience') renderAudiencePop();
+    }
+    function renderAudiencePop() {
+      if (!pop) return;
+      pop.textContent = '';
+      pop.appendChild(el('h3', { text: 'From the room' }));
+      var tot = el('div', { class: 'podium-totals' });
+      KINDS.forEach(function (k) { if (aud.totals[k]) tot.appendChild(el('span', { text: EMOJI[k] + ' ' + aud.totals[k] })); });
+      if (!tot.childElementCount) tot.appendChild(el('span', { class: 'podium-note', text: 'No reactions yet' }));
+      pop.appendChild(tot);
+      var list = el('ul', { class: 'podium-qlist podium-mod' });
+      var open = aud.questions.filter(function (q) { return !q.answered; });
+      if (!open.length) list.appendChild(el('li', { class: 'podium-note', text: 'No open questions' }));
+      open.slice(0, 6).forEach(function (q) {
+        var li = el('li', { class: 'podium-q' + (q.pinned ? ' podium-pinned' : '') });
+        var body = el('div', { class: 'podium-qbody' }, [el('div', { class: 'podium-qtext', text: q.text }), el('div', { class: 'podium-qmeta', text: '\u25B2 ' + q.upvotes + (q.nick ? ' \u00B7 ' + q.nick : '') + ' \u00B7 slide ' + q.slide })]);
+        var acts = el('div', { class: 'podium-qacts' });
+        var pin = el('button', { type: 'button', class: 'podium-abtn', text: q.pinned ? 'Unpin' : 'Show' }); pin.addEventListener('click', function () { sendMsg({ t: 'question', op: q.pinned ? 'unpin' : 'pin', id: q.id }); });
+        var done = el('button', { type: 'button', class: 'podium-abtn', text: 'Answered' }); done.addEventListener('click', function () { sendMsg({ t: 'question', op: 'answer', id: q.id }); });
+        var drop = el('button', { type: 'button', class: 'podium-abtn', text: 'Dismiss' }); drop.addEventListener('click', function () { sendMsg({ t: 'question', op: 'dismiss', id: q.id }); });
+        acts.append(pin, done, drop);
+        body.appendChild(acts);
+        li.appendChild(body);
+        list.appendChild(li);
+      });
+      pop.appendChild(list);
+      pop.appendChild(el('p', { class: 'podium-note', text: 'Polls, muting and the full list are on the phone remote.' }));
+      var row = el('div', { class: 'podium-row' });
+      var close = el('button', { type: 'button', class: 'podium-btn', text: 'Close' }); close.addEventListener('click', closePop);
+      row.appendChild(close);
+      pop.appendChild(row);
+    }
+    // Viewers talk through the bridge's raw send (bridge.js; Slidev addon >= 3.1); older addon builds cannot react until rebuilt.
+    function sendMsg(message) { if (typeof bridge.sendRaw === 'function') bridge.sendRaw(message); else if (bridge.canSend) bridge.send(message); }
+    var ownPending = {};
+    var bootAt = Date.now();
+
+    bridge.on('audience', function (m) {
+      aud.live = !!m.live; aud.muted = !!m.muted; aud.settings = m.settings || aud.settings;
+      if (!aud.live) { aud.questions = []; aud.poll = null; aud.totals = {}; }
+      renderAudience(); renderHudAudience();
+    });
+    bridge.on('reactions', function (m) {
+      aud.totals = m.totals || aud.totals;
+      if (m.counts) Object.keys(m.counts).forEach(function (k) { var n = m.counts[k] - (ownPending[k] || 0); ownPending[k] = 0; if (n > 0) floatEmoji(k, n, false); });
+      renderHudAudience();
+    });
+    bridge.on('questions', function (m) {
+      var before = aud.questions.length;
+      aud.questions = Array.isArray(m.items) ? m.items : [];
+      if (isPresenterView() && aud.questions.length > before && Date.now() - bootAt > 3000) toast('New question from the room', 3000);
+      renderAudience(); renderHudAudience();
+    });
+    bridge.on('poll', function (m) {
+      var hadOpen = aud.poll && aud.poll.open;
+      aud.poll = m.poll || null;
+      if (isViewer() && aud.poll && aud.poll.open && !hadOpen && myVotes[aud.poll.id] === undefined) { toggleSheet('poll'); if (navigator.vibrate) try { navigator.vibrate(20); } catch (e) { /* unsupported */ } }
+      renderAudience(); renderHudAudience();
+    });
+
     // ---- Wire the bridge ---------------------------------------------------------------------------------------
     bridge.on('hello', function (m) {
       presence = { presenters: m.presenters || 0, viewers: m.viewers || 0, windows: m.windows || 0, remotes: m.remotes || 0 };
+      if (!bridge.canSend && cid) sendMsg({ t: 'hi', cid: cid });
       render();
     });
     bridge.on('presence', function (m) {

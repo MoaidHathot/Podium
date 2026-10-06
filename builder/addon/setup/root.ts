@@ -280,7 +280,7 @@ function setupPodiumBridge() {
   ;(window as any).__podiumBuild = document.querySelector('meta[name="podium-build"]')?.getAttribute('content') || null
 
   const bridge = {
-    protocol: 3,
+    protocol: 3.1,
     kind: 'slidev',
     slug,
     get role() { return role() },
@@ -290,6 +290,8 @@ function setupPodiumBridge() {
     setFollowing,
     position,
     send(message: Record<string, unknown>) { if (canSend) send(JSON.stringify(message)) },
+    // Room input from viewers (handshake, reactions, questions, votes); the server validates and bounds every message.
+    sendRaw(message: Record<string, unknown>) { send(JSON.stringify(message)) },
     on(type: string, fn: Listener) {
       let set = listeners.get(type)
       if (!set) { set = new Set(); listeners.set(type, set) }

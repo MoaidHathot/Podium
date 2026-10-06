@@ -159,6 +159,8 @@ label { font-size: .9rem; color: var(--text-muted); }
 @keyframes podium-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 .session-bars { display: grid; grid-template-columns: 3rem 1fr 3.5rem; gap: .25rem .6rem; align-items: center; font-size: .82rem; max-height: 14rem; overflow: auto; }
 .session-bars .bar { height: .55rem; border-radius: 4px; background: color-mix(in srgb, var(--accent) 60%, transparent); min-width: 2px; }
+.recap-audience .badge { margin-right: .3rem; }
+.recap-questions { margin: 0 0 .4rem 1.2rem; padding: 0; font-size: .9rem; display: flex; flex-direction: column; gap: .25rem; }
 body[data-density="list"] .cards-grid .card-meta .badge-frozen { grid-area: updated; justify-self: end; }
 
 .status-short { display: none; }

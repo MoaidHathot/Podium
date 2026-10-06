@@ -94,6 +94,32 @@ main { flex: 1; display: flex; flex-direction: column; gap: .8rem; padding: .8re
 .agenda button.current { border-color: var(--accent); color: var(--text); background: rgba(124, 156, 255, .14); }
 .agenda button.done { opacity: .55; }
 
+/* Audience: what the room sends in, and the controls to run it. */
+.audience { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: .7rem .9rem .8rem; display: flex; flex-direction: column; gap: .6rem; }
+.aud-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.aud-totals { color: var(--muted); font-size: .9rem; flex: 1; min-width: 8rem; }
+.aud-actions { display: flex; gap: .4rem; margin-left: auto; }
+.aud-actions .small { padding: .35rem .6rem; font-size: .82rem; }
+.aud-poll { border-top: 1px dashed var(--border); padding-top: .6rem; display: flex; flex-direction: column; gap: .4rem; }
+.aud-poll-head { display: flex; justify-content: space-between; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+.aud-option { position: relative; overflow: hidden; display: flex; justify-content: space-between; gap: .6rem; padding: .45rem .6rem; border-radius: 10px; border: 1px solid var(--border); }
+.aud-bar { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(124, 156, 255, .2); transition: width .4s ease; }
+.aud-olabel, .aud-opct { position: relative; }
+.aud-opct { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .85rem; white-space: nowrap; }
+.aud-poll-acts, .aud-qacts { flex-wrap: wrap; gap: .4rem; }
+.aud-poll-acts .small, .aud-qacts .small { padding: .3rem .55rem; font-size: .8rem; }
+.aud-questions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; border-top: 1px dashed var(--border); padding-top: .6rem; }
+.aud-q { display: flex; flex-direction: column; gap: .3rem; padding: .5rem .6rem; border-radius: 10px; background: rgba(255, 255, 255, .03); }
+.aud-q.pinned { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); }
+.aud-q.answered { opacity: .55; }
+.aud-qtop { display: flex; gap: .6rem; align-items: flex-start; }
+.aud-up { flex: none; font-weight: 700; font-size: .85rem; color: var(--accent); padding-top: .1rem; }
+.aud-qtext { word-break: break-word; }
+.aud-qmeta { color: var(--muted); font-size: .78rem; }
+.poll-options { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; margin: .4rem 0 .8rem; }
+.presets { gap: .4rem; flex-wrap: wrap; margin-bottom: .4rem; }
+.presets .small { padding: .3rem .55rem; font-size: .8rem; }
+
 /* Lock screen: the phone can lie on the lectern; nothing moves until the button is held. */
 .locked { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; padding: 2rem; text-align: center; }
 .locked-clock { font-variant-numeric: tabular-nums; font-weight: 800; font-size: clamp(3rem, 18vw, 6rem); line-height: 1; color: var(--ok); letter-spacing: -.03em; }
@@ -122,8 +148,8 @@ dialog input { font: inherit; font-size: 1rem; padding: .6rem .7rem; border-radi
 
 /* Landscape phone / tablet: slide + notes on the left, controls on the right. */
 @media (orientation: landscape) and (min-width: 640px) {
-  main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, 1fr); grid-template-areas: "stage session" "notes session" "notes pad" "notes tools" "notes timer" "agenda agenda" "hint hint"; grid-template-rows: auto auto auto auto 1fr auto auto; align-items: start; }
-  .session { grid-area: session; } .stage { grid-area: stage; } .notes { grid-area: notes; } .pad { grid-area: pad; } .tools { grid-area: tools; } #timer-row { grid-area: timer; } .agenda { grid-area: agenda; } .hint { grid-area: hint; }
+  main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, 1fr); grid-template-areas: "stage session" "notes session" "notes pad" "notes tools" "notes timer" "audience audience" "agenda agenda" "hint hint"; grid-template-rows: auto auto auto auto 1fr auto auto auto; align-items: start; }
+  .session { grid-area: session; } .stage { grid-area: stage; } .notes { grid-area: notes; } .pad { grid-area: pad; } .tools { grid-area: tools; } #timer-row { grid-area: timer; } .audience { grid-area: audience; } .agenda { grid-area: agenda; } .hint { grid-area: hint; }
   .notes { max-height: none; align-self: stretch; }
   .pad { min-height: 22dvh; }
 }

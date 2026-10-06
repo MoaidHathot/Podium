@@ -48,6 +48,10 @@
           return;
         case 'screen': $('black').setAttribute('aria-pressed', String(m.mode === 'black')); return;
         case 'session': onSessionMessage(m); return;
+        case 'audience': aud.live = !!m.live; aud.muted = !!m.muted; aud.settings = m.settings || aud.settings; if (!aud.live) { aud.questions = []; aud.poll = null; aud.totals = {}; } renderAudience(); return;
+        case 'reactions': aud.totals = m.totals || aud.totals; renderAudienceTotals(); return;
+        case 'questions': { const before = aud.questions.length; aud.questions = Array.isArray(m.items) ? m.items : []; if (aud.questions.length > before && document.visibilityState === 'visible' && Date.now() - bootAt > 3000) vibrate([15, 40, 15]); renderAudience(); return; }
+        case 'poll': aud.poll = m.poll || null; renderAudience(); return;
       }
     });
     socket.addEventListener('close', (ev) => { socket = null; setConn('disconnected', 'bad'); if (ev.code !== 4403 && ev.code !== 4404) retry(); });
@@ -506,6 +510,101 @@
   }
   setInterval(loadSession, 60000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadSession(); });
+
+  // ---- Audience: reactions totals, question moderation, polls, mute ---------------------------------------------
+  const bootAt = Date.now();
+  const EMOJI = { clap: '\uD83D\uDC4F', heart: '\u2764\uFE0F', laugh: '\uD83D\uDE02', think: '\uD83E\uDD14', up: '\uD83D\uDC4D', party: '\uD83C\uDF89' };
+  const aud = { live: false, muted: false, settings: { reactions: false, questions: false, polls: false }, totals: {}, questions: [], poll: null };
+  const audEl = $('audience');
+  function renderAudienceTotals() {
+    const parts = Object.keys(EMOJI).filter((k) => aud.totals[k]).map((k) => `${EMOJI[k]} ${aud.totals[k]}`);
+    $('aud-totals').textContent = parts.length ? parts.join('  ') : (aud.settings.reactions ? 'no reactions yet' : '');
+  }
+  function renderAudience() {
+    const show = aud.live && (aud.settings.reactions || aud.settings.questions || aud.settings.polls);
+    audEl.hidden = !show;
+    if (!show) return;
+    renderAudienceTotals();
+    const mute = $('aud-mute');
+    mute.hidden = !isOwner;
+    mute.setAttribute('aria-pressed', String(aud.muted));
+    mute.textContent = aud.muted ? '🔈 Unmute' : '🔇 Mute';
+    $('aud-newpoll').hidden = !aud.settings.polls;
+    // Poll card.
+    const pollEl = $('aud-poll');
+    const p = aud.poll;
+    pollEl.hidden = !p;
+    pollEl.innerHTML = '';
+    if (p) {
+      const total = p.options.reduce((s, o) => s + (o.votes || 0), 0);
+      const head = el('div', 'aud-poll-head');
+      head.append(el('strong', '', p.question), el('span', 'faint', `${total} vote${total === 1 ? '' : 's'}${p.open ? ' · open' : ' · closed'}${p.shown ? ' · on screen' : ''}`));
+      pollEl.appendChild(head);
+      p.options.forEach((o) => {
+        const pct = total ? Math.round((o.votes || 0) * 100 / total) : 0;
+        const row = el('div', 'aud-option');
+        const bar = el('span', 'aud-bar'); bar.style.width = `${pct}%`;
+        row.append(bar, el('span', 'aud-olabel', o.text), el('span', 'aud-opct', `${o.votes || 0} · ${pct}%`));
+        pollEl.appendChild(row);
+      });
+      const acts = el('div', 'row aud-poll-acts');
+      const show = el('button', 'small' + (p.shown ? ' primary' : ''), p.shown ? 'Hide from screen' : 'Show on screen'); show.addEventListener('click', () => send({ t: 'poll', op: p.shown ? 'hide' : 'show', id: p.id }));
+      const toggle = el('button', 'small', p.open ? 'Close voting' : 'Reopen'); toggle.addEventListener('click', () => send({ t: 'poll', op: p.open ? 'close' : 'open', id: p.id }));
+      const remove = el('button', 'small danger', 'Remove'); remove.addEventListener('click', () => { if (confirm('Remove this poll? Its votes stay in the recap.')) send({ t: 'poll', op: 'remove', id: p.id }); });
+      acts.append(show, toggle, remove);
+      pollEl.appendChild(acts);
+    }
+    // Questions, pinned first then by upvotes.
+    const list = $('aud-questions');
+    list.innerHTML = '';
+    if (!aud.settings.questions) return;
+    const open = aud.questions.filter((q) => !q.answered);
+    const done = aud.questions.filter((q) => q.answered);
+    if (!open.length && !done.length) { const li = el('li', 'faint', aud.muted ? 'Room muted.' : 'No questions yet.'); list.appendChild(li); return; }
+    [...open, ...done].forEach((q) => {
+      const li = el('li', 'aud-q' + (q.pinned ? ' pinned' : '') + (q.answered ? ' answered' : ''));
+      const top = el('div', 'aud-qtop');
+      top.append(el('span', 'aud-up', `▲ ${q.upvotes}`), el('span', 'aud-qtext', q.text));
+      const meta = el('div', 'aud-qmeta', `${q.nick ? q.nick + ' · ' : ''}slide ${q.slide}${q.pinned ? ' · on screen' : ''}${q.answered ? ' · answered' : ''}`);
+      const acts = el('div', 'row aud-qacts');
+      if (!q.answered) {
+        const pin = el('button', 'small' + (q.pinned ? ' primary' : ''), q.pinned ? 'Unpin' : 'Show on screen'); pin.addEventListener('click', () => send({ t: 'question', op: q.pinned ? 'unpin' : 'pin', id: q.id }));
+        const ans = el('button', 'small', 'Answered'); ans.addEventListener('click', () => send({ t: 'question', op: 'answer', id: q.id }));
+        const dis = el('button', 'small', 'Dismiss'); dis.addEventListener('click', () => send({ t: 'question', op: 'dismiss', id: q.id }));
+        acts.append(pin, ans, dis);
+      } else {
+        const back = el('button', 'small', 'Reopen'); back.addEventListener('click', () => send({ t: 'question', op: 'restore', id: q.id }));
+        acts.append(back);
+      }
+      li.append(top, meta, acts);
+      list.appendChild(li);
+    });
+  }
+  $('aud-mute').addEventListener('click', async () => {
+    try { await ownerApi('POST', `/api/decks/${encodeURIComponent(slug)}/sessions/audience`, { muted: !aud.muted }); vibrate(10); } catch (e) { flash(e.message); }
+  });
+  // New poll dialog: question + 2-6 options, with presets.
+  const pollForm = $('poll-form'), pollOptions = $('poll-options');
+  function setPollOptions(values) {
+    pollOptions.innerHTML = '';
+    for (let i = 0; i < 6; i++) {
+      const input = document.createElement('input');
+      input.maxLength = 60; input.placeholder = `Option ${i + 1}${i < 2 ? '' : ' (optional)'}`; input.autocomplete = 'off'; input.value = values[i] || '';
+      pollOptions.appendChild(input);
+    }
+  }
+  $('aud-newpoll').addEventListener('click', () => { $('poll-question').value = ''; setPollOptions([]); $('poll-dialog').showModal(); });
+  pollForm.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => {
+    const preset = b.dataset.preset;
+    setPollOptions(preset === 'yesno' ? ['Yes', 'No'] : preset === 'scale' ? ['1', '2', '3', '4', '5'] : ['A', 'B', 'C', 'D']);
+  }));
+  $('poll-dialog').addEventListener('close', () => {
+    if ($('poll-dialog').returnValue !== 'create') return;
+    const question = $('poll-question').value.trim().slice(0, 200);
+    const options = [...pollOptions.querySelectorAll('input')].map((i) => i.value.trim().slice(0, 60)).filter(Boolean);
+    if (question.length < 2 || options.length < 2) { flash('A question and two options, please'); return; }
+    if (send({ t: 'poll', op: 'create', question, options })) vibrate([10, 30, 10]);
+  });
 
   // ---- Lock screen -------------------------------------------------------------------------------------------
   const locked = $('locked'), unlockBtn = $('unlock');

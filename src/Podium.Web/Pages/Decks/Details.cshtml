@@ -259,6 +259,25 @@
     </section>
 </div>
 
+@if (drivable)
+{
+<section class="panel" style="margin-top:1rem" id="audience-settings">
+    <h3>Audience</h3>
+    <p class="hint">What the room can do from their phones while you are live (through the join code). Everything is moderated from the phone remote, bounded per person and per room, and lands in the session recap. Can also be set in <code>.podium.yml</code> under <code>audience:</code>.</p>
+    <div class="row" style="gap:1.2rem; flex-wrap:wrap; align-items:flex-start">
+        <div>
+            <label class="row" style="gap:.5rem"><input type="checkbox" data-audience="reactions" @(d.Audience.Reactions ? "checked" : "") /> Reactions <span class="faint">(👏 ❤️ 😂 🤔 👍 🎉)</span></label>
+            <label class="row" style="gap:.5rem; margin:.4rem 0 0 1.6rem"><input type="checkbox" data-audience="floatReactions" @(d.Audience.FloatReactions ? "checked" : "") /> Float them across the projector</label>
+        </div>
+        <div>
+            <label class="row" style="gap:.5rem"><input type="checkbox" data-audience="questions" @(d.Audience.Questions ? "checked" : "") /> Questions with upvotes</label>
+            <label class="row" style="gap:.5rem; margin:.4rem 0 0 1.6rem"><input type="checkbox" data-audience="nicknames" @(d.Audience.Nicknames ? "checked" : "") /> Allow a name on questions</label>
+        </div>
+        <label class="row" style="gap:.5rem"><input type="checkbox" data-audience="polls" @(d.Audience.Polls ? "checked" : "") /> Polls <span class="faint">(you start them from the remote)</span></label>
+    </div>
+</section>
+}
+
 <section class="panel" style="margin-top:1rem">
     <h3>Who can see this</h3>
     <p class="hint"><strong>Private</strong>: only you. <strong>Link</strong>: anyone holding a share link you create below. <strong>Shared</strong>: the GitHub users you list. <strong>Public</strong>: anyone, no sign-in. Each artifact is controlled separately.</p>
@@ -397,15 +416,17 @@
 
 @if (Model.Sessions.Any(s => s.EndedAt is not null))
 {
-<section class="panel" style="margin-top:1rem">
+<section class="panel" style="margin-top:1rem" id="sessions">
     <h3>Sessions</h3>
-    <p class="hint">Pacing from past live sessions: how long each slide was on screen (summed over revisits).</p>
+    <p class="hint">Pacing from past live sessions: how long each slide was on screen (summed over revisits), and what the room sent in.</p>
     @foreach (var s in Model.Sessions.Where(s => s.Recap is not null).Take(5))
     {
         var r = s.Recap!;
+        var a = s.AudienceRecap;
         var max = Math.Max(1, r.SecondsPerSlide.Values.DefaultIfEmpty(1).Max());
+        var avgPace = r.SlidesVisited > 0 ? r.DurationSeconds / (double)r.SlidesVisited : 0;
         <details style="margin-bottom:.6rem" @(s == Model.Sessions.First(x => x.Recap is not null) ? "open" : null)>
-            <summary><strong>@s.StartedAt.ToString("yyyy-MM-dd HH:mm")</strong> <span class="faint">· @TimeSpan.FromSeconds(r.DurationSeconds).ToString(r.DurationSeconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss")@(s.PlannedMinutes is { } pm ? $" of {pm} min planned" : "") · peak @r.PeakViewers viewer@(r.PeakViewers == 1 ? "" : "s") · @r.SlidesVisited slide@(r.SlidesVisited == 1 ? "" : "s") visited · ended: @s.EndReason</span></summary>
+            <summary><strong>@s.StartedAt.ToString("yyyy-MM-dd HH:mm")</strong>@(s.Rehearsal ? Html.Raw(" <span class=\"badge\">Rehearsal</span>") : null) <span class="faint">· @TimeSpan.FromSeconds(r.DurationSeconds).ToString(r.DurationSeconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss")@(s.PlannedMinutes is { } pm ? $" of {pm} min planned" : "") · peak @r.PeakViewers viewer@(r.PeakViewers == 1 ? "" : "s") · @r.SlidesVisited slide@(r.SlidesVisited == 1 ? "" : "s") visited@(avgPace > 0 ? $" · {TimeSpan.FromSeconds(avgPace):m\\:ss} per slide" : "")@(a is not null && (a.ReactionTotal > 0 || a.Questions.Count > 0 || a.Polls.Count > 0) ? $" · {a.ReactionTotal} reaction{(a.ReactionTotal == 1 ? "" : "s")}, {a.Questions.Count} question{(a.Questions.Count == 1 ? "" : "s")}, {a.Polls.Count} poll{(a.Polls.Count == 1 ? "" : "s")}" : "") · ended: @s.EndReason</span></summary>
             @if (r.SecondsPerSlide.Count > 0)
             {
                 <div class="session-bars" style="margin-top:.5rem">
@@ -415,6 +436,43 @@
                     <div class="bar" style="width:@(Math.Max(1, kv.Value * 100 / max))%" title="@kv.Value s"></div>
                     <span class="mono">@TimeSpan.FromSeconds(kv.Value).ToString(@"m\:ss")</span>
                 }
+                </div>
+            }
+            @if (a is not null && (a.ReactionTotal > 0 || a.Questions.Count > 0 || a.Polls.Count > 0))
+            {
+                <div class="recap-audience" style="margin-top:.8rem">
+                    @if (a.ReactionTotal > 0)
+                    {
+                        <p style="margin:0 0 .4rem"><strong>Reactions:</strong>
+                        @foreach (var kv in a.Reactions.OrderByDescending(k => k.Value))
+                        {
+                            <span class="badge" title="@kv.Key">@(kv.Key switch { "clap" => "👏", "heart" => "❤️", "laugh" => "😂", "think" => "🤔", "up" => "👍", "party" => "🎉", _ => kv.Key }) @kv.Value</span>
+                        }
+                        </p>
+                    }
+                    @if (a.Questions.Count > 0)
+                    {
+                        <p style="margin:.4rem 0 .2rem"><strong>Questions</strong> <span class="faint">(@a.Questions.Count(q => q.Answered) answered, @a.Questions.Count(q => q.Dismissed) dismissed)</span></p>
+                        <ol class="recap-questions">
+                        @foreach (var q in a.Questions.OrderByDescending(q => q.Upvotes).ThenBy(q => q.At))
+                        {
+                            <li class="@(q.Dismissed ? "faint" : "")"><span class="mono faint">▲@q.Upvotes</span> @q.Text <span class="faint">— @(q.Nick ?? "anonymous"), slide @q.Slide@(q.Answered ? ", answered" : "")@(q.Dismissed ? ", dismissed" : "")</span></li>
+                        }
+                        </ol>
+                    }
+                    @foreach (var p in a.Polls)
+                    {
+                        var ptotal = Math.Max(1, p.TotalVotes);
+                        <p style="margin:.6rem 0 .2rem"><strong>Poll:</strong> @p.Question <span class="faint">(@p.TotalVotes vote@(p.TotalVotes == 1 ? "" : "s"), slide @p.Slide)</span></p>
+                        <div class="session-bars">
+                        @foreach (var o in p.Options)
+                        {
+                            <span class="faint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:12rem">@o.Text</span>
+                            <div class="bar" style="width:@(Math.Max(1, o.Votes * 100 / ptotal))%" title="@o.Votes"></div>
+                            <span class="mono">@o.Votes</span>
+                        }
+                        </div>
+                    }
                 </div>
             }
         </details>
@@ -525,6 +583,12 @@
   document.getElementById('exportPptx').addEventListener('change', (e) => patch({ exportPptx: e.target.checked }));
   document.getElementById('allowEmbedding')?.addEventListener('change', (e) => patch({ allowEmbedding: e.target.checked }, e.target.checked ? 'Embedding allowed for Public decks' : 'Embedding disabled'));
   document.getElementById('offlineCache')?.addEventListener('change', (e) => patch({ offlineCache: e.target.checked }, e.target.checked ? 'Offline cache on' : 'Offline cache off (existing caches clear on the next visit)'));
+  // Audience settings: the whole block is sent so the server never has to merge partial objects.
+  document.querySelectorAll('[data-audience]').forEach((box) => box.addEventListener('change', () => {
+    const audience = {};
+    document.querySelectorAll('[data-audience]').forEach((b) => { audience[b.dataset.audience] = b.checked; });
+    patch({ audience }, 'Audience settings saved (apply to the next session)');
+  }));
   document.getElementById('stripNotes')?.addEventListener('change', (e) => patch({ stripNotesForViewers: e.target.checked }, e.target.checked ? 'Viewers will get a notes-free copy from the next build' : 'Viewers will see the full build'));
 
   const pin = document.getElementById('pin');

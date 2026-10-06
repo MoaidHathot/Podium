@@ -141,6 +141,8 @@
       setFollowing: function (on) { following = !!on; if (following && !canSend && presenterPage && presenterPage !== opts.page()) opts.go(presenterPage); },
       position: position,
       send: function (message) { if (canSend) send(JSON.stringify(message)); },
+      // Room input (handshake, reactions, questions, votes): the server validates and bounds every message.
+      sendRaw: function (message) { send(JSON.stringify(message)); },
       on: function (type, fn) { (listeners[type] = listeners[type] || []).push(fn); return function () { var i = (listeners[type] || []).indexOf(fn); if (i >= 0) listeners[type].splice(i, 1); }; },
       go: function (page) { opts.go(page); },
       nav: function (action, page) { opts.nav(action, page); },
