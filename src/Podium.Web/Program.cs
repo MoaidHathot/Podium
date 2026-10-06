@@ -191,8 +191,16 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
             if (identity.HasClaim(c => c.Type == Podium.Web.Security.DeviceService.SidClaim)) return;
             var caller = ctx.HttpContext.RequestServices.GetRequiredService<CallerResolver>().Resolve(ctx.Principal);
             if (caller.Principal is null) return;
-            var sid = await ctx.HttpContext.RequestServices.GetRequiredService<Podium.Web.Security.DeviceService>().RegisterAsync(caller.Principal, ctx.HttpContext, ctx.HttpContext.RequestAborted);
-            identity.AddClaim(new Claim(Podium.Web.Security.DeviceService.SidClaim, sid));
+            try
+            {
+                var sid = await ctx.HttpContext.RequestServices.GetRequiredService<Podium.Web.Security.DeviceService>().RegisterAsync(caller.Principal, ctx.HttpContext, ctx.HttpContext.RequestAborted);
+                identity.AddClaim(new Claim(Podium.Web.Security.DeviceService.SidClaim, sid));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Device tracking must never stand between the owner and their sign-in; the ticket is simply untracked.
+                ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>().LogWarning(ex, "Device could not be recorded at sign-in");
+            }
         };
         o.Events.OnValidatePrincipal = async ctx =>
         {
@@ -208,7 +216,15 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
             var caller = ctx.HttpContext.RequestServices.GetRequiredService<CallerResolver>().Resolve(ctx.Principal);
             if (caller.Principal is null) return;
             var devices = ctx.HttpContext.RequestServices.GetRequiredService<Podium.Web.Security.DeviceService>();
-            if (await devices.IsRevokedAsync(caller.Principal, sid, ctx.HttpContext.RequestAborted))
+            bool revoked;
+            try { revoked = await devices.IsRevokedAsync(caller.Principal, sid, ctx.HttpContext.RequestAborted); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Storage trouble: the stamp check above already passed; do not add a lock-out on top of an outage.
+                ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>().LogWarning(ex, "Device revocation check failed; allowing the ticket");
+                return;
+            }
+            if (revoked)
             {
                 ctx.RejectPrincipal();
                 await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
