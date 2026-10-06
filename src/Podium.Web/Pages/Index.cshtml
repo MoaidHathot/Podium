@@ -121,6 +121,7 @@ else
         <label class="control">Group by
             <select id="group" class="input">
                 <option value="repo">Repository</option>
+                @if (Model.HasTalks) { <option value="talk">Talk</option> }
                 <option value="kind">Type</option>
                 <option value="vis">Visibility</option>
                 <option value="year">Year</option>
@@ -206,6 +207,13 @@ else
             </div>
         </section>
     </div>
+    @if (Model.HasTalks)
+    {
+        <section class="section hidden" id="talk-hits" aria-live="polite">
+            <div class="section-head"><h2>In talks</h2><span class="faint count" id="talk-hits-count"></span></div>
+            <ul class="hits" id="talk-hits-list"></ul>
+        </section>
+    }
     <section class="section hidden" id="slide-hits" aria-live="polite">
         <div class="section-head"><h2>In slides</h2><span class="faint count" id="slide-hits-count"></span></div>
         <ul class="hits" id="slide-hits-list"></ul>
@@ -267,11 +275,14 @@ else
   function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } }
   function save() { localStorage.setItem(KEY, JSON.stringify({ group: state.group, sort: state.sort, density: state.density, collapsed: state.collapsed })); }
 
+  // A remembered grouping whose option is gone (e.g. "Talk" after the last abstract.md was removed) falls back to repository.
+  if (![...groupSel.options].some((o) => o.value === state.group)) state.group = 'repo';
   groupSel.value = state.group; sortSel.value = state.sort;
   densityInputs.forEach((i) => { i.checked = i.value === state.density; });
 
   const labels = {
     repo: (c) => c.dataset.repo,
+    talk: (c) => c.dataset.talk || 'Not part of a talk',
     kind: (c) => c.dataset.kindLabel,
     vis: (c) => c.dataset.visLabel,
     year: (c) => c.dataset.year,
@@ -295,13 +306,31 @@ else
 
   // Full-text hits inside slide content (owner API, debounced). Independent of the card filter.
   const hitsSection = document.getElementById('slide-hits'), hitsList = document.getElementById('slide-hits-list'), hitsCount = document.getElementById('slide-hits-count');
+  const talkSection = document.getElementById('talk-hits'), talkList = document.getElementById('talk-hits-list'), talkCount = document.getElementById('talk-hits-count');
   let hitsTimer = null, hitsSeq = 0;
   function searchSlides() {
     const q = search.value.trim();
     clearTimeout(hitsTimer);
-    if (q.length < 2) { hitsSection.classList.add('hidden'); hitsList.innerHTML = ''; return; }
+    if (q.length < 2) { hitsSection.classList.add('hidden'); hitsList.innerHTML = ''; talkSection?.classList.add('hidden'); return; }
     hitsTimer = setTimeout(async () => {
       const seq = ++hitsSeq;
+      if (talkSection) {
+        // Talks whose abstract, parts or events mention the words (abstracts are not slide text).
+        Podium.api('GET', `/api/talks/search?q=${encodeURIComponent(q)}`).then((hits) => {
+          if (seq !== hitsSeq) return;
+          talkList.innerHTML = '';
+          for (const h of hits) {
+            const li = document.createElement('li');
+            const a = document.createElement('a'); a.href = `/talks/${h.id}`;
+            const t = document.createElement('strong'); t.textContent = h.title;
+            const where = document.createElement('span'); where.className = 'faint'; where.textContent = ` · ${h.decks} deck${h.decks === 1 ? '' : 's'} · ${h.events} event${h.events === 1 ? '' : 's'}`;
+            const snip = document.createElement('div'); snip.className = 'muted snippet'; snip.textContent = h.snippet;
+            a.append(t, where); li.append(a, snip); talkList.appendChild(li);
+          }
+          talkCount.textContent = hits.length ? `${hits.length} talk${hits.length === 1 ? '' : 's'}` : '';
+          talkSection.classList.toggle('hidden', hits.length === 0);
+        }).catch(() => talkSection.classList.add('hidden'));
+      }
       try {
         const hits = await Podium.api('GET', `/api/search?q=${encodeURIComponent(q)}`);
         if (seq !== hitsSeq) return;

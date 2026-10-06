@@ -32,6 +32,7 @@
         {
             <nav class="topnav" aria-label="Primary">
                 <a href="/" class="@(path == "/" ? "active" : null)">Library</a>
+                <a href="/talks" class="@(path.StartsWith("/talks") ? "active" : null)">Talks</a>
                 <a href="/sources" class="@(path.StartsWith("/sources") ? "active" : null)">Sources</a>
                 <a href="/activity" class="@(path.StartsWith("/activity") ? "active" : null)">Activity</a>
             </nav>

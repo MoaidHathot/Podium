@@ -78,7 +78,8 @@ public sealed class SessionService(
     BuildService builds,
     SessionRecorders recorders,
     Microsoft.Extensions.Options.IOptions<LiveSessionOptions> options,
-    ILogger<SessionService> log)
+    ILogger<SessionService> log,
+    ITalkStore? talks = null)
 {
     private readonly ConcurrentDictionary<string, SessionRecorders.Recorder> _recorders = recorders.Recorders;
 
@@ -159,8 +160,48 @@ public sealed class SessionService(
         var latest = await decks.GetAsync(slug, ct) ?? deck;
         await decks.UpsertAsync(latest with { LiveSessionId = null, UpdatedAt = now }, ct);
         log.LogInformation("Session {Session} for {Deck} ended ({Reason}): {Duration}s, peak {Peak} viewers", session.Id, slug, reason, recap.DurationSeconds, recap.PeakViewers);
+        await LinkSubmissionAsync(latest, session, ct);
         await NotifyAsync(session);
         return session;
+    }
+
+    /// <summary>Minimum length for a session to count as a delivery worth attaching to a submission.</summary>
+    public static readonly TimeSpan MinDeliveryLength = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Attaches the ended session to the talk's submission it most plausibly was: dated within a day of the session,
+    /// accepted/submitted/delivered (the repository's own status wins; Podium never edits files), naming this deck or
+    /// no deck in particular, not already linked to another session. Rehearsals and very short sessions never link.
+    /// </summary>
+    public async Task<Submission?> LinkSubmissionAsync(Deck deck, Session session, CancellationToken ct = default)
+    {
+        if (talks is null || deck.TalkId is null || session.Rehearsal || session.EndedAt is null) return null;
+        if (session.EndedAt.Value - session.StartedAt < MinDeliveryLength) return null;
+        try
+        {
+            var talk = await talks.GetAsync(deck.TalkId, ct);
+            if (talk is null || talk.Archived) return null;
+            var day = DateOnly.FromDateTime(session.StartedAt.UtcDateTime);
+            var match = talk.Submissions
+                .Where(s => s.Date is { } d && Math.Abs(d.DayNumber - day.DayNumber) <= 1)
+                .Where(s => s.Status is "accepted" or "submitted" or "delivered")
+                .Where(s => s.SessionId is null || s.SessionId == session.Id)
+                .Where(s => s.DeckSlug is null || s.DeckSlug == deck.Slug)
+                .OrderBy(s => s.DeckSlug == deck.Slug ? 0 : 1)
+                .ThenBy(s => Math.Abs(s.Date!.Value.DayNumber - day.DayNumber))
+                .ThenBy(s => s.Status == "delivered" ? 0 : s.Status == "accepted" ? 1 : 2)
+                .FirstOrDefault();
+            if (match is null) return null;
+            var linked = match with { SessionId = session.Id, SessionDeckSlug = deck.Slug };
+            await talks.UpsertAsync(talk with { Submissions = talk.Submissions.Select(s => s.Key == match.Key ? linked : s).ToList(), UpdatedAt = DateTimeOffset.UtcNow }, ct);
+            log.LogInformation("Session {Session} linked to submission {Submission} of talk {Talk}", session.Id, match.Key, talk.Id);
+            return linked;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "Could not link session {Session} to a submission", session.Id);
+            return null;
+        }
     }
 
     private async Task NotifyAsync(Session session)

@@ -16,7 +16,8 @@
 }
 <article class="card @(d.Pinned ? "pinned" : "") @(d.Archived ? "archived" : "")"
          data-slug="@d.Slug" data-search="@Model.SearchText" data-kind="@kind" data-kind-label="@Model.KindLabel" data-vis="@vis" data-vis-label="@Model.VisibilityLabel" data-status="@status"
-         data-repo="@Model.RepoLabel" data-tags="@string.Join(" ", d.Tags)" data-title="@d.Title.ToLowerInvariant()" data-updated="@Model.Updated.UtcDateTime.ToString("o")" data-viewed="@(Model.LastViewed?.UtcDateTime.ToString("o"))" data-year="@Model.Updated.Year">
+         data-repo="@Model.RepoLabel" data-tags="@string.Join(" ", d.Tags)" data-title="@d.Title.ToLowerInvariant()" data-updated="@Model.Updated.UtcDateTime.ToString("o")" data-viewed="@(Model.LastViewed?.UtcDateTime.ToString("o"))" data-year="@Model.Updated.Year"
+         data-talk="@(Model.Talk?.Title)" data-talk-id="@(Model.Talk?.Id)">
     <a class="card-thumb kind-@kind" href="@(canPresent ? $"/d/{d.Slug}/" : $"/decks/{d.Slug}")" target="@(canPresent ? "_blank" : null)" rel="noopener" tabindex="-1" aria-hidden="true">
         @if (Model.HasThumbnail)
         {
@@ -50,6 +51,11 @@
         </div>
         <div class="card-meta">
             <span class="badge badge-kind-@kind kind">@Model.KindLabel</span>
+            @if (Model.VariantLabel is { } variant)
+            {
+                if (Model.Talk is { } talk) { <a class="badge badge-variant" href="/talks/@talk.Id" title="Variant of the talk “@talk.Title”">@variant</a> }
+                else { <span class="badge badge-variant" title="One of several decks in this folder">@variant</span> }
+            }
             <span class="badge badge-vis-@vis vis" title="@visTitle">@Model.VisibilityLabel</span>
             @if (d.LiveSessionId is not null) { <span class="badge badge-live" title="A live session is running">● Live</span> }
             @if (d.PinnedBuildId is not null) { <span class="badge badge-frozen" title="Frozen: the served version does not change until you unfreeze">❄ Frozen</span> }

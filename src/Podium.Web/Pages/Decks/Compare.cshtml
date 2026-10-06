@@ -1,0 +1,119 @@
+@page "/decks/{slug}/compare/{other}"
+@model Podium.Web.Pages.Decks.CompareModel
+@using Podium.Core.Services
+@{
+    var l = Model.Left; var r = Model.Right;
+    ViewData["Title"] = $"Compare: {l.Title} vs {r.Title}";
+    string Label(Deck d) => d.Variant ?? (Model.Talk is not null && d.Path == Model.Talk.Path ? "main" : d.Slug);
+    string KindLabel(CompareKind k) => k switch { CompareKind.Same => "Same", CompareKind.Changed => "Changed", CompareKind.OnlyLeft => "Only here", _ => "Only there" };
+    const int thumb = 200;
+}
+
+<p><a href="/decks/@l.Slug" class="muted">← @l.Title</a>@if (Model.Talk is not null) { <span class="faint"> · talk <a href="/talks/@Model.Talk.Id">@Model.Talk.Title</a></span> }</p>
+<div class="row-between" style="margin-bottom:1rem; flex-wrap:wrap; gap:.6rem">
+    <div>
+        <h1>Compare variants</h1>
+        <p class="muted" style="margin:0">Slides aligned by their text, in order. Thumbnails come from the slide sheets; wording differences are highlighted.</p>
+    </div>
+    @if (Model.Others.Count > 1)
+    {
+        <label class="field" style="min-width:16rem">Compare “@l.Title” with
+            <select class="input" id="compare-other" aria-label="Other deck">
+                @foreach (var o in Model.Others) { <option value="@o.Slug" selected="@(o.Slug == r.Slug)">@o.Title@(o.Variant is not null ? $" ({o.Variant})" : "")</option> }
+            </select>
+        </label>
+    }
+</div>
+
+@if (Model.Problem is not null)
+{
+    <div class="alert alert-warn">@Model.Problem</div>
+}
+else if (Model.Result is { } res)
+{
+    <div class="compare-summary panel" style="margin-bottom:1rem">
+        <div class="compare-score" title="Share of slide text the two decks have in common">
+            <div class="compare-ring" style="--p:@((int)Math.Round(res.Similarity * 100))"><span>@((int)Math.Round(res.Similarity * 100))%</span></div>
+            <div><strong>similar</strong><div class="faint" style="font-size:.85rem">by slide text</div></div>
+        </div>
+        <ul class="compare-counts">
+            <li><span class="badge badge-cmp-same">@res.Same</span> identical</li>
+            <li><span class="badge badge-cmp-changed">@res.Changed</span> reworded</li>
+            <li><span class="badge badge-cmp-left">@res.OnlyLeft</span> only in <strong>@Label(l)</strong></li>
+            <li><span class="badge badge-cmp-right">@res.OnlyRight</span> only in <strong>@Label(r)</strong></li>
+        </ul>
+        <label class="row" style="gap:.4rem; margin-left:auto; font-size:.9rem"><input type="checkbox" id="hide-same" /> Hide identical slides</label>
+    </div>
+
+    <div class="compare-head">
+        <div class="compare-col-head">
+            <span class="badge badge-variant">@Label(l)</span> <a href="/decks/@l.Slug">@l.Title</a>
+            <span class="faint">· @l.CurrentSlideCount slides</span>
+        </div>
+        <div class="compare-col-head">
+            <span class="badge badge-variant">@Label(r)</span> <a href="/decks/@r.Slug">@r.Title</a>
+            <span class="faint">· @r.CurrentSlideCount slides</span>
+        </div>
+    </div>
+    <ol class="compare-rows" id="compare-rows">
+    @foreach (var row in res.Rows)
+    {
+        var kind = row.Kind.ToString().ToLowerInvariant();
+        <li class="compare-row cmp-@kind" data-kind="@kind">
+            <div class="compare-cell">
+                @if (row.Left is { } ls)
+                {
+                    <a class="compare-thumb" href="/d/@l.Slug/@ls.Index" target="_blank" rel="noopener" title="Open slide @ls.Index">
+                        @if (Model.LeftSheet is { } lg) { <span class="sprite" style="@CompareModel.SpriteStyle(l, lg, ls.Index, thumb)"></span> } else { <span class="sprite sprite-empty" style="width:@(thumb)px"></span> }
+                        <span class="compare-num">@ls.Index</span>
+                    </a>
+                    <div class="compare-text">
+                        @if (ls.Title is not null) { <div class="compare-title">@ls.Title</div> }
+                        @if (row.Kind == CompareKind.Changed && row.Right is { } rs0)
+                        {
+                            <div class="compare-body">@foreach (var t in DeckCompare.WordDiff(ls.Text, rs0.Text)) { if (t.Op == '-') { <del>@t.Text</del> } else if (t.Op == ' ') { <text>@t.Text</text> } <text> </text> }</div>
+                        }
+                        else { <div class="compare-body">@ls.Text</div> }
+                    </div>
+                }
+                else { <div class="compare-gap">—</div> }
+            </div>
+            <div class="compare-mid"><span class="badge badge-cmp-@kind" title="@(row.Kind is CompareKind.Same or CompareKind.Changed ? $"{(int)Math.Round(row.Similarity * 100)}% of the words in common" : "")">@KindLabel(row.Kind)@(row.Kind == CompareKind.Changed ? $" {(int)Math.Round(row.Similarity * 100)}%" : "")</span></div>
+            <div class="compare-cell">
+                @if (row.Right is { } rs)
+                {
+                    <a class="compare-thumb" href="/d/@r.Slug/@rs.Index" target="_blank" rel="noopener" title="Open slide @rs.Index">
+                        @if (Model.RightSheet is { } rg) { <span class="sprite" style="@CompareModel.SpriteStyle(r, rg, rs.Index, thumb)"></span> } else { <span class="sprite sprite-empty" style="width:@(thumb)px"></span> }
+                        <span class="compare-num">@rs.Index</span>
+                    </a>
+                    <div class="compare-text">
+                        @if (rs.Title is not null) { <div class="compare-title">@rs.Title</div> }
+                        @if (row.Kind == CompareKind.Changed && row.Left is { } ls0)
+                        {
+                            <div class="compare-body">@foreach (var t in DeckCompare.WordDiff(ls0.Text, rs.Text)) { if (t.Op == '+') { <ins>@t.Text</ins> } else if (t.Op == ' ') { <text>@t.Text</text> } <text> </text> }</div>
+                        }
+                        else { <div class="compare-body">@rs.Text</div> }
+                    </div>
+                }
+                else { <div class="compare-gap">—</div> }
+            </div>
+        </li>
+    }
+    </ol>
+}
+
+@section Scripts {
+<script nonce="@Podium.Web.Security.Csp.Nonce(HttpContext)">
+(function () {
+  document.getElementById('compare-other')?.addEventListener('change', (e) => { location.href = `/decks/@l.Slug/compare/${e.target.value}`; });
+  const hide = document.getElementById('hide-same');
+  const KEY = 'podium.compare.hideSame';
+  if (hide) {
+    const apply = () => { document.querySelectorAll('.compare-row[data-kind="same"]').forEach((r) => { r.hidden = hide.checked; }); localStorage.setItem(KEY, hide.checked ? '1' : '0'); };
+    hide.checked = localStorage.getItem(KEY) === '1';
+    hide.addEventListener('change', apply);
+    apply();
+  }
+})();
+</script>
+}

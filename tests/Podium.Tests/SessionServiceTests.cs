@@ -159,4 +159,49 @@ public class SessionServiceTests
         Assert.Single(await _svc.HoldingDeploysAsync());
         Assert.Equal("c", (await _svc.HoldingDeploysAsync())[0].DeckSlug);
     }
+
+    [Fact]
+    public async Task Ended_sessions_attach_to_the_matching_submission_of_the_deck_s_talk()
+    {
+        var talks = new InMemoryTalkStore();
+        var buildService = new BuildService(_builds, _decks, new FakeArtifacts(), new FakeRepo(), new FakeRunner(), new FakeTokens(),
+            Options.Create(new BuildOptions { PublicBaseUrl = new Uri("https://x.test") }), NullLogger<BuildService>.Instance, _sources);
+        var svc = new SessionService(_sessions, _decks, _links, buildService, _recorders, Options.Create(_opts), NullLogger<SessionService>.Instance, talks);
+        var deck = await SeedAsync("agents");
+        await _decks.UpsertAsync(deck with { TalkId = "o-r-agents" });
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        await talks.UpsertAsync(new Talk
+        {
+            Id = "o-r-agents", LocalId = "agents", SourceId = "o/r", Path = "agents", Title = "Agents",
+            Submissions =
+            [
+                new Submission { Key = "old", Event = "Last year", Date = today.AddDays(-300), Status = "delivered" },
+                new Submission { Key = "other-deck", Event = "Workshop", Date = today, Status = "accepted", DeckSlug = "agents-workshop" },
+                new Submission { Key = "declined", Event = "Nope", Date = today, Status = "declined" },
+                new Submission { Key = "today", Event = "Conf", Date = today.AddDays(1), Status = "accepted" },
+            ],
+        });
+
+        // Too short to be a delivery: nothing links.
+        var (s1, _) = await svc.StartAsync("agents", 45, false, false, null);
+        var short1 = (await svc.EndAsync("agents", "manual", false))!;
+        Assert.Null((await talks.GetAsync("o-r-agents"))!.Submissions.First(s => s.Key == "today").SessionId);
+
+        // A real delivery links to the accepted submission around the date, skipping the one for the other deck and the declined one.
+        var (s2, _) = await svc.StartAsync("agents", 45, false, false, null);
+        await _sessions.UpsertAsync(s2! with { StartedAt = DateTimeOffset.UtcNow.AddMinutes(-40) });
+        var ended = (await svc.EndAsync("agents", "manual", false))!;
+        var talk = (await talks.GetAsync("o-r-agents"))!;
+        var linked = talk.Submissions.Single(s => s.SessionId is not null);
+        Assert.Equal("today", linked.Key);
+        Assert.Equal(ended.Id, linked.SessionId);
+        Assert.Equal("agents", linked.SessionDeckSlug);
+
+        // A later session on the same day does not steal the link; rehearsals never link.
+        var (s3, _) = await svc.StartAsync("agents", 45, false, false, null, rehearsal: true);
+        await _sessions.UpsertAsync(s3! with { StartedAt = DateTimeOffset.UtcNow.AddMinutes(-40) });
+        await svc.EndAsync("agents", "manual", false);
+        Assert.Equal(ended.Id, (await talks.GetAsync("o-r-agents"))!.Submissions.Single(s => s.Key == "today").SessionId);
+        Assert.Single((await talks.GetAsync("o-r-agents"))!.Submissions, s => s.SessionId is not null);
+    }
 }

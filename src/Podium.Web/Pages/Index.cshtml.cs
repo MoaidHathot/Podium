@@ -5,7 +5,7 @@ using Podium.Web.Security;
 
 namespace Podium.Web.Pages;
 
-public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHistoryStore views, CallerResolver callers, IAccessRequestStore accessRequests, ISessionStore sessions) : PageModel
+public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHistoryStore views, CallerResolver callers, IAccessRequestStore accessRequests, ISessionStore sessions, ITalkStore talks) : PageModel
 {
     public IReadOnlyList<AccessRequest> PendingRequests { get; private set; } = [];
     public IReadOnlyList<DeckRow> Decks { get; private set; } = [];
@@ -17,6 +17,7 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
     public IReadOnlyList<(Session Session, Deck Deck)> LiveNow { get; private set; } = [];
     public bool AnyBuilding { get; private set; }
     public bool HasSources { get; private set; }
+    public bool HasTalks { get; private set; }
     /// <summary>Set when /remote found nothing to open (no live session, nothing presented yet).</summary>
     [Microsoft.AspNetCore.Mvc.BindProperty(SupportsGet = true)] public string? Remote { get; set; }
 
@@ -26,6 +27,8 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
         Sources = await sources.ListAsync(ct);
         HasSources = Sources.Count > 0;
         var sourceMap = Sources.ToDictionary(s => s.Id, StringComparer.Ordinal);
+        var talkMap = (await talks.ListAsync(includeArchived: false, ct)).ToDictionary(t => t.Id, StringComparer.Ordinal);
+        HasTalks = talkMap.Count > 0;
 
         var lastViewed = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         IReadOnlyDictionary<string, DateTimeOffset> dismissed = new Dictionary<string, DateTimeOffset>();
@@ -45,8 +48,9 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
         var bySlug = everything.ToDictionary(d => d.Slug, StringComparer.Ordinal);
         LiveNow = (await sessions.ListLiveAsync(ct)).OrderByDescending(s => s.StartedAt)
             .Where(s => bySlug.ContainsKey(s.DeckSlug)).Select(s => (s, bySlug[s.DeckSlug])).ToList();
-        Archived = everything.Where(d => d.Archived).OrderByDescending(d => d.UpdatedAt).Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), null)).ToList();
-        var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null)).ToList();
+        Talk? TalkOf(Deck d) => d.TalkId is not null ? talkMap.GetValueOrDefault(d.TalkId) : null;
+        Archived = everything.Where(d => d.Archived).OrderByDescending(d => d.UpdatedAt).Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), null) { Talk = TalkOf(d) }).ToList();
+        var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null) { Talk = TalkOf(d) }).ToList();
         Decks = rows.OrderByDescending(r => r.Deck.LastCommitAt ?? r.Deck.UpdatedAt).ToList();
         Pinned = Decks.Where(r => r.Deck.Pinned).ToList();
         // A dismissed deck stays hidden from the shelf until it is presented again (a view newer than the dismissal).
@@ -63,7 +67,11 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
 {
     /// <summary>True when rendered inside the "Recently presented" shelf (enables the dismiss action).</summary>
     public bool InRecentShelf { get; init; }
+    /// <summary>The talk this deck is a variant of, when its folder has an abstract.md (or .podium.yml joins one).</summary>
+    public Talk? Talk { get; init; }
     public string RepoLabel => Source?.FullName ?? Deck.SourceId;
+    /// <summary>Label of the variant inside its talk: the explicit label, else "main" when siblings exist.</summary>
+    public string? VariantLabel => Deck.Variant ?? (Talk is { DeckSlugs.Count: > 1 } ? "main" : null);
     public string KindLabel => Deck.Kind switch
     {
         DeckKind.Slidev => "Slidev",
@@ -117,5 +125,5 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
         BuildStatus.Running => "Building",
         _ => "Not built",
     };
-    public string SearchText => string.Join(' ', Deck.Title, Deck.Slug, Deck.Path, RepoLabel, KindLabel, Deck.Author ?? "", string.Join(' ', Deck.Tags), Deck.Visibility.ToString()).ToLowerInvariant();
+    public string SearchText => string.Join(' ', Deck.Title, Deck.Slug, Deck.Path, RepoLabel, KindLabel, Deck.Author ?? "", string.Join(' ', Deck.Tags), Deck.Visibility.ToString(), Talk?.Title ?? "", Talk?.LocalId ?? "", Deck.Variant ?? "").ToLowerInvariant();
 }

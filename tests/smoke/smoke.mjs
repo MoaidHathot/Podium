@@ -43,6 +43,52 @@ try {
   await op.goto(`${base}/`, { waitUntil: 'networkidle' });
   await op.fill('#search', 'slide two'); await op.waitForTimeout(600);
   check('full-text search hits slide 2', (await op.locator('#slide-hits-list li a[href$="/fixture-deck/2"]').count()) > 0);
+  await op.fill('#search', 'sync relay'); await op.waitForTimeout(600);
+  check('library search finds the talk by its abstract', (await op.locator('#talk-hits-list li a[href="/talks/fixture-slides-fixture"]').count()) === 1);
+  await op.fill('#search', '');
+  check('library card carries the variant chip', (await op.locator('.card[data-slug="fixture-deck-workshop"] .badge-variant:has-text("workshop")').count()) === 1);
+  await op.selectOption('#group', 'talk'); await op.waitForTimeout(200);
+  check('library groups by talk', (await op.locator('#groups section.group[data-group-key="The fixture talk"] .card').count()) === 2);
+  await op.selectOption('#group', 'repo');
+
+  // Talks: owner catalog, detail with CfP pack, compare view, and the public speaker page.
+  await op.goto(`${base}/talks`, { waitUntil: 'networkidle' });
+  check('talks catalog lists the fixture talk', (await op.locator('.talk-card .talk-title a[href="/talks/fixture-slides-fixture"]').count()) === 1);
+  check('talks catalog shows next event', /Workshop Days/.test(await op.locator('.talk-card .talk-foot').innerText()));
+  await op.fill('#talk-search', 'nothing-matches-this'); await op.waitForTimeout(100);
+  check('talks search hides non-matching talks', (await op.locator('.talk-card:not([hidden])').count()) === 0 && !(await op.locator('#talk-none').isHidden()));
+  await op.fill('#talk-search', '');
+  await op.goto(`${base}/talks/fixture-slides-fixture`, { waitUntil: 'networkidle' });
+  check('talk detail renders the abstract as HTML', (await op.locator('#abstract .prose strong:has-text("every")').count()) === 1);
+  check('talk detail lists both variants', (await op.locator('#decks .variant').count()) === 2);
+  check('talk detail timeline shows the three events', (await op.locator('#events .tl-item').count()) === 3);
+  check('talk detail links the recap-less delivery to its deck', (await op.locator('#events a[href="/decks/fixture-deck"]').count()) >= 1);
+  const cfp = await op.request.get(`${base}/talks/fixture-slides-fixture/cfp.txt`);
+  check('CfP pack as text', cfp.ok() && /^The fixture talk\n\nAbstract\nThree slides that exercise every feature/.test(await cfp.text()), String(cfp.status()));
+  await op.selectOption('#decks select[data-compare-from="fixture-deck"]', 'fixture-deck-workshop');
+  await op.waitForURL(/\/decks\/fixture-deck\/compare\/fixture-deck-workshop$/, { timeout: 5000 }).catch(() => {});
+  check('compare view opens from the talk', /\/compare\/fixture-deck-workshop$/.test(op.url()), op.url());
+  const counts = (await op.locator('.compare-counts').innerText()).replace(/\s+/g, ' ');
+  check('compare view aligns the slides', /2 identical 1 reworded 0 only in main 0 only in workshop/.test(counts), counts);
+  check('compare view highlights the reworded slide', (await op.locator('.compare-row.cmp-changed ins').count()) >= 1 && (await op.locator('.compare-row.cmp-changed del').count()) >= 1);
+  check('compare view shows slide-sheet sprites', await op.evaluate(() => { const s = document.querySelector('.compare-thumb .sprite'); return !!s && getComputedStyle(s).backgroundImage.includes('/slides.jpg'); }));
+  await op.check('#hide-same');
+  check('hide identical slides', (await op.locator('.compare-row[data-kind="same"]:not([hidden])').count()) === 0);
+  await op.uncheck('#hide-same');
+  await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
+  check('deck page shows the talk strip with the sibling variant', (await op.locator('#talk a[href="/talks/fixture-slides-fixture"]').count()) >= 1 && (await op.locator('#talk a[href="/decks/fixture-deck-workshop"]').count()) >= 1);
+  {
+    const speaker = await browser.newContext();
+    const sp = await speaker.newPage();
+    sp.on('pageerror', (e) => errors.push(`speaker page: ${e.message}`));
+    await sp.goto(`${base}/talks`, { waitUntil: 'networkidle' });
+    check('public speaker page renders without sign-in', (await sp.locator('.speaker-hero h1:has-text("Fixture Speaker")').count()) === 1);
+    check('public speaker page lists only public facts', (await sp.locator('.talk-card').count()) === 1 && !(await sp.content()).includes('Declined Con') && !(await sp.content()).includes('New talk'));
+    await sp.goto(`${base}/talks/fixture-slides-fixture`, { waitUntil: 'networkidle' });
+    const content = await sp.content();
+    check('public talk page hides declined submissions and owner actions', content.includes('SmokeConf') && !content.includes('Declined Con') && !content.includes('Edit on GitHub') && /og:description/.test(content));
+    await speaker.close();
+  }
 
   await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
   check('details renders', (await op.locator('h3:has-text("Present")').count()) > 0);

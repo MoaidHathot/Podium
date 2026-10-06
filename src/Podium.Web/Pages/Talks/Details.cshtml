@@ -1,0 +1,207 @@
+@page "/talks/{id}"
+@model Podium.Web.Pages.Talks.DetailsModel
+@using Podium.Web.Security
+@{
+    var t = Model.Talk;
+    ViewData["Title"] = t.Title;
+    string StatusLabel(string s) => s switch { "draft" => "Draft", "retired" => "Retired", _ => "Available" };
+    string SubStatus(string s) => s switch { "accepted" => "Accepted", "declined" => "Declined", "delivered" => "Delivered", "cancelled" => "Cancelled", _ => "Submitted" };
+    string Format(string f) => f switch { "workshop" => "Workshop", "lightning" => "Lightning talk", "keynote" => "Keynote", "panel" => "Panel", "course" => "Course", "webinar" => "Webinar", _ => "Talk" };
+    var bioPart = t.Part("bio");
+    var knownParts = new HashSet<string> { "shortabstract", "short", "bio" };
+    var otherParts = t.Parts.Where(p => !knownParts.Contains(p.Key)).ToList();
+    var shortPart = t.Part("short abstract") ?? t.Part("short");
+    var decksBySlug = Model.Decks.ToDictionary(d => d.Slug, StringComparer.Ordinal);
+    var shortText = Markdown.ToText(t.ShortAbstract);
+}
+@section Head {
+    @if (!Model.IsOwner)
+    {
+        <meta property="og:type" content="article" />
+        <meta property="og:title" content="@t.Title" />
+        <meta property="og:description" content="@(shortText.Length > 300 ? shortText[..300] : shortText)" />
+        <meta property="og:url" content="@Model.Origin/talks/@t.Id" />
+        @if (Model.View.Thumbnail is { } th) { <meta property="og:image" content="@Model.Origin/d/@(th.Slug).jpg?v=@th.CurrentBuildId" /><meta name="twitter:card" content="summary_large_image" /> }
+    }
+}
+
+<p><a href="/talks@(Model.IsPreview ? "?public=1" : "")" class="muted">← Talks</a></p>
+@if (Model.IsPreview)
+{
+    <div class="alert alert-info" style="margin-bottom:1rem">Public view of this talk. <a href="/talks/@t.Id">Back to the owner view</a></div>
+}
+
+<div class="deck-hero" style="margin-bottom:1.25rem">
+    <div style="min-width:0">
+        <h1 id="title">@t.Title</h1>
+        <div class="row" style="margin-top:.4rem; gap:.5rem; flex-wrap:wrap">
+            @if (Model.IsOwner) { <span class="badge badge-status-@t.Status">@StatusLabel(t.Status)</span> }
+            @if (Model.IsOwner && t.Public) { <span class="badge" title="Listed on your public talks page">Public</span> }
+            @if (t.Level is not null) { <span class="badge">@char.ToUpperInvariant(t.Level[0])@t.Level[1..]</span> }
+            @if (t.Durations.Count > 0) { <span class="badge">@string.Join(" / ", t.Durations) min</span> }
+            @foreach (var tag in t.Tags) { <a class="tag" href="/talks?tag=@Uri.EscapeDataString(tag)@(Model.IsPreview ? "&public=1" : "")">#@tag</a> }
+        </div>
+        @if (Model.IsOwner && Model.Source is not null)
+        {
+            <p class="muted mono" style="font-size:.85rem; margin-top:.5rem">@Model.Source.FullName/@(t.Path.Length > 0 ? t.Path + "/" : "")abstract.md · id <code>@t.LocalId</code></p>
+        }
+    </div>
+    @if (Model.IsOwner && Model.Source is not null)
+    {
+        <div class="row" style="gap:.5rem; flex-wrap:wrap; align-items:flex-start">
+            <a class="btn" href="@Model.EditUrl("abstract.md")" rel="noopener noreferrer" target="_blank">Edit on GitHub</a>
+            <a class="btn" href="/talks/@t.Id/cfp.md" id="cfp-md" title="Title, abstracts, outline, takeaways and bio as Markdown">CfP pack</a>
+            <button class="btn btn-ghost" id="cfp-copy" title="Copy the CfP pack as plain text">Copy pack</button>
+            <a class="btn btn-ghost" href="/talks/@t.Id?public=1" title="How organisers see this talk">Public view</a>
+        </div>
+    }
+</div>
+
+<div class="two-col talk-detail">
+    <div class="stack">
+        <section class="panel" id="abstract">
+            <div class="row-between tight"><h3>Abstract</h3>@if (Model.IsOwner) { <button class="btn btn-sm btn-ghost" data-copy-part="abstract">Copy</button> }</div>
+            <div class="prose" data-part-text="abstract" data-md="@t.Abstract">@Html.Raw(Markdown.ToHtml(t.Abstract))</div>
+            @if (string.IsNullOrWhiteSpace(t.Abstract)) { <p class="faint">No abstract yet@(Model.IsOwner ? " — the body of abstract.md is the abstract." : ".")</p> }
+        </section>
+        @if (shortPart is not null)
+        {
+            <section class="panel" id="short-abstract">
+                <div class="row-between tight"><h3>@shortPart.Name</h3>@if (Model.IsOwner) { <button class="btn btn-sm btn-ghost" data-copy-part="short">Copy</button> }</div>
+                <div class="prose" data-part-text="short" data-md="@shortPart.Markdown">@Html.Raw(Markdown.ToHtml(shortPart.Markdown))</div>
+            </section>
+        }
+        @foreach (var part in otherParts)
+        {
+            <section class="panel">
+                <div class="row-between tight"><h3>@part.Name</h3>@if (Model.IsOwner) { <button class="btn btn-sm btn-ghost" data-copy-part="@part.Key">Copy</button> }</div>
+                <div class="prose" data-part-text="@part.Key" data-md="@part.Markdown">@Html.Raw(Markdown.ToHtml(part.Markdown))</div>
+            </section>
+        }
+        @if (Model.Bio is { } bio && !string.IsNullOrWhiteSpace(bio))
+        {
+            <section class="panel" id="bio">
+                <div class="row-between tight"><h3>Bio@(bioPart is not null ? "" : "")</h3>@if (Model.IsOwner) { <button class="btn btn-sm btn-ghost" data-copy-part="bio">Copy</button> }</div>
+                <div class="prose" data-part-text="bio" data-md="@bio">@Html.Raw(Markdown.ToHtml(bio))</div>
+                @if (Model.IsOwner) { <p class="faint" style="margin:.4rem 0 0; font-size:.82rem">@(bioPart is not null ? "This talk carries its own bio (## Bio in abstract.md); speaker.md holds the current one." : "From speaker.md; add ## Bio to abstract.md to keep a talk-specific version.")</p> }
+            </section>
+        }
+    </div>
+
+    <div class="stack">
+        <section class="panel" id="decks">
+            <h3>Slides</h3>
+            @if (Model.Decks.Count == 0)
+            {
+                <p class="faint">@(Model.IsOwner ? "No deck yet. Put the deck in this folder (every deck there is a variant of this talk), or add `talk: " + t.LocalId + "` to another deck's .podium.yml." : "No public slides for this talk.")</p>
+            }
+            else
+            {
+                <ul class="variant-list">
+                @foreach (var d in Model.Decks)
+                {
+                    var isHome = d.Path == t.Path;
+                    <li class="variant">
+                        @if (d.CurrentHasThumbnail && d.CurrentBuildId is not null) { <a class="variant-thumb" href="/d/@d.Slug/" target="_blank" rel="noopener" tabindex="-1"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId" alt="" loading="lazy" width="160" height="90" /></a> }
+                        else { <span class="variant-thumb variant-thumb-empty"></span> }
+                        <div class="variant-text">
+                            <div class="row" style="gap:.4rem; flex-wrap:wrap; align-items:center">
+                                <strong>@d.Title</strong>
+                                @if (d.Variant is not null) { <span class="badge badge-variant">@d.Variant</span> } else if (isHome && Model.Decks.Count > 1) { <span class="badge badge-variant">main</span> }
+                                @if (!isHome && Model.IsOwner) { <span class="badge" title="Joined this talk through .podium.yml">joined</span> }
+                                <span class="badge badge-kind-@d.Kind.ToString().ToLowerInvariant()">@(d.Kind switch { DeckKind.PowerPoint => "PowerPoint", DeckKind.Pdf => "PDF", DeckKind.Static => "HTML", _ => d.Kind.ToString() })</span>
+                                @if (Model.IsOwner) { <span class="badge badge-vis-@d.Visibility.ToString().ToLowerInvariant()">@d.Visibility</span> }
+                            </div>
+                            <div class="faint mono" style="font-size:.8rem">@d.EntryPath@(d.CurrentSlideCount > 0 ? $" · {d.CurrentSlideCount} slides" : "")@(d.LastCommitAt is { } lc ? $" · updated {lc:yyyy-MM-dd}" : "")</div>
+                            <div class="row" style="gap:.4rem; margin-top:.4rem; flex-wrap:wrap">
+                                @if (d.CurrentBuildId is not null) { <a class="btn btn-sm btn-primary" href="/d/@d.Slug/" target="_blank" rel="noopener">@(Model.IsOwner ? "Present" : "Open")</a> }
+                                @if (Model.IsOwner) { <a class="btn btn-sm" href="/decks/@d.Slug">Manage</a> }
+                                @if (Model.IsOwner && Model.Decks.Count > 1 && d.CurrentHasText)
+                                {
+                                    var others = Model.Decks.Where(o => o.Slug != d.Slug && o.CurrentHasText).ToList();
+                                    if (others.Count > 0)
+                                    {
+                                        <span class="row" style="gap:.3rem">
+                                            <label class="faint" style="font-size:.8rem">Compare with</label>
+                                            <select class="input input-sm compare-pick" data-compare-from="@d.Slug" aria-label="Compare @d.Title with">
+                                                <option value="">…</option>
+                                                @foreach (var o in others) { <option value="@o.Slug">@o.Title@(o.Variant is not null && !o.Title.Contains(o.Variant, StringComparison.OrdinalIgnoreCase) ? $" ({o.Variant})" : "")</option> }
+                                            </select>
+                                        </span>
+                                    }
+                                }
+                            </div>
+                        </div>
+                    </li>
+                }
+                </ul>
+            }
+        </section>
+
+        <section class="panel" id="events">
+            <div class="row-between" style="flex-wrap:wrap; gap:.5rem">
+                <h3>@(Model.IsOwner ? "Submissions & deliveries" : "Where")</h3>
+                @if (Model.IsOwner && Model.Source is not null) { <a class="btn btn-sm" href="@Model.NewSubmissionUrl()" rel="noopener noreferrer" target="_blank" title="Create a submission file on GitHub">Add event</a> }
+            </div>
+            @if (Model.View.Submissions.Count == 0)
+            {
+                <p class="faint">@(Model.IsOwner ? "Nothing recorded yet. Each event is a file under submissions/ (event, date, status, format, duration, deck, recording…); the body is the abstract exactly as submitted." : "Not delivered publicly yet.")</p>
+            }
+            else
+            {
+                <ol class="timeline">
+                @foreach (var s in Model.View.Submissions)
+                {
+                    var deck = s.DeckSlug is not null ? decksBySlug.GetValueOrDefault(s.DeckSlug) : null;
+                    Model.LinkedSessions.TryGetValue(s.SessionId ?? "", out var session);
+                    <li class="tl-item tl-@s.Status">
+                        <div class="tl-when">@(s.Date is { } dt ? dt.ToString("MMM d, yyyy") : "date unknown")</div>
+                        <div class="tl-body">
+                            <div class="row" style="gap:.4rem; flex-wrap:wrap; align-items:center">
+                                <strong>@s.Event</strong>
+                                <span class="badge badge-sub-@s.Status">@SubStatus(s.Status)</span>
+                                @if (s.Format != "talk") { <span class="badge">@Format(s.Format)</span> }
+                                @if (s.Duration is { } du) { <span class="faint">@du min</span> }
+                                @if (s.Location is not null) { <span class="faint">· @s.Location</span> }
+                            </div>
+                            @if (s.Title is not null && s.Title != t.Title) { <div class="faint" style="font-size:.9rem">as “@s.Title”</div> }
+                            <div class="row" style="gap:.5rem; flex-wrap:wrap; margin-top:.3rem; font-size:.88rem">
+                                @if (deck is not null) { <a href="@(Model.IsOwner ? $"/decks/{deck.Slug}" : $"/d/{deck.Slug}/")">@deck.Title@(deck.Variant is not null && !deck.Title.Contains(deck.Variant, StringComparison.OrdinalIgnoreCase) ? $" ({deck.Variant})" : "")</a> } else if (s.Deck is not null && Model.IsOwner) { <span class="faint" title="No deck matched this reference">deck: @s.Deck</span> }
+                                @if (Markdown.SafeLink(s.Url) is { } eventUrl) { <a href="@eventUrl" rel="noopener noreferrer" target="_blank">Event page</a> }
+                                @if (Markdown.SafeLink(s.Recording) is { } recUrl) { <a href="@recUrl" rel="noopener noreferrer" target="_blank">Recording</a> }
+                                @if (session?.Recap is { } r) { <a href="/decks/@session.DeckSlug#sessions" title="Live session recap">Recap: @TimeSpan.FromSeconds(r.DurationSeconds).ToString(r.DurationSeconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss") · peak @r.PeakViewers viewer@(r.PeakViewers == 1 ? "" : "s")@(session.AudienceRecap is { } a && (a.Questions.Count > 0 || a.ReactionTotal > 0) ? $" · {a.ReactionTotal} reactions, {a.Questions.Count} questions" : "")</a> }
+                                @if (Model.IsOwner && Model.Source is not null) { <a class="faint" href="@Model.EditUrl($"submissions/{s.Key}.md")" rel="noopener noreferrer" target="_blank">edit</a> }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(s.Abstract) && Model.IsOwner)
+                            {
+                                <details style="margin-top:.4rem"><summary class="faint" style="cursor:pointer; font-size:.85rem">Abstract as submitted</summary><div class="prose" style="font-size:.9rem">@Html.Raw(Markdown.ToHtml(s.Abstract))</div></details>
+                            }
+                            @if (s.Notes is not null && Model.IsOwner) { <p class="faint" style="margin:.3rem 0 0; font-size:.85rem">@s.Notes</p> }
+                        </div>
+                    </li>
+                }
+                </ol>
+            }
+        </section>
+    </div>
+</div>
+
+@if (Model.IsOwner)
+{
+@section Scripts {
+<script nonce="@Csp.Nonce(HttpContext)">
+(function () {
+  const { toast } = Podium;
+  async function copy(text, what) { try { await navigator.clipboard.writeText(text); toast(`${what} copied`, 'ok'); } catch { toast('Copy failed', 'error'); } }
+  document.querySelectorAll('[data-copy-part]').forEach((b) => b.addEventListener('click', () => {
+    const el = document.querySelector(`[data-part-text="${b.dataset.copyPart}"]`);
+    copy(el?.dataset.md || el?.innerText || '', 'Section');
+  }));
+  document.getElementById('cfp-copy')?.addEventListener('click', async () => {
+    try { const r = await fetch(location.pathname + '/cfp.txt', { credentials: 'same-origin' }); if (!r.ok) throw new Error(); copy(await r.text(), 'CfP pack'); } catch { toast('Could not load the pack', 'error'); }
+  });
+  document.querySelectorAll('[data-compare-from]').forEach((s) => s.addEventListener('change', () => { if (s.value) location.href = `/decks/${s.dataset.compareFrom}/compare/${s.value}`; }));
+})();
+</script>
+}
+}

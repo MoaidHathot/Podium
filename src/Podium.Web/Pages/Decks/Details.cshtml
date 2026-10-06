@@ -97,6 +97,60 @@
 </nav>
 
 <div class="tab-panel" data-tab="present" role="tabpanel" aria-labelledby="tab-present">
+@if (Model.Talk is { } talk)
+{
+    var usedHere = Model.DeckSubmissions;
+    <section class="panel talk-panel" id="talk" style="margin-bottom:1rem">
+        <div class="row-between" style="flex-wrap:wrap; gap:.5rem">
+            <h3 style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap">
+                <span class="faint" style="font-weight:500">Talk</span>
+                <a href="/talks/@talk.Id">@talk.Title</a>
+                @if (d.Variant is not null) { <span class="badge badge-variant">@d.Variant</span> } else if (Model.Siblings.Count > 0) { <span class="badge badge-variant">main</span> }
+                @if (d.Path != talk.Path) { <span class="badge" title="Joined through .podium.yml">joined</span> }
+            </h3>
+            <div class="row" style="gap:.4rem">
+                <a class="btn btn-sm" href="/talks/@talk.Id">Open talk</a>
+                <a class="btn btn-sm btn-ghost" href="/talks/@talk.Id/cfp.md" title="Title, abstracts, outline, takeaways and bio as Markdown">CfP pack</a>
+            </div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(talk.Abstract))
+        {
+            <details style="margin-top:.4rem">
+                <summary class="muted" style="cursor:pointer">@Podium.Web.Security.Markdown.ToText(talk.ShortAbstract) <span class="faint">(show abstract)</span></summary>
+                <div class="prose" style="margin-top:.5rem">@Html.Raw(Podium.Web.Security.Markdown.ToHtml(talk.Abstract))</div>
+            </details>
+        }
+        @if (Model.Siblings.Count > 0)
+        {
+            <div class="talk-strip" style="margin-top:.8rem">
+                @foreach (var s in Model.Siblings)
+                {
+                    <a class="variant-thumb" href="/decks/@s.Slug" title="@s.Title@(s.Variant is not null ? $" ({s.Variant})" : "")">
+                        @if (s.CurrentHasThumbnail && s.CurrentBuildId is not null) { <img src="/d/@(s.Slug).jpg?v=@s.CurrentBuildId" alt="" loading="lazy" width="120" height="68" /> }
+                    </a>
+                }
+                <div style="flex:1; min-width:12rem; font-size:.9rem">
+                    <div class="faint">Other variants</div>
+                    <ul style="margin:.2rem 0 0; padding-left:1.1rem">
+                        @foreach (var s in Model.Siblings)
+                        {
+                            <li><a href="/decks/@s.Slug">@s.Title</a>@(s.Variant is not null ? $" · {s.Variant}" : "")@(s.Path == talk.Path && s.Variant is null ? " · main" : "")
+                                @if (d.CurrentHasText && s.CurrentHasText) { <a class="faint" href="/decks/@d.Slug/compare/@s.Slug" title="Which slides differ between the two decks">compare</a> }
+                            </li>
+                        }
+                    </ul>
+                </div>
+            </div>
+        }
+        @if (usedHere.Count > 0)
+        {
+            <div class="faint" style="margin-top:.8rem; font-size:.9rem">Given with this deck:
+                @foreach (var s in usedHere.Take(5)) { <span class="chip chip-soft" style="margin:.15rem .2rem 0 0">@s.Event@(s.Date is { } sd ? $" · {sd:MMM yyyy}" : "")</span> }
+                @if (usedHere.Count > 5) { <a href="/talks/@talk.Id#events">+@(usedHere.Count - 5) more</a> }
+            </div>
+        }
+    </section>
+}
 <div class="@(d.Kind == DeckKind.PowerPoint ? "two-col" : "stack")">
     <section class="panel">
         <h3>Present</h3>

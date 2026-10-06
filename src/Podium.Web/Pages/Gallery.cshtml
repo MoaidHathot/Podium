@@ -20,6 +20,7 @@
         <h1>@Model.Title</h1>
         <p class="muted" style="margin:0">@description@(Model.Tag is not null ? $" tagged \"{Model.Tag}\"" : "")</p>
     </div>
+    @if (Model.HasPublicTalks) { <a class="btn" href="/talks">Talks</a> }
     @if (Model.Caller.IsAuthenticated)
     {
         <a class="btn" href="/shared">Decks shared with me</a>
@@ -65,7 +66,8 @@ else
                 {
                     <div class="card-sub">@d.Author@(d.Author is not null && d.LastCommitAt is not null ? " · " : "")@(d.LastCommitAt?.ToString("MMM yyyy"))</div>
                 }
-                @if (!string.IsNullOrWhiteSpace(d.Description)) { <p class="muted" style="font-size:.85rem; margin:.3rem 0 0">@(d.Description.Length > 160 ? d.Description[..160] + "…" : d.Description)</p> }
+                @if (Model.DescriptionOf(d) is { Length: > 0 } desc) { <p class="muted" style="font-size:.85rem; margin:.3rem 0 0">@(desc.Length > 160 ? desc[..160] + "…" : desc)</p> }
+                @if (Model.PublicTalkOf(d) is { } talk) { <a class="faint" style="font-size:.82rem" href="/talks/@talk.Id">About this talk →</a> }
                 @if (d.Tags.Count > 0)
                 {
                     <div class="card-tags">@foreach (var t in d.Tags.Take(5)) { <a class="tag" href="/gallery?tag=@Uri.EscapeDataString(t)">#@t</a> }</div>

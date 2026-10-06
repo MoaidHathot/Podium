@@ -278,6 +278,8 @@ builder.Services.AddRazorPages(o =>
     o.Conventions.AllowAnonymousToPage("/Shared");
     o.Conventions.AllowAnonymousToPage("/Gallery");
     o.Conventions.AllowAnonymousToPage("/Error");
+    // The talks catalog doubles as the public speaker page; the page models filter to public talks for non-owners.
+    o.Conventions.AllowAnonymousToFolder("/Talks");
 });
 builder.Services.AddHttpContextAccessor();
 
@@ -425,32 +427,57 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
 
     // Development/CI only: seeds a fixture deck (memory storage) whose tiny site speaks the Podium sync protocol, so
     // browser smoke tests can exercise library, details, remote and the relay without a real build.
-    app.MapPost("/dev-seed", async (ISourceStore sources, IDeckStore decks, IBuildStore builds, IArtifactStore artifacts, DeckAccessService access, DeckSearchIndex search, CancellationToken ct) =>
+    app.MapPost("/dev-seed", async (ISourceStore sources, IDeckStore decks, IBuildStore builds, IArtifactStore artifacts, DeckAccessService access, DeckSearchIndex search, ITalkStore talks, CancellationToken ct) =>
     {
         if (artifacts is not LocalArtifactStore local) return Results.BadRequest("dev-seed needs memory storage");
         const string slug = "fixture-deck";
+        const string talkId = "fixture-slides-fixture";
         await sources.UpsertAsync(new Source { Id = "fixture/slides", Owner = "fixture", Repo = "slides", Trusted = true, LastSeenSha = new string('a', 40) }, ct);
-        var dir = (await local.CreateUploadUriAsync(slug, Podium.Web.Storage.FixtureDeck.BuildId, TimeSpan.FromMinutes(5), ct)).LocalPath;
-        Directory.CreateDirectory(Path.Combine(dir, "site", "pages"));
-        await File.WriteAllTextAsync(Path.Combine(dir, "site", "index.html"), Podium.Web.Storage.FixtureDeck.IndexHtml(slug), ct);
-        for (var p = 1; p <= Podium.Web.Storage.FixtureDeck.Pages; p++)
-            await File.WriteAllBytesAsync(Path.Combine(dir, "site", "pages", $"{p:000}.jpg"), Podium.Web.Storage.FixtureDeck.PageJpeg, ct);
-        await File.WriteAllTextAsync(Path.Combine(dir, "site", "pages", "index.json"), Podium.Web.Storage.FixtureDeck.PagesJson, ct);
-        // Slide sheet (one tile per page) so the remote's thumbnails and go-to grid have something to show.
-        await File.WriteAllBytesAsync(Path.Combine(dir, "slides.jpg"), Podium.Web.Storage.FixtureDeck.PageJpeg, ct);
-        await File.WriteAllTextAsync(Path.Combine(dir, "slides.json"), $$"""{"count":{{Podium.Web.Storage.FixtureDeck.Pages}},"cols":{{Podium.Web.Storage.FixtureDeck.Pages}},"rows":1,"cellWidth":1,"cellHeight":1}""", ct);
-        await File.WriteAllTextAsync(Path.Combine(dir, "notes.json"), "[{\"index\":1,\"title\":\"One\",\"note\":\"First note\"},{\"index\":2,\"title\":\"Two\",\"note\":\"Second note\"},{\"index\":3,\"title\":\"Three\",\"note\":null}]", ct);
-        await File.WriteAllTextAsync(Path.Combine(dir, "text.json"), "[{\"index\":1,\"title\":\"One\",\"text\":\"fixture slide one\"},{\"index\":2,\"title\":\"Two\",\"text\":\"fixture slide two\"},{\"index\":3,\"title\":\"Three\",\"text\":\"fixture slide three\"}]", ct);
-        await decks.UpsertAsync(new Deck
+        async Task SeedSiteAsync(string deckSlug, string textJson)
         {
-            Slug = slug, SourceId = "fixture/slides", Path = "fixture", Entry = "slides.pdf", Kind = DeckKind.Pdf, Title = "Fixture deck", Tags = ["fixture"],
-            Visibility = Visibility.Public, CurrentBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestSuccessfulBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildStatus = BuildStatus.Succeeded,
-            CurrentHasNotes = true, CurrentHasText = true, CurrentHasSlideSheet = true, CurrentSlideCount = Podium.Web.Storage.FixtureDeck.Pages, LastCommitSha = new string('a', 40),
+            var dir = (await local.CreateUploadUriAsync(deckSlug, Podium.Web.Storage.FixtureDeck.BuildId, TimeSpan.FromMinutes(5), ct)).LocalPath;
+            Directory.CreateDirectory(Path.Combine(dir, "site", "pages"));
+            await File.WriteAllTextAsync(Path.Combine(dir, "site", "index.html"), Podium.Web.Storage.FixtureDeck.IndexHtml(deckSlug), ct);
+            for (var p = 1; p <= Podium.Web.Storage.FixtureDeck.Pages; p++)
+                await File.WriteAllBytesAsync(Path.Combine(dir, "site", "pages", $"{p:000}.jpg"), Podium.Web.Storage.FixtureDeck.PageJpeg, ct);
+            await File.WriteAllTextAsync(Path.Combine(dir, "site", "pages", "index.json"), Podium.Web.Storage.FixtureDeck.PagesJson, ct);
+            // Slide sheet (one tile per page) so the remote's thumbnails and go-to grid have something to show.
+            await File.WriteAllBytesAsync(Path.Combine(dir, "slides.jpg"), Podium.Web.Storage.FixtureDeck.PageJpeg, ct);
+            await File.WriteAllTextAsync(Path.Combine(dir, "slides.json"), $$"""{"count":{{Podium.Web.Storage.FixtureDeck.Pages}},"cols":{{Podium.Web.Storage.FixtureDeck.Pages}},"rows":1,"cellWidth":1,"cellHeight":1}""", ct);
+            await File.WriteAllTextAsync(Path.Combine(dir, "notes.json"), "[{\"index\":1,\"title\":\"One\",\"note\":\"First note\"},{\"index\":2,\"title\":\"Two\",\"note\":\"Second note\"},{\"index\":3,\"title\":\"Three\",\"note\":null}]", ct);
+            await File.WriteAllTextAsync(Path.Combine(dir, "text.json"), textJson, ct);
+        }
+        await SeedSiteAsync(slug, "[{\"index\":1,\"title\":\"One\",\"text\":\"fixture slide one\"},{\"index\":2,\"title\":\"Two\",\"text\":\"fixture slide two about the sync relay\"},{\"index\":3,\"title\":\"Three\",\"text\":\"fixture slide three\"}]");
+        // A second deck in the same folder: the talk's workshop variant (slide two reworded, so the compare view has a difference to show).
+        await SeedSiteAsync($"{slug}-workshop", "[{\"index\":1,\"title\":\"One\",\"text\":\"fixture slide one\"},{\"index\":2,\"title\":\"Two\",\"text\":\"fixture slide two about the sync hub\"},{\"index\":3,\"title\":\"Three\",\"text\":\"fixture slide three\"}]");
+        foreach (var (deckSlug, variant, entry) in new[] { (slug, (string?)null, "slides.pdf"), ($"{slug}-workshop", "workshop", "slides.workshop.pdf") })
+        {
+            await decks.UpsertAsync(new Deck
+            {
+                Slug = deckSlug, SourceId = "fixture/slides", Path = "fixture", Entry = entry, Kind = DeckKind.Pdf, Title = variant is null ? "Fixture deck" : "Fixture deck (workshop)", Tags = ["fixture"], Variant = variant, TalkId = talkId,
+                Visibility = Visibility.Public, CurrentBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestSuccessfulBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildStatus = BuildStatus.Succeeded,
+                CurrentHasNotes = true, CurrentHasText = true, CurrentHasSlideSheet = true, CurrentSlideCount = Podium.Web.Storage.FixtureDeck.Pages, LastCommitSha = new string('a', 40),
+            }, ct);
+            await builds.UpsertAsync(new Build { Id = Podium.Web.Storage.FixtureDeck.BuildId, DeckSlug = deckSlug, Sha = new string('a', 40), Status = BuildStatus.Succeeded, HasSite = true, HasNotes = true, HasText = true, HasSlideSheet = true, SlideCount = Podium.Web.Storage.FixtureDeck.Pages, FinishedAt = DateTimeOffset.UtcNow, StartedAt = DateTimeOffset.UtcNow.AddSeconds(-20) }, ct);
+            access.Invalidate(deckSlug);
+            await search.RefreshAsync((await decks.GetAsync(deckSlug, ct))!, ct);
+        }
+        // The talk both decks belong to, with a history, and the speaker file.
+        await talks.UpsertAsync(new Talk
+        {
+            Id = talkId, LocalId = "fixture", SourceId = "fixture/slides", Path = "fixture", Title = "The fixture talk", Level = "intermediate", Durations = [45, 60], Status = "available", Public = true, Tags = ["fixture", "testing"],
+            Abstract = "Three slides that exercise **every** feature of Podium: the pages viewer, the sync relay and the phone remote.\n\nThe second paragraph is only in the long abstract.",
+            Parts = [new TalkPart("Short abstract", "Three slides that exercise every feature of Podium."), new TalkPart("Outline", "- Pages\n- Sync\n- Remote"), new TalkPart("Takeaways", "- Smoke tests are decks too")],
+            DeckSlugs = [slug, $"{slug}-workshop"], LastCommitAt = DateTimeOffset.UtcNow.AddDays(-3),
+            Submissions =
+            [
+                new Submission { Key = "2025-05-20-smokeconf", Event = "SmokeConf", Date = new DateOnly(2025, 5, 20), Status = "delivered", Format = "talk", Duration = 45, Deck = "slides.pdf", DeckSlug = slug, Location = "Tel Aviv", Url = "https://example.test/smokeconf" },
+                new Submission { Key = "workshop-days", Event = "Workshop Days", Date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30), Status = "accepted", Format = "workshop", Duration = 120, Deck = "slides.workshop.pdf", DeckSlug = $"{slug}-workshop" },
+                new Submission { Key = "2026-01-15-declined-con", Event = "Declined Con", Date = new DateOnly(2026, 1, 15), Status = "declined", Notes = "They wanted a lightning talk." },
+            ],
         }, ct);
-        await builds.UpsertAsync(new Build { Id = Podium.Web.Storage.FixtureDeck.BuildId, DeckSlug = slug, Sha = new string('a', 40), Status = BuildStatus.Succeeded, HasSite = true, HasNotes = true, HasText = true, HasSlideSheet = true, SlideCount = Podium.Web.Storage.FixtureDeck.Pages, FinishedAt = DateTimeOffset.UtcNow, StartedAt = DateTimeOffset.UtcNow.AddSeconds(-20) }, ct);
-        access.Invalidate(slug);
-        await search.RefreshAsync((await decks.GetAsync(slug, ct))!, ct);
-        return Results.Ok(new { slug });
+        await talks.UpsertSpeakerAsync(new Speaker { SourceId = "fixture/slides", Name = "Fixture Speaker", Tagline = "Tests things for a living", Bio = "Fixture Speaker writes **smoke tests** and talks about them.", Parts = [new TalkPart("Short bio", "Fixture Speaker tests things.")], Links = [new("github", "https://github.com/fixture")] }, ct);
+        return Results.Ok(new { slug, talk = talkId });
     });
 }
 
@@ -464,6 +491,7 @@ app.MapGet("/healthz/live", async (SessionService sessions, Podium.Web.Sync.Sync
 app.MapDeckServing();
 Podium.Web.Serving.PresenterToolsEndpoints.MapPresenterTools(app);
 app.MapPodiumApi();
+Podium.Web.Serving.TalkEndpoints.MapTalks(app);
 Podium.Web.Sync.SyncEndpoints.MapSync(app);
 app.MapRazorPages();
 

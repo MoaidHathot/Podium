@@ -273,6 +273,34 @@ public static partial class ApiEndpoints
             return Results.Ok(search.Search(q, 30));
         });
 
+        // Talks whose title, abstract, parts or events contain every query term (owner only).
+        owner.MapGet("/talks/search", async (string? q, ITalkStore talks, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(q) || q.Length > 200) return Results.Ok(Array.Empty<TalkHit>());
+            var terms = q.ToLowerInvariant().Split([' ', '\t', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(t => t.Length >= 2).Distinct().Take(8).ToArray();
+            if (terms.Length == 0) return Results.Ok(Array.Empty<TalkHit>());
+            var hits = new List<TalkHit>();
+            foreach (var t in await talks.ListAsync(includeArchived: false, ct))
+            {
+                var body = string.Join('\n', t.Abstract, string.Join('\n', t.Parts.Select(p => p.Markdown)), string.Join('\n', t.Submissions.Select(s => $"{s.Event} {s.Title} {s.Location}")));
+                var lower = (t.Title + "\n" + body).ToLowerInvariant();
+                var score = 0;
+                var all = true;
+                foreach (var term in terms)
+                {
+                    if (!lower.Contains(term, StringComparison.Ordinal)) { all = false; break; }
+                    score += 1 + (t.Title.Contains(term, StringComparison.OrdinalIgnoreCase) ? 3 : 0) + (t.Tags.Any(g => g.Contains(term, StringComparison.OrdinalIgnoreCase)) ? 2 : 0);
+                }
+                if (!all) continue;
+                var text = Podium.Web.Security.Markdown.ToText(body);
+                var at = text.IndexOf(terms[0], StringComparison.OrdinalIgnoreCase);
+                var snippet = at < 0 ? Podium.Web.Security.Markdown.ToText(t.ShortAbstract) : text[Math.Max(0, at - 60)..Math.Min(text.Length, Math.Max(0, at - 60) + 160)].Trim();
+                if (snippet.Length > 160) snippet = snippet[..160] + "…";
+                hits.Add(new TalkHit(t.Id, t.Title, t.Status, t.DeckSlugs.Count, t.Submissions.Count, snippet, score));
+            }
+            return Results.Ok(hits.OrderByDescending(h => h.Score).ThenBy(h => h.Title, StringComparer.OrdinalIgnoreCase).Take(10).ToList());
+        });
+
         // Access requests from signed-in visitors: approve (= grant) or decline.
         owner.MapGet("/access-requests", async (IAccessRequestStore requests, CancellationToken ct) => Results.Ok(await requests.ListPendingAsync(ct)));
         owner.MapPost("/decks/{slug}/access-requests/{principal}/decide", async (string slug, string principal, AccessDecisionRequest req, IDeckStore decks, IGrantStore grants, IAccessRequestStore requests, DeckAccessService access, CancellationToken ct) =>
@@ -427,6 +455,8 @@ public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays,
 public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title, AudienceSettings? Audience = null, bool? Rehearsal = null);
 public sealed record AudienceUpdateRequest(bool? Muted, AudienceSettings? Settings);
 public sealed record AccessDecisionRequest(bool Grant, bool Pdf = false, bool Pptx = false, bool Present = false);
+/// <summary>A talk matching a library search: where to go and why it matched.</summary>
+public sealed record TalkHit(string Id, string Title, string Status, int Decks, int Events, string Snippet, int Score);
 
 public static partial class ApiEndpoints
 {

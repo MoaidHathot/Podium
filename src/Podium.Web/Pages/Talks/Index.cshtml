@@ -1,0 +1,203 @@
+@page "/talks"
+@model Podium.Web.Pages.Talks.IndexModel
+@using Podium.Web.Security
+@{
+    ViewData["Title"] = Model.IsOwner ? "Talks" : (Model.Speakers.FirstOrDefault()?.Name is { Length: > 0 } n ? $"Talks by {n}" : "Talks");
+    var speaker = Model.Speakers.FirstOrDefault();
+    var statuses = new[] { ("available", "Available"), ("draft", "Draft"), ("retired", "Retired") };
+    string StatusLabel(string s) => s switch { "draft" => "Draft", "retired" => "Retired", _ => "Available" };
+    string SubStatus(string s) => s switch { "accepted" => "Accepted", "declined" => "Declined", "delivered" => "Delivered", "cancelled" => "Cancelled", _ => "Submitted" };
+}
+@section Head {
+    @if (!Model.IsOwner)
+    {
+        <meta property="og:type" content="profile" />
+        <meta property="og:title" content="@ViewData["Title"]" />
+        <meta property="og:description" content="@(speaker is not null ? Markdown.ToText(speaker.ShortBio) : $"{Model.Talks.Count} talks")" />
+        <meta property="og:url" content="@Model.Origin/talks" />
+        @if (speaker is not null && Model.PhotoUrl(speaker) is { } photo) { <meta property="og:image" content="@photo" /> }
+    }
+}
+
+@if (Model.IsPreview)
+{
+    <div class="alert alert-info" style="margin-bottom:1rem">This is how organisers see your talks page (only talks marked <code>public: true</code>, accepted and delivered events, Public decks). <a href="/talks">Back to your catalog</a></div>
+}
+@if (!Model.IsOwner)
+{
+    <section class="speaker-hero">
+        @if (speaker is not null && Model.PhotoUrl(speaker) is { } photo) { <img class="speaker-photo" src="@photo" alt="" referrerpolicy="no-referrer" /> }
+        <div class="speaker-text">
+            <h1 style="margin:0">@(speaker?.Name is { Length: > 0 } sn ? sn : "Talks")</h1>
+            @if (speaker?.Tagline is { } tagline) { <p class="muted" style="margin:.2rem 0 0">@tagline</p> }
+            @if (speaker is not null && !string.IsNullOrWhiteSpace(speaker.Bio)) { <div class="prose" style="margin-top:.8rem">@Html.Raw(Markdown.ToHtml(speaker.Bio))</div> }
+            @if (speaker?.Links.Count > 0)
+            {
+                <div class="row" style="gap:.4rem; flex-wrap:wrap; margin-top:.6rem">
+                    @foreach (var l in speaker.Links) { if (Markdown.SafeLink(l.Value) is { } href) { <a class="chip" href="@href" rel="noopener noreferrer me" target="_blank">@l.Key</a> } }
+                </div>
+            }
+        </div>
+        @if (Model.GalleryEnabled) { <a class="btn" href="/gallery" style="align-self:flex-start">All public decks</a> }
+    </section>
+    <h2 style="margin:1.5rem 0 .6rem">Talks</h2>
+}
+else
+{
+    <div class="row-between" style="margin-bottom:1rem; flex-wrap:wrap; gap:.6rem">
+        <div>
+            <h1>Talks</h1>
+            <p class="muted" style="margin:0">@Model.Talks.Count talk@(Model.Talks.Count == 1 ? "" : "s") · abstracts, variants and where they were given. Each talk is an <code>abstract.md</code> next to its deck; events are files under <code>submissions/</code>.</p>
+        </div>
+        <div class="row" style="gap:.5rem; flex-wrap:wrap">
+            @if (Model.Sources.Any(s => s.Trusted)) { <button class="btn btn-primary" id="new-talk">New talk</button> }
+            @if (Model.Sources.FirstOrDefault(s => s.Trusted) is { } src)
+            {
+                var sp = Model.Speakers.FirstOrDefault(s => s.SourceId == src.Id);
+                <a class="btn" href="@(sp is null ? $"https://github.com/{src.FullName}/new/{Uri.EscapeDataString(src.Ref ?? "HEAD")}?filename=speaker.md&value={Uri.EscapeDataString("---\nname: Your name\ntagline: What you do\nphoto: https://\nlinks:\n  github: https://github.com/you\n  linkedin: https://www.linkedin.com/in/you\n---\nLong bio for event pages.\n\n## Short bio\nOne or two sentences for CfP forms.\n")}" : $"https://github.com/{src.FullName}/edit/{Uri.EscapeDataString(src.Ref ?? "HEAD")}/speaker.md")" rel="noopener noreferrer" target="_blank">@(sp is null ? "Add speaker file" : "Edit speaker file")</a>
+            }
+            @if (Model.Talks.Any(t => t.Talk.Public)) { <a class="btn" href="/talks?public=1" title="How organisers see your talks" id="view-public">Public page</a> }
+        </div>
+    </div>
+
+    <dialog id="new-talk-dialog" class="dialog">
+        <form method="dialog">
+            <h3 style="margin-top:0">New talk</h3>
+            <p class="hint">Creates <code>abstract.md</code> in a folder of your repository on GitHub, pre-filled. Put it next to the deck it belongs to (every deck in that folder becomes a variant), or in a folder of its own for a talk without slides yet.</p>
+            <label class="field">Repository
+                <select class="input" id="nt-repo">
+                    @foreach (var s in Model.Sources.Where(s => s.Trusted)) { <option value="@s.FullName" data-ref="@(s.Ref ?? "")">@s.FullName</option> }
+                </select>
+            </label>
+            <label class="field">Folder <span class="faint">(the deck's folder, or a new one)</span><input class="input" id="nt-folder" placeholder="talks/my-next-talk" required pattern="[A-Za-z0-9._\/-]+" maxlength="200" /></label>
+            <label class="field">Title<input class="input" id="nt-title" placeholder="My next talk" maxlength="200" /></label>
+            <div class="row" style="gap:.6rem; flex-wrap:wrap">
+                <label class="field" style="flex:1">Level<select class="input" id="nt-level"><option value="beginner">Beginner</option><option value="intermediate" selected>Intermediate</option><option value="advanced">Advanced</option></select></label>
+                <label class="field" style="flex:1">Lengths (minutes)<input class="input" id="nt-duration" value="45, 60" maxlength="40" /></label>
+            </div>
+            <div class="row" style="justify-content:flex-end; gap:.5rem; margin-top:.8rem">
+                <button class="btn" value="cancel">Cancel</button>
+                <button class="btn btn-primary" value="create" id="nt-create">Open on GitHub</button>
+            </div>
+        </form>
+    </dialog>
+
+    <div class="toolbar" style="margin-bottom:1rem">
+        <input class="input" id="talk-search" type="search" placeholder="Search title, abstract, event, tag…" aria-label="Search talks" style="max-width:26rem" />
+        <div class="row" style="gap:.4rem; flex-wrap:wrap">
+            <a class="chip @(Model.Status is null ? "active" : "")" href="/talks@(Model.Tag is not null ? $"?tag={Uri.EscapeDataString(Model.Tag)}" : "")">All</a>
+            @foreach (var (value, label) in statuses)
+            {
+                <a class="chip @(Model.Status == value ? "active" : "")" href="/talks?status=@value@(Model.Tag is not null ? $"&tag={Uri.EscapeDataString(Model.Tag)}" : "")">@label</a>
+            }
+        </div>
+    </div>
+}
+
+@if (Model.Tags.Count > 0)
+{
+    <div class="row" style="flex-wrap:wrap; gap:.4rem; margin-bottom:1rem">
+        <a class="chip @(Model.Tag is null ? "active" : "")" href="/talks@(Model.Status is not null ? $"?status={Model.Status}" : "")">All tags</a>
+        @foreach (var t in Model.Tags)
+        {
+            <a class="chip @(string.Equals(Model.Tag, t, StringComparison.OrdinalIgnoreCase) ? "active" : "")" href="/talks?tag=@Uri.EscapeDataString(t)@(Model.Status is not null ? $"&status={Model.Status}" : "")">#@t</a>
+        }
+    </div>
+}
+
+@if (Model.Talks.Count == 0)
+{
+    <div class="empty section">
+        <h3>@(Model.IsPreview ? "Nothing public yet" : "No talks yet")</h3>
+        @if (Model.IsPreview) { <p>Set <code>public: true</code> in a talk's abstract.md to list it here.</p> }
+        @if (Model.IsOwner)
+        {
+            <p>Add an <code>abstract.md</code> next to a deck (title, level, duration, tags in the front matter; the abstract as the body; <code>## Short abstract</code>, <code>## Outline</code>, <code>## Takeaways</code> as sections) and Podium picks it up on the next sync. Record each event as <code>submissions/&lt;date&gt;-&lt;event&gt;.md</code>.</p>
+        }
+    </div>
+}
+else
+{
+    <div class="talk-list" id="talk-list">
+    @foreach (var v in Model.Talks)
+    {
+        var t = v.Talk;
+        <article class="talk-card status-@t.Status" data-search="@v.SearchText" data-status="@t.Status">
+            @if (v.Thumbnail is { } th)
+            {
+                <a class="talk-thumb" href="/talks/@t.Id" tabindex="-1" aria-hidden="true"><img src="/d/@(th.Slug).jpg?v=@th.CurrentBuildId" alt="" loading="lazy" decoding="async" width="320" height="180" /></a>
+            }
+            else
+            {
+                <a class="talk-thumb talk-thumb-empty" href="/talks/@t.Id" tabindex="-1" aria-hidden="true"><span>@(t.Title.Length > 0 ? t.Title[..1].ToUpperInvariant() : "T")</span></a>
+            }
+            <div class="talk-body">
+                <div class="talk-head">
+                    <h3 class="talk-title"><a href="/talks/@t.Id">@t.Title</a></h3>
+                    @if (Model.IsOwner)
+                    {
+                        <span class="badge badge-status-@t.Status">@StatusLabel(t.Status)</span>
+                        @if (t.Public) { <span class="badge" title="Listed on your public talks page">Public</span> }
+                    }
+                </div>
+                <div class="talk-meta faint">
+                    @if (t.Level is not null) { <span>@char.ToUpperInvariant(t.Level[0])@t.Level[1..]</span> }
+                    @if (t.Durations.Count > 0) { <span>@string.Join(" / ", t.Durations) min</span> }
+                    @if (v.Decks.Count > 0) { <span>@v.Decks.Count deck@(v.Decks.Count == 1 ? "" : "s")</span> }
+                    @if (v.Submissions.Count > 0) { <span>@v.Submissions.Count event@(v.Submissions.Count == 1 ? "" : "s")@(v.Years.Length > 0 ? $" · {v.Years}" : "")</span> }
+                </div>
+                <p class="talk-abstract">@Markdown.ToText(t.ShortAbstract)</p>
+                @if (t.Tags.Count > 0)
+                {
+                    <div class="card-tags">@foreach (var tag in t.Tags.Take(6)) { <a class="tag" href="/talks?tag=@Uri.EscapeDataString(tag)">#@tag</a> }</div>
+                }
+                <div class="talk-foot">
+                    @if (v.NextUp is { } next) { <span class="chip chip-soft" title="@SubStatus(next.Status)">Next: @next.Event@(next.Date is { } nd ? $" · {nd:MMM d, yyyy}" : "")</span> }
+                    else if (v.LastDelivered is { } last) { <span class="chip chip-soft">Last: @last.Event@(last.Date is { } ld ? $" · {ld:MMM yyyy}" : "")</span> }
+                    <span class="row" style="margin-left:auto; gap:.4rem">
+                        <a class="btn btn-sm btn-primary" href="/talks/@t.Id">Open</a>
+                        @if (v.MainDeck is { CurrentBuildId: not null } md) { <a class="btn btn-sm" href="/d/@md.Slug/" target="_blank" rel="noopener">@(Model.IsOwner ? "Present" : "Slides")</a> }
+                        @if (Model.IsOwner && v.Source is not null) { <a class="btn btn-sm btn-ghost" href="@v.EditUrl" rel="noopener noreferrer" target="_blank" title="Edit abstract.md on GitHub">Edit</a> }
+                    </span>
+                </div>
+            </div>
+        </article>
+    }
+    </div>
+    <p class="empty hidden" id="talk-none">No talk matches.</p>
+}
+
+@section Scripts {
+<script nonce="@Csp.Nonce(HttpContext)">
+(function () {
+  const search = document.getElementById('talk-search');
+  if (search) {
+    const cards = [...document.querySelectorAll('.talk-card')];
+    const none = document.getElementById('talk-none');
+    const apply = () => {
+      const q = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+      for (const c of cards) { const ok = q.every((w) => c.dataset.search.includes(w)); c.hidden = !ok; if (ok) shown++; }
+      none.classList.toggle('hidden', shown > 0 || cards.length === 0);
+    };
+    search.addEventListener('input', apply);
+    document.addEventListener('keydown', (e) => { if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) { e.preventDefault(); search.focus(); } });
+  }
+  const dlg = document.getElementById('new-talk-dialog');
+  document.getElementById('new-talk')?.addEventListener('click', () => dlg.showModal());
+  dlg?.addEventListener('close', () => {
+    if (dlg.returnValue !== 'create') return;
+    const repo = document.getElementById('nt-repo');
+    const ref = repo.selectedOptions[0]?.dataset.ref || 'HEAD';
+    const folder = document.getElementById('nt-folder').value.trim().replace(/^\/+|\/+$/g, '');
+    const title = document.getElementById('nt-title').value.trim() || folder.split('/').pop().replace(/[-_]/g, ' ');
+    const level = document.getElementById('nt-level').value;
+    const durations = document.getElementById('nt-duration').value.split(/[,\s]+/).map((d) => parseInt(d, 10)).filter((d) => d > 0);
+    if (!folder) return;
+    const content = `---\ntitle: ${title.replace(/\n/g, ' ')}\nlevel: ${level}\nduration: [${durations.join(', ')}]\nstatus: available\npublic: false\ntags: []\n---\nThe abstract: two or three paragraphs an attendee reads to decide whether to come.\n\n## Short abstract\nOne hundred words for CfP forms.\n\n## Outline\n- Opening\n- Part one\n- Part two\n- Closing\n\n## Takeaways\n- What people leave with\n`;
+    const url = `https://github.com/${repo.value}/new/${encodeURIComponent(ref)}/${folder.split('/').map(encodeURIComponent).join('/')}?filename=abstract.md&value=${encodeURIComponent(content)}`;
+    window.open(url, '_blank', 'noopener');
+  });
+})();
+</script>
+}

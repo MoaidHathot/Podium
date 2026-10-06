@@ -5,7 +5,7 @@ using Podium.Core.Models;
 
 namespace Podium.Web.Pages.Decks;
 
-public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links, IViewHistoryStore views, ISessionStore sessions, IAccessRequestStore accessRequests, IAuditStore audit, Microsoft.Extensions.Options.IOptions<Podium.Web.Configuration.PodiumOptions> options) : PageModel
+public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildStore builds, IGrantStore grants, IShareLinkStore links, IViewHistoryStore views, ISessionStore sessions, IAccessRequestStore accessRequests, IAuditStore audit, ITalkStore talks, Microsoft.Extensions.Options.IOptions<Podium.Web.Configuration.PodiumOptions> options) : PageModel
 {
     public IReadOnlyList<AuditEntry> Activity { get; private set; } = [];
     public IReadOnlyList<AccessRequest> PendingRequests { get; private set; } = [];
@@ -21,6 +21,10 @@ public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildS
     public IReadOnlyList<Grant> Grants { get; private set; } = [];
     public IReadOnlyList<ShareLink> Links { get; private set; } = [];
     public Build? CurrentBuild { get; private set; }
+    /// <summary>The talk this deck is a variant of, with its sibling decks and the events that used this deck.</summary>
+    public Talk? Talk { get; private set; }
+    public IReadOnlyList<Deck> Siblings { get; private set; } = [];
+    public IReadOnlyList<Submission> DeckSubmissions { get; private set; } = [];
     [BindProperty(SupportsGet = true)] public bool NotBuilt { get; set; }
     public string Origin => $"{Request.Scheme}://{Request.Host}";
     /// <summary>The public hostname (what the room should type), independent of how the owner reached this page.</summary>
@@ -40,6 +44,15 @@ public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildS
         Sessions = await sessions.ListForDeckAsync(slug, 10, ct);
         PendingRequests = (await accessRequests.ListForDeckAsync(slug, ct)).Where(r => r.Status == AccessRequestStatus.Pending).ToList();
         Activity = await audit.RecentAsync(slug, 15, ct);
+        if (deck.TalkId is not null && await talks.GetAsync(deck.TalkId, ct) is { Archived: false } talk)
+        {
+            Talk = talk;
+            var siblings = new List<Deck>();
+            foreach (var other in talk.DeckSlugs.Where(s => s != slug))
+                if (await decks.GetAsync(other, ct) is { Archived: false } sibling) siblings.Add(sibling);
+            Siblings = siblings;
+            DeckSubmissions = talk.Submissions.Where(s => s.DeckSlug == slug || s.SessionDeckSlug == slug).OrderByDescending(s => s.Date).ToList();
+        }
         var now = DateTimeOffset.UtcNow;
         Views7d = RecentViews.Count(v => v.At > now.AddDays(-7));
         Views30d = RecentViews.Count(v => v.At > now.AddDays(-30));

@@ -214,7 +214,7 @@ public static class DeckServingEndpoints
                 html = InjectLiveScript(html, slug, deck.CurrentBuildId, deck.OfflineCache, result.CanPresent, deck.Kind, onExternalHost, p => versions.AddFileVersionToPath(http.Request.PathBase, p), locks);
                 // Link previews (Slack/Teams/Twitter) for decks anyone can open; private decks reveal nothing to crawlers anyway.
                 if (deck.Visibility == Visibility.Public && !onExternalHost)
-                    html = InjectOpenGraph(html, deck, $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}");
+                    html = InjectOpenGraph(html, deck, $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}", await TalkDescriptionAsync(deck, http, cache, ct));
 
                 headers[HeaderNames.CacheControl] = "no-cache, private";
                 await RecordViewAsync(views, cache, caller, slug, path, ArtifactKind.Site, ct, result.LinkId);
@@ -292,11 +292,33 @@ public static class DeckServingEndpoints
         return idx < 0 ? tag + html : html.Insert(idx, tag);
     }
 
-    internal static string InjectOpenGraph(string html, Deck deck, string origin)
+    /// <summary>
+    /// The talk's short abstract as the link-preview description when the deck has none of its own (decks that are a
+    /// variant of a talk usually carry no description in their front matter). Cached briefly; failures fall back to nothing.
+    /// </summary>
+    private static async Task<string?> TalkDescriptionAsync(Deck deck, HttpContext http, IMemoryCache cache, CancellationToken ct)
+    {
+        if (deck.TalkId is null || !string.IsNullOrWhiteSpace(deck.Description)) return null;
+        if (http.RequestServices.GetService<ITalkStore>() is not { } talks) return null;
+        try
+        {
+            return await cache.GetOrCreateAsync($"talk-desc:{deck.TalkId}", async e =>
+            {
+                e.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
+                var talk = await talks.GetAsync(deck.TalkId, ct);
+                var text = Security.Markdown.ToText(talk?.ShortAbstract);
+                if (text.Length > 300) text = text[..297].TrimEnd() + "…";
+                return text.Length == 0 ? null : text;
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
+    }
+
+    internal static string InjectOpenGraph(string html, Deck deck, string origin, string? description = null)
     {
         var url = $"{origin}/d/{deck.Slug}/";
         var title = System.Net.WebUtility.HtmlEncode(deck.Title);
-        var desc = System.Net.WebUtility.HtmlEncode(deck.Description ?? (deck.Author is null ? "Slides" : $"Slides by {deck.Author}"));
+        var desc = System.Net.WebUtility.HtmlEncode(deck.Description ?? description ?? (deck.Author is null ? "Slides" : $"Slides by {deck.Author}"));
         var image = deck.CurrentHasThumbnail ? $"{origin}/d/{deck.Slug}.jpg?v={deck.CurrentBuildId}" : null;
         // Additive only: Slidev (seoMeta) and hand-written index.html files may already carry some of these; the first
         // tag wins with most crawlers, so never emit a duplicate of what the deck declares itself.

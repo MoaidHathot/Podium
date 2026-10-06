@@ -25,7 +25,8 @@ public static class Csp
         return nonce;
     }
 
+    /// <summary>Images: Podium's own, inline data URIs, GitHub avatars and raw repository files (speaker photo in speaker.md).</summary>
     public static string HeaderValue(string nonce) =>
-        $"default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; " +
+        $"default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com https://raw.githubusercontent.com; " +
         "font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'";
 }
