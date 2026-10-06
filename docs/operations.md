@@ -170,6 +170,41 @@ The deck page polls `/d/{slug}/session.json` every 5 s and the library polls `GE
 while visible, reloading when a session started or ended elsewhere (phone remote, presenter view, auto-end), so the
 desktop never shows a stale *End session* button.
 
+## Talks
+
+Talks are read during sync from trusted sources only: `abstract.md` makes its folder a talk (id `{repo}-{folder}`,
+or `{repo}-{id}` when the file sets `id:`), the folder's decks become its members, decks elsewhere join through
+`talk:` in `.podium.yml`, and `submissions/*.md` are its events (`deck:` resolves against the members by entry file,
+then against every deck by path, slug or alias). `speaker.md` at the repository root is the speaker (one per
+source). Both live in the `talks` table (speaker rows in the `speaker` partition) and are included in backups and
+`export-data.ps1`. A talk whose folder disappears is archived and its decks lose their `TalkId`; Podium-side links
+from a submission to a live session survive edits of the submission file because they are keyed by file name.
+
+Rendering: all Markdown from the repository goes through `Podium.Web.Security.Markdown`, which escapes first and
+adds markup afterwards (paragraphs, headings below `##`, lists, quotes, code, bold/emphasis, http(s)/mailto links);
+author text can never become HTML, and every author-supplied URL is checked by `Markdown.SafeLink` before it lands
+in an `href`/`src`. A `photo:` that names a file in the repository is served from `/talks/photo/{owner}/{repo}`
+(read through the GitHub App, image signatures only, 3 MB cap, `nosniff`, cached per commit) so private
+repositories work and no third-party host appears in the CSP.
+
+Public exposure is opt-in per talk (`public: true`, not `draft`); non-owners see only those talks, only their
+`accepted`/`delivered` events and only Public decks; `/talks` is 404 for visitors when nothing is public.
+`/talks/{id}/cfp.md|.txt` (owner) is the CfP pack; `/api/talks/search?q=` (owner) searches titles, abstracts, parts and
+events. `/decks/{slug}/compare/{other}` (owner) aligns two decks by slide text (`DeckCompare`: weighted LCS over word
+sets, 0.45 to align, 0.97 to call identical) with sprites from the slide sheets.
+
+Session auto-link: when a live session ends (not a rehearsal, 5 minutes or longer) on a deck that belongs to a talk,
+the submission dated within a day of it (day precision only) with status accepted/submitted/delivered that names this
+deck or none, and that has no session yet, gets `SessionId`/`SessionDeckSlug`; the timeline then shows the recap next
+to the event. Podium never edits repository files.
+
+## Builder checkout
+
+The builder never clones a whole repository: `git fetch --depth 1 --filter=blob:none` of the commit plus a sparse
+checkout (`--cone <deck folder>` for Slidev/presenterm/static decks, `--no-cone <file> <file>.pdf` for PowerPoint/PDF
+decks), so an archive of a hundred presentations costs each build one file. The one-shot credential header is passed
+to the checkout too (git fetches the sparse blobs lazily) and `.git` is deleted before any deck code runs.
+
 ## Backups and export
 
 A scheduled Container Apps Job (`podium-backup`, daily at 03:15 UTC) runs the web image in `export` mode with the web

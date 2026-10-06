@@ -50,6 +50,7 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 - **Slide strip** on the deck page with copy-link-to-slide; **full-text search** across slide text from the library search box ("In slides" hits jump to the slide); **embedding** opt-in for Public decks.
 - **Deck health**: the builder reports missing images, oversized assets and presenterm errors with file positions, shown on the deck page and as GitHub check-run annotations on the commit.
 - **Bulk actions** (visibility, tags, pin, rebuild), a **New deck** wizard that opens GitHub's editor pre-filled with a starter deck, and `?` for keyboard shortcuts.
+- **Talks**: an `abstract.md` next to a deck turns the folder into a *talk* (abstract, short abstract, outline, takeaways, level, lengths, tags, status); every deck in the folder is a *variant* (Slidev `slides.<variant>.md`, extra presenterm files, each PowerPoint/PDF), decks elsewhere join with `talk:` in `.podium.yml`; files under `submissions/` record where it was submitted or given. `/talks` is the catalog: search over abstracts and events, a **CfP pack** (Markdown or plain text in the order forms ask, bio included) per talk, *Edit on GitHub* / *Add event* links that open pre-filled files, a **compare view** that aligns two variants slide by slide (identical / reworded with word-level highlights / only in one), and a live session that ends on a submission's date attaches its recap to that event. Talks marked `public: true` form your **speaker page** (`/talks`, with `speaker.md` for bio, photo and links) for organisers; the library groups by talk and searches abstracts.
 - **GitHub check runs** (optional): grant the app *Checks: read & write* (and subscribe to the `check_run` event) and every build reports back on the commit as `Podium / <deck>` with a link to the deck or the build log; GitHub's **Re-run** button rebuilds the deck.
 - **Operations**: Application Insights telemetry, e-mail alerts (crash loops, build-failure streaks, 5xx), a daily backup of the index into a `backups` container, an audit trail of every change (`/activity`), a list of signed-in devices with per-device sign-out, and *Sign out everywhere*.
 - **Security**: single owner pinned by GitHub user id; untrusted deck code only runs inside a throwaway container with a write-only SAS scoped to its own blob container, and is served from a separate origin; installation tokens never touch disk; CSRF header + SameSite cookies; per-IP rate limits on login, webhook and deck entry; nonce-based Content-Security-Policy on every Podium page (deck pages are the author's HTML and are served from the external origin when untrusted); secrets in Key Vault, data-protection keys wrapped by a Key Vault key.
@@ -64,7 +65,9 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 | PDF | any standalone `.pdf` | rendered page by page for Podium's viewer (keys, swipe, deep links, remote, follow-along); the file itself stays downloadable |
 | Static HTML | committed `.html` with no source deck | copied as-is |
 
-Every build also captures a first-slide thumbnail for the library. `node_modules`, `dist`, `.slidev`, `bin`, `obj` are ignored. Legacy GitPitch decks are skipped.
+Every build also captures a first-slide thumbnail for the library. `node_modules`, `dist`, `.slidev`, `bin`, `obj` are ignored. Legacy GitPitch decks are skipped. `README.md`, `abstract.md`, `speaker.md`, `notes.md` and `script.md` are never decks. The builder fetches only what a deck needs (a blob-less partial clone plus a sparse checkout of the deck folder, or of the single file for PowerPoint/PDF decks), so large archives of presentations cost each build one download.
+
+**Variants.** Several decks in one folder are variants of the same talk: `slides.<variant>.md` next to `slides.md` (Slidev), additional presenterm markdown files (the newest dated file is the main deck, `entry:` in `.podium.yml` overrides), and every PowerPoint/PDF file. Variant URLs are `/d/<folder-slug>-<variant>/`.
 
 ### Adding a deck
 
@@ -79,15 +82,61 @@ New decks appear in the library within a couple of minutes (webhook) as **Privat
 Optional per-deck `.podium.yml` (trusted repositories only), next to the deck entry:
 
 ```yaml
-title: How I ended up with 75+ AI agents   # overrides the headmatter title
+title: How I ended up with 75+ AI agents   # overrides the headmatter title (source decks only)
 alias: agents                               # /d/agents/ redirects to the deck
-tags: [ai, agents, conference]
+tags: [ai, agents, conference]              # applies to every deck in the folder, PowerPoint/PDF included
 exportPdf: true
 exportPptx: false
 stripNotes: true                            # notes-free copy for viewers
 visibility: private                         # seeds a *new* deck only; later changes in the UI win
 npmScripts: false                           # allow npm lifecycle scripts during install
+talk: agents                                # this deck is a variant of the talk whose abstract.md lives elsewhere
+entry: 2025_11_18.md                        # presenterm: which file the plain deck URL serves
 ```
+
+### Talks: abstracts, submissions, speaker
+
+A talk is a folder with an `abstract.md`; the decks in that folder are its variants. Front matter plus the abstract, then `##` sections as named parts:
+
+```markdown
+---
+title: How I ended up with over 75 AI agents
+id: agents                 # optional stable id (default: the folder name); what talk: in .podium.yml refers to
+level: intermediate        # beginner | intermediate | advanced
+duration: [45, 60]         # lengths you can do, in minutes
+status: available          # available | draft | retired
+public: false              # list it on the speaker page
+tags: [ai, agents]
+---
+The abstract, as you would paste it into a CfP.
+
+## Short abstract
+A hundred words.
+
+## Outline
+- ...
+
+## Takeaways
+- ...
+```
+
+Each event goes in `submissions/<date>-<event>.md` (the body is the abstract exactly as submitted; empty means the canonical one):
+
+```yaml
+event: NDC Oslo
+date: 2026-03-10           # or 2026-03 / 2026 for historical records, rendered at that precision
+status: accepted           # submitted | accepted | declined | delivered | cancelled
+format: talk               # talk | workshop | lightning | keynote | panel | course | webinar
+duration: 60
+title: 75 agents later     # when it differs from the talk's title
+deck: slides.ndc.md        # an entry file in the talk folder, a repository path, a slug or an alias
+location: Oslo
+url: https://ndcoslo.com/...
+recording: https://youtu.be/...
+notes: free text
+```
+
+`speaker.md` at the repository root holds `name`, `tagline`, `photo` (an https URL or a file in the repository, served by Podium so private repositories work), `links:` and the bio, with `## Short bio` as a part. Only `accepted` and `delivered` events of `public: true` talks appear on the public speaker page; everything else stays yours. `/talks?public=1` previews it.
 
 ## Deploying (Azure, ~$1-5/month)
 
