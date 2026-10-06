@@ -152,11 +152,19 @@ public static partial class TalkFiles
             SourceId = sourceId,
             Name = Truncate(Str(fm, "name")?.Trim(), 120) ?? "",
             Tagline = Truncate(Str(fm, "tagline")?.Trim(), 200),
-            Photo = Url(Str(fm, "photo")),
+            Photo = Url(Str(fm, "photo")) ?? RepoPath(Str(fm, "photo")),
             Links = links.Take(12).ToList(),
             Bio = body,
             Parts = parts,
         };
+    }
+
+    /// <summary>A repository-relative file path (forward slashes, no traversal, no scheme), or null.</summary>
+    public static string? RepoPath(string? v)
+    {
+        v = v?.Trim().Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrEmpty(v) || v.Length > 300 || v.Contains(':') || v.Contains("..", StringComparison.Ordinal) || v.Contains('\0') || v.Contains('\n')) return null;
+        return v;
     }
 
     // ---- YAML helpers -------------------------------------------------------------------------------------------

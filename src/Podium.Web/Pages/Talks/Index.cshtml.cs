@@ -69,17 +69,19 @@ public sealed class IndexModel(ITalkStore talks, IDeckStore decks, ISourceStore 
     }
 }
 
-/// <summary>Links Podium derives from a talk's place in its repository (GitHub edit/new-file URLs, raw photo URLs).</summary>
+/// <summary>Links Podium derives from a talk's place in its repository (GitHub edit/new-file URLs, photo URLs).</summary>
 public static class TalkLinks
 {
+    /// <summary>
+    /// The speaker photo as a URL the browser may load: an absolute http(s) URL as written, or, for a file in the
+    /// repository, Podium's own photo endpoint (which reads it through the GitHub App, so private repositories work).
+    /// </summary>
     public static string? PhotoUrl(string? photo, Source? source)
     {
         if (string.IsNullOrWhiteSpace(photo)) return null;
         if (Markdown.SafeLink(photo) is { } absolute) return absolute.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) ? null : absolute;
-        if (source is null || photo.Contains("..", StringComparison.Ordinal) || photo.Contains(':', StringComparison.Ordinal) || photo.Contains('\\', StringComparison.Ordinal)) return null;
-        var path = photo.Trim().TrimStart('/');
-        if (path.Length == 0 || path.Length > 300) return null;
-        return $"https://raw.githubusercontent.com/{Uri.EscapeDataString(source.Owner)}/{Uri.EscapeDataString(source.Repo)}/{Uri.EscapeDataString(source.Ref ?? "HEAD")}/{string.Join('/', path.Split('/').Select(Uri.EscapeDataString))}";
+        if (source is null || Podium.Core.Discovery.TalkFiles.RepoPath(photo) is null) return null;
+        return $"/talks/photo/{Uri.EscapeDataString(source.Owner)}/{Uri.EscapeDataString(source.Repo)}?v={Uri.EscapeDataString((source.LastSeenSha ?? "").Length >= 7 ? source.LastSeenSha![..7] : "0")}";
     }
 }
 

@@ -147,6 +147,9 @@ public interface IRepositoryClient
     Task<(string Sha, DateTimeOffset CommittedAt)> GetHeadAsync(Source source, CancellationToken ct = default);
     Task<IReadOnlyList<string>> ListTreeAsync(Source source, string sha, CancellationToken ct = default);
     Task<string?> ReadTextFileAsync(Source source, string sha, string path, CancellationToken ct = default);
+    /// <summary>Raw bytes of a file at a commit (null when missing). Callers cap the size; the default implementation decodes nothing.</summary>
+    Task<byte[]?> ReadFileAsync(Source source, string sha, string path, CancellationToken ct = default)
+        => ReadTextFileAsync(source, sha, path, ct).ContinueWith(t => t.Result is { } s ? System.Text.Encoding.UTF8.GetBytes(s) : null, ct, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
     /// <summary>Returns files changed between two commits (paths relative to repo root).</summary>
     Task<IReadOnlyList<string>> DiffPathsAsync(Source source, string fromSha, string toSha, CancellationToken ct = default);
     Task<(DateTimeOffset CommittedAt, string Sha)?> LastCommitForPathAsync(Source source, string sha, string path, CancellationToken ct = default);

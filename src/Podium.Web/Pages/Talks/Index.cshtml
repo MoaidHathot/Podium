@@ -15,7 +15,7 @@
         <meta property="og:title" content="@ViewData["Title"]" />
         <meta property="og:description" content="@(speaker is not null ? Markdown.ToText(speaker.ShortBio) : $"{Model.Talks.Count} talks")" />
         <meta property="og:url" content="@Model.Origin/talks" />
-        @if (speaker is not null && Model.PhotoUrl(speaker) is { } photo) { <meta property="og:image" content="@photo" /> }
+        @if (speaker is not null && Model.PhotoUrl(speaker) is { } photo) { <meta property="og:image" content="@(photo.StartsWith('/') ? Model.Origin + photo : photo)" /> }
     }
 }
 

@@ -24,6 +24,8 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
 
     public FakeArtifactStore Artifacts { get; } = new();
     public RecordingRunner Runner { get; } = new();
+    /// <summary>Repository files served to endpoints that read through the GitHub App (speaker photo); keyed by path.</summary>
+    public FakeWebRepository Repository { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -51,6 +53,8 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
             // Builds "start" instantly and are recorded; nothing is cloned or executed.
             foreach (var d in services.Where(d => d.ServiceType == typeof(IBuildRunner)).ToList()) services.Remove(d);
             services.AddSingleton<IBuildRunner>(Runner);
+            foreach (var d in services.Where(d => d.ServiceType == typeof(IRepositoryClient)).ToList()) services.Remove(d);
+            services.AddSingleton<IRepositoryClient>(Repository);
         });
     }
 
@@ -122,6 +126,21 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
     }
 
     private static int _buildSeq;
+}
+
+/// <summary>Repository client with a dictionary of files; nothing reaches GitHub from the web tests.</summary>
+public sealed class FakeWebRepository : IRepositoryClient
+{
+    public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
+    public int Reads;
+    public Task<(string Sha, DateTimeOffset CommittedAt)> GetHeadAsync(Source source, CancellationToken ct = default) => Task.FromResult((new string('b', 40), DateTimeOffset.UtcNow));
+    public Task<IReadOnlyList<string>> ListTreeAsync(Source source, string sha, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>(Files.Keys.ToList());
+    public Task<string?> ReadTextFileAsync(Source source, string sha, string path, CancellationToken ct = default) => Task.FromResult(Files.TryGetValue(path, out var b) ? Encoding.UTF8.GetString(b) : null);
+    public Task<byte[]?> ReadFileAsync(Source source, string sha, string path, CancellationToken ct = default) { Interlocked.Increment(ref Reads); return Task.FromResult(Files.GetValueOrDefault(path)); }
+    public Task<IReadOnlyList<string>> DiffPathsAsync(Source source, string fromSha, string toSha, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
+    public Task<(DateTimeOffset CommittedAt, string Sha)?> LastCommitForPathAsync(Source source, string sha, string path, CancellationToken ct = default) => Task.FromResult<(DateTimeOffset, string)?>((DateTimeOffset.UtcNow, sha));
+    public Task<Uri> GetAuthenticatedCloneUrlAsync(Source source, CancellationToken ct = default) => Task.FromResult(new Uri("https://x-access-token:secret@github.com/owner/slides.git"));
+    public Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner, long RepoId)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default) => Task.FromResult((true, "main", true, 4242L));
 }
 
 /// <summary>Records every build request the service hands to the runner.</summary>

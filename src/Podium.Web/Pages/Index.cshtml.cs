@@ -70,8 +70,8 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
     /// <summary>The talk this deck is a variant of, when its folder has an abstract.md (or .podium.yml joins one).</summary>
     public Talk? Talk { get; init; }
     public string RepoLabel => Source?.FullName ?? Deck.SourceId;
-    /// <summary>Label of the variant inside its talk: the explicit label, else "main" when siblings exist.</summary>
-    public string? VariantLabel => Deck.Variant ?? (Talk is { DeckSlugs.Count: > 1 } ? "main" : null);
+    /// <summary>Label of the variant inside its talk: the explicit label, else "main" for the talk's first deck when siblings exist.</summary>
+    public string? VariantLabel => Deck.Variant ?? (Talk is { DeckSlugs.Count: > 1 } && Talk.DeckSlugs[0] == Deck.Slug ? "main" : null);
     public string KindLabel => Deck.Kind switch
     {
         DeckKind.Slidev => "Slidev",

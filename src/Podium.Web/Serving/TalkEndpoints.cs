@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Net.Http.Headers;
 using Podium.Core.Abstractions;
 using Podium.Core.Models;
@@ -8,18 +9,65 @@ using Podium.Web.Security;
 namespace Podium.Web.Serving;
 
 /// <summary>
-/// Owner-only downloads around talks:
-///   /talks/{id}/cfp.md   the CfP pack as Markdown (title, abstracts, format, outline, takeaways, speaker)
-///   /talks/{id}/cfp.txt  the same as plain text, in the order CfP forms ask for it (Sessionize-style)
+/// Owner-only downloads around talks, plus the one public asset:
+///   /talks/{id}/cfp.md          the CfP pack as Markdown (title, abstracts, format, outline, takeaways, speaker)
+///   /talks/{id}/cfp.txt         the same as plain text, in the order CfP forms ask for it (Sessionize-style)
+///   /talks/photo/{owner}/{repo} the speaker photo when speaker.md points at a file in the repository (read through
+///                               the GitHub App, so private repositories work; image types only; cached)
 /// </summary>
 public static class TalkEndpoints
 {
+    /// <summary>Largest speaker photo served (bytes).</summary>
+    public const int MaxPhotoBytes = 3 * 1024 * 1024;
+
     public static IEndpointRouteBuilder MapTalks(this IEndpointRouteBuilder app)
     {
         var owner = app.MapGroup("/talks").RequireAuthorization(PodiumClaims.OwnerPolicy);
         owner.MapGet("/{id}/cfp.md", (string id, ITalkStore talks, HttpContext http, CancellationToken ct) => PackAsync(id, "md", talks, http, ct));
         owner.MapGet("/{id}/cfp.txt", (string id, ITalkStore talks, HttpContext http, CancellationToken ct) => PackAsync(id, "txt", talks, http, ct));
+
+        app.MapGet("/talks/photo/{owner}/{repo}", async (string owner, string repo, ITalkStore talks, ISourceStore sources, IRepositoryClient repos, Microsoft.Extensions.Caching.Memory.IMemoryCache cache, HttpContext http, CancellationToken ct) =>
+        {
+            var source = await sources.GetAsync(Source.MakeId(owner, repo), ct);
+            if (source is null || !source.Trusted) return Results.NotFound();
+            var speaker = await talks.GetSpeakerAsync(source.Id, ct);
+            // Only repository-relative photos are served here; absolute URLs are linked directly by the page.
+            if (speaker?.Photo is not { } path || Podium.Core.Discovery.TalkFiles.RepoPath(path) is null || path.Contains("://", StringComparison.Ordinal)) return Results.NotFound();
+            var sha = source.LastSeenSha ?? "HEAD";
+            var entry = await cache.GetOrCreateAsync<(byte[] Bytes, string Type)?>($"speaker-photo:{source.Id}:{sha}:{path}", async e =>
+            {
+                e.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(6);
+                e.Size = 1;
+                try
+                {
+                    var bytes = await repos.ReadFileAsync(source, sha, path, ct);
+                    if (bytes is null || bytes.Length == 0 || bytes.Length > MaxPhotoBytes) return null;
+                    var type = ImageType(bytes);
+                    return type is null ? null : (Bytes: bytes, Type: type);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    e.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(1);
+                    http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Podium.Talks").LogWarning(ex, "Could not read speaker photo {Path} of {Source}", path, source.Id);
+                    return null;
+                }
+            });
+            if (entry is not { } photo) return Results.NotFound();
+            http.Response.Headers[HeaderNames.CacheControl] = "public, max-age=3600";
+            http.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            return Results.Bytes(photo.Bytes, photo.Type);
+        }).RequireRateLimiting("probe");
         return app;
+    }
+
+    /// <summary>Content type from the file signature; null when the bytes are not a web image.</summary>
+    internal static string? ImageType(byte[] b)
+    {
+        if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "image/jpeg";
+        if (b.Length >= 8 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return "image/png";
+        if (b.Length >= 12 && b[0] == (byte)'R' && b[1] == (byte)'I' && b[2] == (byte)'F' && b[3] == (byte)'F' && b[8] == (byte)'W' && b[9] == (byte)'E' && b[10] == (byte)'B' && b[11] == (byte)'P') return "image/webp";
+        if (b.Length >= 6 && b[0] == (byte)'G' && b[1] == (byte)'I' && b[2] == (byte)'F' && b[3] == (byte)'8') return "image/gif";
+        return null;
     }
 
     private static async Task<IResult> PackAsync(string id, string format, ITalkStore talks, HttpContext http, CancellationToken ct)

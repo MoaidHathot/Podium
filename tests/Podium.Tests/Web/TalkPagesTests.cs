@@ -199,7 +199,8 @@ public sealed class TalkPagesTests(PodiumWebFactory app)
         var pageHtml = await speakerPage.Content.ReadAsStringAsync();
         Assert.Contains("Ada Lovelace", pageHtml);
         Assert.Contains("Ada <strong>builds</strong> things.", pageHtml);
-        Assert.Contains("https://raw.githubusercontent.com/owner/slides/HEAD/photo.jpg", pageHtml); // relative photo resolved to the raw tree
+        Assert.Contains("/talks/photo/owner/slides?v=", pageHtml); // repo-relative photo served by Podium (private repos work)
+        Assert.DoesNotContain("raw.githubusercontent.com", pageHtml);
         Assert.Contains("https://github.com/ada", pageHtml);
         Assert.DoesNotContain("javascript:", pageHtml);
         Assert.Contains(pub.Title, pageHtml);
@@ -309,6 +310,40 @@ public sealed class TalkPagesTests(PodiumWebFactory app)
         var guest = await app.GuestClientAsync(990778);
         Assert.Equal(HttpStatusCode.Redirect, (await guest.SendAsync(PodiumWebFactory.Navigation($"/decks/{pubDeck.Slug}/compare/{privDeck.Slug}"))).StatusCode);
     }
+
+    [Fact]
+    public async Task Speaker_photo_is_read_from_the_repository_and_served_only_when_it_is_an_image()
+    {
+        await SeedAsync("e"); // speaker.md photo: photo.jpg (repo-relative)
+        var anon = app.Client();
+        app.Repository.Files["photo.jpg"] = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46];
+        var photo = await anon.GetAsync("/talks/photo/owner/slides");
+        Assert.Equal(HttpStatusCode.OK, photo.StatusCode);
+        Assert.Equal("image/jpeg", photo.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("nosniff", photo.Headers.GetValues("X-Content-Type-Options").Single());
+        var reads = app.Repository.Reads;
+        await anon.GetAsync("/talks/photo/owner/slides");
+        Assert.Equal(reads, app.Repository.Reads); // cached
+
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync("/talks/photo/stranger/public-deck")).StatusCode); // untrusted source
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync("/talks/photo/nobody/nothing")).StatusCode);
+
+        // A text file at the photo path is not served as an image.
+        var talks = app.Services.GetRequiredService<ITalkStore>();
+        await talks.UpsertSpeakerAsync((await talks.GetSpeakerAsync("owner/slides"))! with { Photo = "evil.svg" });
+        app.Repository.Files["evil.svg"] = System.Text.Encoding.UTF8.GetBytes("<svg onload=\"alert(1)\"></svg>");
+        Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync("/talks/photo/owner/slides")).StatusCode);
+        await talks.UpsertSpeakerAsync((await talks.GetSpeakerAsync("owner/slides"))! with { Photo = "photo.jpg" });
+    }
+
+    [Theory]
+    [InlineData("photo.jpg", "photo.jpg")]
+    [InlineData("/assets/me.png", "assets/me.png")]
+    [InlineData("assets\\me.png", "assets/me.png")]
+    [InlineData("../secret.png", null)]
+    [InlineData("C:/x.png", null)]
+    [InlineData("", null)]
+    public void Repo_paths_are_normalised_and_never_traverse(string input, string? expected) => Assert.Equal(expected, Podium.Core.Discovery.TalkFiles.RepoPath(input));
 
     private sealed record TalkHitDto(string Id, string Title, string Status, int Decks, int Events, string Snippet, int Score);
 }

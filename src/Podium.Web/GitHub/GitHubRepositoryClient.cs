@@ -38,11 +38,16 @@ public sealed class GitHubRepositoryClient(GitHubAppAuth auth, ISourceStore sour
 
     public async Task<string?> ReadTextFileAsync(Source source, string sha, string path, CancellationToken ct = default)
     {
+        var bytes = await ReadFileAsync(source, sha, path, ct);
+        return bytes is null ? null : System.Text.Encoding.UTF8.GetString(bytes);
+    }
+
+    public async Task<byte[]?> ReadFileAsync(Source source, string sha, string path, CancellationToken ct = default)
+    {
         var client = await ClientFor(source, ct);
         try
         {
-            var bytes = await client.Repository.Content.GetRawContentByRef(source.Owner, source.Repo, path, sha).WaitAsync(ct);
-            return System.Text.Encoding.UTF8.GetString(bytes);
+            return await client.Repository.Content.GetRawContentByRef(source.Owner, source.Repo, path, sha).WaitAsync(ct);
         }
         catch (NotFoundException) { return null; }
     }
