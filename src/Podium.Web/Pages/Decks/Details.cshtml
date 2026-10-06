@@ -284,6 +284,15 @@
         <label class="row" style="gap:.5rem"><input type="checkbox" data-audience="polls" @(d.Audience.Polls ? "checked" : "") /> Polls <span class="faint">(you start them from the remote)</span></label>
     </div>
 </section>
+<section class="panel" id="viewer-settings">
+    <h3>Viewers</h3>
+    <p class="hint">What people who are not presenting may do inside the deck. These are courtesy locks for the room's benefit, not secrecy: the slides are part of the deck bundle. Speaker notes stay out of viewers' hands through the notes-free build (Build tab). Also in <code>.podium.yml</code> under <code>viewers:</code>.</p>
+    @if (d.Kind == DeckKind.Slidev)
+    {
+        <label class="row" style="gap:.5rem"><input type="checkbox" data-viewers="presenterView" @(d.Viewers.PresenterView ? "checked" : "") /> Viewers may open the presenter view and the notes viewer</label>
+    }
+    <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" data-viewers="browseAhead" @(d.Viewers.BrowseAhead ? "checked" : "") /> While you are live, viewers may browse ahead of your slide <span class="faint">(looking back is always allowed)</span></label>
+</section>
 }
 
 <section class="panel" style="margin-top:1rem">
@@ -602,7 +611,7 @@
   (function tabs() {
     const bar = document.getElementById('deck-tabs');
     if (!bar) return;
-    const owners = { 'access-requests': 'share', grants: 'share', links: 'share', 'audience-settings': 'share', sessions: 'analytics', views: 'analytics', activity: 'analytics', builds: 'build', slides: 'present', 'follow-along': 'present', 'session-panel': 'present', 'phone-remote': 'present' };
+    const owners = { 'access-requests': 'share', grants: 'share', links: 'share', 'audience-settings': 'share', 'viewer-settings': 'share', sessions: 'analytics', views: 'analytics', activity: 'analytics', builds: 'build', slides: 'present', 'follow-along': 'present', 'session-panel': 'present', 'phone-remote': 'present' };
     const key = 'podium-deck-tab';
     function show(name, { remember = true, scrollTo = null } = {}) {
       bar.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
@@ -649,6 +658,11 @@
     const audience = {};
     document.querySelectorAll('[data-audience]').forEach((b) => { audience[b.dataset.audience] = b.checked; });
     patch({ audience }, 'Audience settings saved (apply to the next session)');
+  }));
+  document.querySelectorAll('[data-viewers]').forEach((box) => box.addEventListener('change', () => {
+    const viewers = { presenterView: @(d.Viewers.PresenterView ? "true" : "false"), browseAhead: @(d.Viewers.BrowseAhead ? "true" : "false") };
+    document.querySelectorAll('[data-viewers]').forEach((b) => { viewers[b.dataset.viewers] = b.checked; });
+    patch({ viewers }, 'Viewer settings saved (apply on the next page load)');
   }));
   document.getElementById('stripNotes')?.addEventListener('change', (e) => patch({ stripNotesForViewers: e.target.checked }, e.target.checked ? 'Viewers will get a notes-free copy from the next build' : 'Viewers will see the full build'));
 
@@ -790,6 +804,32 @@
     })();
     </text>
   }
+
+  // The live session can start or end from the phone remote, the presenter view, or by itself (idle, overtime);
+  // this page is rendered once, so it checks every few seconds while visible and reloads when the state flipped.
+  (function watchSession() {
+    const renderedLive = @(Model.LiveSession is not null ? "true" : "false");
+    const renderedId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.LiveSession?.Id));
+    let reloading = false;
+    async function check() {
+      if (reloading || document.visibilityState !== 'visible') return;
+      try {
+        const r = await fetch(`/d/${slug}/session.json`, { credentials: 'same-origin', cache: 'no-store' });
+        if (!r.ok) return;
+        const s = await r.json();
+        const changed = !!s.live !== renderedLive || (s.live && s.id !== renderedId);
+        if (!changed) return;
+        // Never yank a half-typed field from under the owner; the next check retries.
+        const a = document.activeElement;
+        if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && a.value) return;
+        reloading = true;
+        toast(s.live ? 'A live session started' : 'The live session ended', 'ok');
+        setTimeout(() => location.reload(), 700);
+      } catch { /* transient */ }
+    }
+    setInterval(check, 5000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+  })();
 })();
 </script>
 }

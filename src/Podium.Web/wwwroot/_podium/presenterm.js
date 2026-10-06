@@ -26,6 +26,7 @@
       n = Math.min(count, Math.max(1, Math.round(n)));
       var cur = current();
       if (n === cur) return;
+      if (byUser && bridge && !bridge.canGoTo(n)) return;
       pendingKind = byUser ? 'user' : 'program';
       var steps = Math.abs(n - cur), name = n > cur ? 'ArrowRight' : 'ArrowLeft';
       for (var i = 0; i < steps; i++) key(name);
@@ -59,6 +60,9 @@
     document.addEventListener('keydown', function (e) {
       if (!e.isTrusted || e.defaultPrevented) return;
       var t = e.target; if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      // presenterm's own handler runs after this capture listener; stop it when the viewer may not go ahead.
+      var forward = e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown' || e.key === 'ArrowDown' || e.key === 'Enter';
+      if (forward && bridge && !bridge.canGoTo(current() + 1)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
       switch (e.key) {
         case 'ArrowLeft': case 'ArrowRight': pendingKind = 'user'; break;
         case ' ': case 'PageDown': case 'ArrowDown': case 'Enter': pendingKind = 'user'; key('ArrowRight'); e.preventDefault(); break;
@@ -76,8 +80,10 @@
       if (e.defaultPrevented || e.button !== 0) return;
       var el = e.target;
       while (el && el !== document.documentElement) { if (el.tagName === 'A' || el.tagName === 'BUTTON' || (el.id && el.id.indexOf('podium-') === 0) || (el.className && String(el.className).indexOf('podium-') >= 0)) return; el = el.parentNode; }
+      var fwd = e.clientX >= window.innerWidth / 2;
+      if (fwd && bridge && !bridge.canGoTo(current() + 1)) return;
       pendingKind = 'user';
-      key(e.clientX < window.innerWidth / 2 ? 'ArrowLeft' : 'ArrowRight');
+      key(fwd ? 'ArrowRight' : 'ArrowLeft');
     });
     var touchX = null, touchY = null;
     document.addEventListener('touchstart', function (e) { if (e.touches.length === 1) { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; } }, { passive: true });
@@ -85,7 +91,7 @@
       if (touchX === null) return;
       var dx = e.changedTouches[0].clientX - touchX, dy = e.changedTouches[0].clientY - touchY;
       touchX = touchY = null;
-      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { pendingKind = 'user'; key(dx < 0 ? 'ArrowRight' : 'ArrowLeft'); }
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { if (dx < 0 && bridge && !bridge.canGoTo(current() + 1)) return; pendingKind = 'user'; key(dx < 0 ? 'ArrowRight' : 'ArrowLeft'); }
     });
 
     // presenterm scales the body from its top-left corner; centre it so the slide sits in the middle of the screen.

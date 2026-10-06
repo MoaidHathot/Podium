@@ -399,7 +399,7 @@ public sealed class SyncHubTests(PodiumWebFactory app)
         Assert.Equal(1, (await ReceiveUntilAsync(presenter, "questions")).RootElement.GetProperty("items")[0].GetProperty("upvotes").GetInt32());
 
         // Poll: the presenter creates it; viewers see options without counts until it is shown; one vote per client.
-        await SendAsync(presenter, new { t = "poll", op = "create", question = "Which editor?", options = new[] { "VS Code", "Neovim", "Other" } });
+        await SendAsync(presenter, new { t = "poll", op = "create", question = "Which editor?", options = new[] { "VS Code", "Neovim", "Other" }, allowChange = true });
         var pollForPresenter = await ReceiveUntilAsync(presenter, "poll");
         var pollId = pollForPresenter.RootElement.GetProperty("poll").GetProperty("id").GetString()!;
         Assert.Equal(0, pollForPresenter.RootElement.GetProperty("poll").GetProperty("total").GetInt32());
@@ -476,6 +476,71 @@ public sealed class SyncHubTests(PodiumWebFactory app)
         await SendAsync(other, new { t = "react", kind = "heart" });
         Assert.Equal(1, (await ReceiveUntilAsync(presenter, "reactions")).RootElement.GetProperty("counts").GetProperty("heart").GetInt32());
         await api.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+    }
+
+    [Fact]
+    public async Task Polls_can_lock_answers_and_presenters_keep_a_history_they_can_re_show()
+    {
+        var deck = await app.SeedDeckAsync("audience-polls-deck", Visibility.Public);
+        var owner = await OwnerCookieAsync();
+        var api = await app.OwnerClientAsync();
+        using var presenter = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(presenter, "hello");
+        await SendAsync(presenter, new { t = "hi", role = "presenter" });
+        using var ann = await ConnectAsync(deck.Slug, null);
+        await ReceiveUntilAsync(ann, "hello");
+        await SendAsync(ann, new { t = "hi", cid = "ann-browser-00000001" });
+        await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/sessions", new { plannedMinutes = 30, holdDeploys = false, freeze = false });
+        await ReceiveUntilAsync(ann, "audience");
+
+        // Final answers (default): the first vote counts, a second one is dropped.
+        await SendAsync(presenter, new { t = "poll", op = "create", question = "Coffee or tea?", options = new[] { "Coffee", "Tea" } });
+        var first = await ReceiveUntilAsync(presenter, "poll");
+        var firstId = first.RootElement.GetProperty("poll").GetProperty("id").GetString()!;
+        Assert.False(first.RootElement.GetProperty("poll").GetProperty("allowChange").GetBoolean());
+        var history = await ReceiveUntilAsync(presenter, "polls");
+        Assert.Single(history.RootElement.GetProperty("items").EnumerateArray());
+        await SendAsync(ann, new { t = "vote", poll = firstId, option = 0 });
+        await ReceiveUntilAsync(presenter, "poll", p => p.GetProperty("poll").GetProperty("total").GetInt32() == 1);
+        await SendAsync(ann, new { t = "vote", poll = firstId, option = 1 });
+        Assert.True(await SilenceOfAsync(presenter, "poll", TimeSpan.FromMilliseconds(600)));
+        var snapshot = await api.GetFromJsonAsync<JsonElement>($"/api/decks/{deck.Slug}/sessions/audience");
+        Assert.Equal(1, snapshot.GetProperty("polls")[0].GetProperty("options")[0].GetProperty("votes").GetInt32());
+        Assert.Equal(0, snapshot.GetProperty("polls")[0].GetProperty("options")[1].GetProperty("votes").GetInt32());
+
+        // A second poll with changeable answers: the earlier one is closed and leaves the stage, the history keeps both.
+        await SendAsync(presenter, new { t = "poll", op = "create", question = "Which editor?", options = new[] { "VS Code", "Neovim" }, allowChange = true });
+        var second = await ReceiveUntilAsync(presenter, "poll", p => p.GetProperty("poll").GetProperty("question").GetString() == "Which editor?");
+        var secondId = second.RootElement.GetProperty("poll").GetProperty("id").GetString()!;
+        Assert.True(second.RootElement.GetProperty("poll").GetProperty("allowChange").GetBoolean());
+        var both = await ReceiveUntilAsync(presenter, "polls", p => p.GetProperty("items").GetArrayLength() == 2);
+        Assert.Equal("Which editor?", both.RootElement.GetProperty("items")[0].GetProperty("question").GetString()); // newest first
+        Assert.False(both.RootElement.GetProperty("items")[1].GetProperty("open").GetBoolean());
+        await SendAsync(ann, new { t = "vote", poll = secondId, option = 0 });
+        await ReceiveUntilAsync(presenter, "poll", p => p.GetProperty("poll").GetProperty("options")[0].GetProperty("votes").GetInt32() == 1);
+        await SendAsync(ann, new { t = "vote", poll = secondId, option = 1 });
+        var changed = await ReceiveUntilAsync(presenter, "poll", p => p.GetProperty("poll").GetProperty("options")[1].GetProperty("votes").GetInt32() == 1);
+        Assert.Equal(0, changed.RootElement.GetProperty("poll").GetProperty("options")[0].GetProperty("votes").GetInt32());
+        Assert.Equal(1, changed.RootElement.GetProperty("poll").GetProperty("total").GetInt32());
+
+        // Re-showing the earlier poll puts it back in front of the room (and closes the one that was open).
+        await SendAsync(presenter, new { t = "poll", op = "show", id = firstId });
+        var reshown = await ReceiveUntilAsync(ann, "poll", p => p.GetProperty("poll").GetProperty("id").GetString() == firstId && p.GetProperty("poll").GetProperty("shown").GetBoolean(), 60);
+        Assert.True(reshown.RootElement.GetProperty("poll").GetProperty("shown").GetBoolean());
+        Assert.Equal(1, reshown.RootElement.GetProperty("poll").GetProperty("total").GetInt32()); // shown: counts revealed to viewers
+        var afterReshow = await ReceiveUntilAsync(presenter, "polls", p => p.GetProperty("items").EnumerateArray().Any(i => i.GetProperty("id").GetString() == firstId && i.GetProperty("shown").GetBoolean()));
+        Assert.All(afterReshow.RootElement.GetProperty("items").EnumerateArray(), i => Assert.False(i.GetProperty("open").GetBoolean()));
+
+        // A presenter joining later gets the history replayed; the recap remembers the answer policy.
+        using var lateRemote = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(lateRemote, "hello");
+        var replayed = await ReceiveUntilAsync(lateRemote, "polls");
+        Assert.Equal(2, replayed.RootElement.GetProperty("items").GetArrayLength());
+        await api.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+        var list = await api.GetFromJsonAsync<JsonElement>($"/api/decks/{deck.Slug}/sessions");
+        var polls = list.EnumerateArray().First().GetProperty("audienceRecap").GetProperty("polls");
+        Assert.False(polls[0].GetProperty("allowChange").GetBoolean());
+        Assert.True(polls[1].GetProperty("allowChange").GetBoolean());
     }
 
     private static async Task<int> WaitForCloseAsync(WebSocket ws)

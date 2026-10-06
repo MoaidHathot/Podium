@@ -142,6 +142,20 @@ public static class DeckServingEndpoints
         var isIndex = path.Length == 0;
         var relative = isIndex ? "index.html" : path;
 
+        // Viewer locks (non-presenters only). Presenter view and notes viewer are Slidev routes; a locked viewer
+        // landing there by URL is sent to the same slide in play mode. The overview reveals every slide, so while a
+        // session is live and browsing ahead is off it is sent back to the deck. The addon enforces the same rules
+        // for in-app navigation; these are courtesy locks, not secrecy (see ViewerSettings).
+        var lockPresenter = !result.CanPresent && deck.Kind == DeckKind.Slidev && !deck.Viewers.PresenterView;
+        var lockAhead = !result.CanPresent && !deck.Viewers.BrowseAhead;
+        if (lockPresenter && IsNavigation(http))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(path, @"^(?:presenter|notes|notes-edit)(?:/(\d+))?/?$");
+            if (m.Success) return Results.Redirect($"/d/{slug}/{(m.Groups[1].Success ? m.Groups[1].Value : "")}{http.Request.QueryString}");
+        }
+        if (lockAhead && deck.LiveSessionId is not null && IsNavigation(http) && System.Text.RegularExpressions.Regex.IsMatch(path, @"^overview/?$"))
+            return Results.Redirect($"/d/{slug}/{http.Request.QueryString}");
+
         // PowerPoint decks can opt into Microsoft's Office Online viewer for a faithful rendering. The viewer service
         // fetches the file itself, so it gets a short-lived signed URL rather than a cookie.
         if (isIndex && deck.Kind == DeckKind.PowerPoint && deck.PptxViewer == PptxViewer.Office && deck.CurrentHasPptx
@@ -196,7 +210,8 @@ public static class DeckServingEndpoints
                 using var ms = new MemoryStream();
                 await file.Content.CopyToAsync(ms, ct);
                 var html = Encoding.UTF8.GetString(ms.ToArray());
-                html = InjectLiveScript(html, slug, deck.CurrentBuildId, deck.OfflineCache, result.CanPresent, deck.Kind, onExternalHost, p => versions.AddFileVersionToPath(http.Request.PathBase, p));
+                var locks = string.Join(" ", new[] { lockPresenter ? "presenter" : null, lockAhead ? "ahead" : null }.Where(l => l is not null));
+                html = InjectLiveScript(html, slug, deck.CurrentBuildId, deck.OfflineCache, result.CanPresent, deck.Kind, onExternalHost, p => versions.AddFileVersionToPath(http.Request.PathBase, p), locks);
                 // Link previews (Slack/Teams/Twitter) for decks anyone can open; private decks reveal nothing to crawlers anyway.
                 if (deck.Visibility == Visibility.Public && !onExternalHost)
                     html = InjectOpenGraph(html, deck, $"{options.Value.PublicBaseUrl.ToString().TrimEnd('/')}");
@@ -254,7 +269,7 @@ public static class DeckServingEndpoints
     /// adapter for deck kinds without a built-in addon (presenterm exports, the pages viewer), and live-ui.js (pill,
     /// HUD, blackout, session UI). URLs carry a content hash so a deploy is picked up at once despite caching.
     /// </summary>
-    internal static string InjectLiveScript(string html, string slug, string buildId, bool offline = false, bool presenter = false, DeckKind kind = DeckKind.Slidev, bool external = false, Func<string, string>? versioned = null)
+    internal static string InjectLiveScript(string html, string slug, string buildId, bool offline = false, bool presenter = false, DeckKind kind = DeckKind.Slidev, bool external = false, Func<string, string>? versioned = null, string locks = "")
     {
         versioned ??= p => p;
         var kindName = kind switch { DeckKind.Presenterm => "presenterm", DeckKind.PowerPoint or DeckKind.Pdf => "pages", DeckKind.Static => "static", _ => "slidev" };
@@ -270,7 +285,7 @@ public static class DeckServingEndpoints
             var version = versioned("/_podium/live-ui.css");
             var q = version.IndexOf("?v=", StringComparison.Ordinal);
             var v = q < 0 ? "" : version[(q + 3)..];
-            sb.Append($"<script defer src=\"{versioned("/_podium/live-ui.js")}\" data-slug=\"{slug}\" data-build=\"{buildId}\" data-kind=\"{kindName}\"{(presenter ? " data-presenter=\"1\"" : "")}{(external ? " data-external=\"1\"" : "")} data-version=\"{System.Net.WebUtility.HtmlEncode(v)}\"></script>");
+            sb.Append($"<script defer src=\"{versioned("/_podium/live-ui.js")}\" data-slug=\"{slug}\" data-build=\"{buildId}\" data-kind=\"{kindName}\"{(presenter ? " data-presenter=\"1\"" : "")}{(external ? " data-external=\"1\"" : "")}{(locks.Length > 0 ? $" data-locks=\"{locks}\"" : "")} data-version=\"{System.Net.WebUtility.HtmlEncode(v)}\"></script>");
         }
         var tag = sb.ToString();
         var idx = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);

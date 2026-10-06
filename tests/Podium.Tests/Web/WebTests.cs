@@ -494,6 +494,51 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
 
     private static string DeviceServiceSummary(string ua) => typeof(Podium.Web.Security.DeviceService).GetMethod("Summarize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, [ua]) as string ?? "";
 
+    [Fact]
+    public async Task Viewer_locks_keep_non_presenters_out_of_the_presenter_view_and_the_overview_while_live()
+    {
+        var deck = await app.SeedDeckAsync("locked-deck", Visibility.Public);
+        var owner = await app.OwnerClientAsync();
+        var anon = app.Client();
+
+        // Defaults: the presenter view is for presenters. The viewer lands on the same slide in play mode; the
+        // served page announces the locks to the addon; the owner is never locked.
+        var bounced = await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/presenter/4"));
+        Assert.Equal(HttpStatusCode.Redirect, bounced.StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/4", bounced.Headers.Location!.ToString());
+        Assert.Equal($"/d/{deck.Slug}/", (await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/notes"))).Headers.Location!.ToString());
+        var viewerHtml = await (await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).Content.ReadAsStringAsync();
+        Assert.Contains("data-locks=\"presenter ahead\"", viewerHtml);
+        var ownerPage = await owner.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/presenter/4"));
+        Assert.Equal(HttpStatusCode.OK, ownerPage.StatusCode);
+        Assert.DoesNotContain("data-locks", await ownerPage.Content.ReadAsStringAsync());
+
+        // The overview is only blocked while a session is live (it reveals every slide).
+        Assert.Equal(HttpStatusCode.OK, (await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/overview"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { plannedMinutes = 10, holdDeploys = false, freeze = false }))).StatusCode);
+        var overview = await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/overview"));
+        Assert.Equal(HttpStatusCode.Redirect, overview.StatusCode);
+        Assert.Equal($"/d/{deck.Slug}/", overview.Headers.Location!.ToString());
+        await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+
+        // The owner opens things up: viewers may use the presenter view, and may browse ahead while live.
+        Assert.Equal(HttpStatusCode.OK, (await owner.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { viewers = new { presenterView = true, browseAhead = true } }))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/presenter/4"))).StatusCode);
+        Assert.DoesNotContain("data-locks", await (await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).Content.ReadAsStringAsync());
+        var page = await (await owner.SendAsync(PodiumWebFactory.Navigation($"/decks/{deck.Slug}"))).Content.ReadAsStringAsync();
+        Assert.Contains("data-viewers=\"presenterView\" checked", page);
+        Assert.Contains("data-viewers=\"browseAhead\" checked", page);
+
+        // Decks without a presenter view (pages viewer) never announce the presenter lock, only the ahead lock.
+        var pdf = await app.SeedDeckAsync("locked-pdf-deck", Visibility.Public, kind: DeckKind.Pdf);
+        Assert.Contains("data-locks=\"ahead\"", await (await anon.SendAsync(PodiumWebFactory.Navigation($"/d/{pdf.Slug}/"))).Content.ReadAsStringAsync());
+
+        // The live set is available to the owner's pages for refreshing (the phone may have ended the session).
+        var live = await owner.GetFromJsonAsync<JsonElement>("/api/sessions/live");
+        Assert.Equal(JsonValueKind.Array, live.ValueKind);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anon.GetAsync("/api/sessions/live")).StatusCode);
+    }
+
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };

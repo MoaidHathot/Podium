@@ -24,8 +24,19 @@
     var socket = null, backoff = 1000, closedByPage = false, canSend = false, connected = false, following = true;
     var pending = [], listeners = {}, lastInfo = '';
     var timer = { status: 'stopped', slides: {}, startedAt: 0, pausedAt: 0 };
-    var presenterPage = null;
+    var presenterPage = null, sessionLive = false;
     var NAV = 'podium - nav', SHARED = 'podium - shared', POINTER = 'podium - pointer';
+    // Viewer locks announced by the server on the live-ui script tag (never for presenting sockets).
+    var locks = ((document.querySelector('script[src*="/_podium/live-ui.js"]') || { getAttribute: function () { return ''; } }).getAttribute('data-locks') || '').split(/\s+/).filter(Boolean);
+    var lockAhead = locks.indexOf('ahead') >= 0;
+    var lastLockNotice = 0;
+    function aheadLocked() { return lockAhead && !canSend && sessionLive && presenterPage !== null; }
+    function canGoTo(n) {
+      if (!aheadLocked() || n <= presenterPage) return true;
+      var now = Date.now();
+      if (now - lastLockNotice > 1500) { lastLockNotice = now; emit('locked', { reason: 'ahead', max: presenterPage }); }
+      return false;
+    }
 
     function emit(type, data) {
       var set = listeners[type];
@@ -101,6 +112,9 @@
           case 'info':
             if (typeof msg.page === 'number') presenterPage = msg.page;
             break;
+          case 'session':
+            sessionLive = !!msg.live;
+            break;
           case 'state':
             if (!msg.state || typeof msg.state !== 'object') break;
             if (msg.channel === NAV && typeof msg.state.page === 'number') {
@@ -137,6 +151,8 @@
       get connected() { return connected; },
       get following() { return following; },
       get presenterPage() { return presenterPage; },
+      get locks() { return { presenter: false, ahead: aheadLocked(), max: presenterPage }; },
+      canGoTo: canGoTo,
       get timer() { return timer; },
       setFollowing: function (on) { following = !!on; if (following && !canSend && presenterPage && presenterPage !== opts.page()) opts.go(presenterPage); },
       position: position,

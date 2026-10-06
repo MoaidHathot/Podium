@@ -523,6 +523,27 @@ else
     } catch { setTimeout(poll, 15000); }
   }
   if (polling) setTimeout(poll, 4000);
+
+  // The "Live now" banner reflects sessions started or ended anywhere (phone, presenter view, auto-end): compare the
+  // live set every 15 s while visible and reload when it changed.
+  (function watchLive() {
+    const rendered = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.LiveNow.Select(x => x.Session.Id).OrderBy(x => x).ToArray()));
+    let reloading = false;
+    async function check() {
+      if (reloading || document.visibilityState !== 'visible') return;
+      try {
+        const live = await Podium.api('GET', '/api/sessions/live');
+        const ids = live.map((s) => s.id).sort();
+        if (ids.length === rendered.length && ids.every((id, i) => id === rendered[i])) return;
+        const a = document.activeElement;
+        if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && a.value) return;
+        reloading = true;
+        location.reload();
+      } catch { /* transient */ }
+    }
+    setInterval(check, 15000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+  })();
 })();
 </script>
 }

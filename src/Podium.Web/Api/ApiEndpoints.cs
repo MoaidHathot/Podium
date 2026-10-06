@@ -126,6 +126,7 @@ public static partial class ApiEndpoints
                 // Embedding only ever applies to Public decks; the flag is kept but ignored otherwise (see CSP/XFO).
                 AllowEmbedding = patch.AllowEmbedding ?? deck.AllowEmbedding,
                 Audience = patch.Audience ?? deck.Audience,
+                Viewers = patch.Viewers ?? deck.Viewers,
                 Title = string.IsNullOrWhiteSpace(patch.Title) ? deck.Title : patch.Title.Trim(),
                 Tags = tags ?? deck.Tags,
                 UpdatedAt = DateTimeOffset.UtcNow,
@@ -231,6 +232,11 @@ public static partial class ApiEndpoints
         });
 
         owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
+
+        // Sessions live right now, across decks (the library and deck pages poll this to stay honest when a session
+        // is started or ended from the phone, or ends by itself).
+        owner.MapGet("/sessions/live", async (ISessionStore sessions, CancellationToken ct) =>
+            Results.Ok((await sessions.ListLiveAsync(ct)).OrderByDescending(s => s.StartedAt).Select(s => new { s.Id, s.DeckSlug, s.StartedAt, s.PlannedMinutes, joinCode = s.JoinCode is null ? null : SessionService.FormatJoinCode(s.JoinCode) })));
 
         // One session's recap as CSV: pacing per slide, then what the room sent in (text is quoted; nothing is HTML).
         owner.MapGet("/decks/{slug}/sessions/{id}/recap.csv", async (string slug, string id, ISessionStore sessions, CancellationToken ct) =>
@@ -415,7 +421,7 @@ public static partial class ApiEndpoints
     private static bool IsValidGitHubName(string s) => s.Length is > 0 and <= 100 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.') && s != "." && s != "..";
 }
 
-public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null, bool? OfflineCache = null, bool? AllowEmbedding = null, AudienceSettings? Audience = null);
+public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null, bool? OfflineCache = null, bool? AllowEmbedding = null, AudienceSettings? Audience = null, ViewerSettings? Viewers = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label, string? Passcode = null, int? MaxUses = null);
 public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title, AudienceSettings? Audience = null, bool? Rehearsal = null);

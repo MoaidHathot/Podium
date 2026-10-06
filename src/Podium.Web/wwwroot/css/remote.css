@@ -108,6 +108,15 @@ main { flex: 1; display: flex; flex-direction: column; gap: .8rem; padding: .8re
 .aud-opct { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .85rem; white-space: nowrap; }
 .aud-poll-acts, .aud-qacts { flex-wrap: wrap; gap: .4rem; }
 .aud-poll-acts .small, .aud-qacts .small { padding: .3rem .55rem; font-size: .8rem; }
+.aud-history { border-top: 1px dashed var(--border); padding-top: .5rem; }
+.aud-history summary { cursor: pointer; color: var(--muted); font-size: .88rem; list-style: none; }
+.aud-history summary::-webkit-details-marker { display: none; }
+.aud-history > summary::before { content: "\25B8 "; } .aud-history[open] > summary::before { content: "\25BE "; }
+.aud-history ul { list-style: none; margin: .4rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+.aud-hpoll details { border: 1px solid var(--border); border-radius: 10px; padding: .4rem .6rem; }
+.aud-hpoll summary { color: var(--text); font-size: .9rem; }
+.aud-hpoll summary strong { font-weight: 600; }
+.aud-hbody { display: flex; flex-direction: column; gap: .35rem; margin-top: .4rem; }
 .aud-questions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; border-top: 1px dashed var(--border); padding-top: .6rem; }
 .aud-q { display: flex; flex-direction: column; gap: .3rem; padding: .5rem .6rem; border-radius: 10px; background: rgba(255, 255, 255, .03); }
 .aud-q.pinned { outline: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); }

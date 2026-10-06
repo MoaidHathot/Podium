@@ -129,9 +129,10 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
             {
                 await SendAsync(conn, SessionPayload(live, canPresent, replay: true), ct);
                 await SendAsync(conn, audience.StatePayload(live), ct);
-                var (questions, poll) = audience.ReplayPayloads(slug, canPresent);
+                var (questions, poll, polls) = audience.ReplayPayloads(slug, canPresent);
                 if (questions is not null) await SendAsync(conn, questions, ct);
                 if (poll is not null) await SendAsync(conn, poll, ct);
+                if (polls is not null) await SendAsync(conn, polls, ct);
             }
             await BroadcastPresenceAsync(room, slug, ct);
 

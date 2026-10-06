@@ -372,7 +372,7 @@ function resolveSlidevBin(deckDir) {
 
 // Protocol version of the bundled sync addon / bridge. Podium's live-ui.js stays inert on older builds, whose addon
 // still draws its own pill, so a deck is never decorated twice during the rebuild wave after an upgrade.
-const ADDON_PROTOCOL = 3.1;
+const ADDON_PROTOCOL = 3.2;
 
 function injectPodiumMeta(indexHtml, addonProtocol = ADDON_PROTOCOL) {
   const html = readFileSync(indexHtml, 'utf8');

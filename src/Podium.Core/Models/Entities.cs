@@ -67,6 +67,8 @@ public sealed record Deck
     public bool HoldDeploysWhileLive { get; init; }
     /// <summary>Audience features offered to the room during live sessions (reactions, questions, polls).</summary>
     public AudienceSettings Audience { get; init; } = AudienceSettings.Default;
+    /// <summary>What people who are not presenters may do inside the deck (presenter view, browsing ahead while live).</summary>
+    public ViewerSettings Viewers { get; init; } = ViewerSettings.Default;
     /// <summary>Id of the running live session, if any (denormalised for the library badge).</summary>
     public string? LiveSessionId { get; init; }
     /// <summary>Commit SHA the deck content was last changed at.</summary>
@@ -238,6 +240,19 @@ public sealed record AudienceSettings(
     public bool Any => Reactions || Questions || Polls;
 }
 
+/// <summary>
+/// Courtesy locks for non-presenters. They keep an audience from wandering (the slides are part of the deck bundle,
+/// so they are not a secret-keeping mechanism; speaker notes are kept away by the notes-free build instead).
+/// </summary>
+public sealed record ViewerSettings(
+    /// <summary>Viewers may open the presenter view and the notes viewer (Slidev decks).</summary>
+    bool PresenterView = false,
+    /// <summary>While a session is live, viewers may move past the presenter's slide (and open the overview).</summary>
+    bool BrowseAhead = false)
+{
+    public static readonly ViewerSettings Default = new();
+}
+
 /// <summary>A question asked by the room during a session.</summary>
 public sealed record AudienceQuestion(
     string Id,
@@ -263,7 +278,9 @@ public sealed record AudiencePoll(
     bool Shown,
     int TotalVotes,
     /// <summary>Client ids that voted (random per browser; lets a restart keep one vote per client).</summary>
-    IReadOnlyList<string> Voters);
+    IReadOnlyList<string> Voters,
+    /// <summary>Voters may replace their answer while the poll is open (otherwise the first answer is final).</summary>
+    bool AllowChange = false);
 
 /// <summary>Everything the room contributed during a session.</summary>
 public sealed record AudienceRecap(

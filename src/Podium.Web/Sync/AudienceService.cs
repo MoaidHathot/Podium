@@ -58,6 +58,8 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
         /// <summary>Per-option counts carried over from a snapshot (their voters are known only by id).</summary>
         public readonly Dictionary<int, int> RestoredCounts = new();
         public bool Open = true, Shown;
+        /// <summary>Voters may replace their answer while open; otherwise the first answer is final.</summary>
+        public bool AllowChange;
     }
     private sealed class RoomState
     {
@@ -109,7 +111,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
             room.Questions.Add(new QuestionState { Id = q.Id, Text = q.Text, Nick = q.Nick, At = q.At, Slide = q.Slide, RestoredUpvotes = q.Upvotes, Answered = q.Answered, Dismissed = q.Dismissed, Pinned = q.Pinned });
         foreach (var p in recap.Polls.Take(MaxPollsPerSession))
         {
-            var ps = new PollState { Id = p.Id, Question = p.Question, Options = p.Options.Select(o => o.Text).ToList(), CreatedAt = p.CreatedAt, Slide = p.Slide, Open = p.Open, Shown = p.Shown };
+            var ps = new PollState { Id = p.Id, Question = p.Question, Options = p.Options.Select(o => o.Text).ToList(), CreatedAt = p.CreatedAt, Slide = p.Slide, Open = p.Open, Shown = p.Shown, AllowChange = p.AllowChange };
             // Counts survive a restart; who voted for what does not, so restored voters are pinned to a sentinel option
             // that keeps them from voting twice while the totals are carried separately.
             foreach (var v in p.Voters) ps.Votes[v] = -1;
@@ -128,7 +130,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
     private static AudienceRecap BuildRecap(RoomState room) => new(
         new Dictionary<string, int>(room.Reactions),
         room.Questions.Select(q => new AudienceQuestion(q.Id, q.Text, q.Nick, q.At, q.Slide, q.Upvotes, q.Answered, q.Dismissed, q.Pinned)).ToList(),
-        room.Polls.Select(p => { var results = OptionResults(p); return new AudiencePoll(p.Id, p.Question, results, p.CreatedAt, p.Slide, p.Open, p.Shown, results.Sum(o => o.Votes), p.Votes.Keys.ToList()); }).ToList());
+        room.Polls.Select(p => { var results = OptionResults(p); return new AudiencePoll(p.Id, p.Question, results, p.CreatedAt, p.Slide, p.Open, p.Shown, results.Sum(o => o.Votes), p.Votes.Keys.ToList(), p.AllowChange); }).ToList());
 
     private static IReadOnlyList<PollOption> OptionResults(PollState p)
         => p.Options.Select((text, i) => new PollOption(text, (p.RestoredCounts.TryGetValue(i, out var r) ? r : 0) + p.Votes.Values.Count(v => v == i))).ToList();
@@ -184,17 +186,29 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
         });
     }
 
-    /// <summary>Current questions and poll for a newcomer (null when nothing to replay).</summary>
-    public (string? Questions, string? Poll) ReplayPayloads(string slug, bool forPresenter)
+    /// <summary>Current questions, current poll and (presenters only) the poll history for a newcomer; null when nothing to replay.</summary>
+    public (string? Questions, string? Poll, string? Polls) ReplayPayloads(string slug, bool forPresenter)
     {
-        if (!_rooms.TryGetValue(slug, out var room)) return (null, null);
+        if (!_rooms.TryGetValue(slug, out var room)) return (null, null, null);
         lock (room.Gate)
         {
             var q = room.Questions.Count > 0 ? QuestionsPayload(room) : null;
             var p = CurrentPoll(room) is { } poll ? PollPayload(poll, forPresenter) : null;
-            return (q, p);
+            var all = forPresenter && room.Polls.Count > 0 ? PollsPayload(room) : null;
+            return (q, p, all);
         }
     }
+
+    /// <summary>Every poll of the session with full results, newest first (presenters only: re-view, re-show, reopen).</summary>
+    private static string PollsPayload(RoomState room) => JsonSerializer.Serialize(new
+    {
+        t = "polls",
+        items = Enumerable.Reverse(room.Polls).Select(p =>
+        {
+            var results = OptionResults(p);
+            return new { id = p.Id, question = p.Question, open = p.Open, shown = p.Shown, allowChange = p.AllowChange, createdAt = p.CreatedAt, slide = p.Slide, options = results.Select(o => new { text = o.Text, votes = o.Votes }), total = results.Sum(o => o.Votes) };
+        }),
+    });
 
     private static string QuestionsPayload(RoomState room) => JsonSerializer.Serialize(new
     {
@@ -216,7 +230,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
             t = "poll",
             poll = new
             {
-                id = p.Id, question = p.Question, open = p.Open, shown = p.Shown, createdAt = p.CreatedAt, slide = p.Slide,
+                id = p.Id, question = p.Question, open = p.Open, shown = p.Shown, allowChange = p.AllowChange, createdAt = p.CreatedAt, slide = p.Slide,
                 options = results.Select(o => reveal ? new { text = o.Text, votes = (int?)o.Votes } : new { text = o.Text, votes = (int?)null }),
                 total = reveal ? (int?)results.Sum(o => o.Votes) : null,
             },
@@ -236,7 +250,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
         if (!Enabled || session is not { EndedAt: null } || cid is null) return false;
         if (!root.TryGetProperty("t", out var t) || t.ValueKind != JsonValueKind.String) return false;
         var room = _rooms.GetOrAdd(slug, _ => new RoomState());
-        string? broadcastAll = null, broadcastPresenters = null, broadcastViewers = null;
+        string? broadcastAll = null, broadcastPresenters = null, broadcastViewers = null, broadcastHistory = null;
         lock (room.Gate)
         {
             if (room.SessionId != session.Id) { Reset(room); room.SessionId = session.Id; }
@@ -312,11 +326,17 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
                     if (!root.TryGetProperty("option", out var op) || op.ValueKind != JsonValueKind.Number || !op.TryGetInt32(out var option)) return false;
                     var poll = room.Polls.FirstOrDefault(p => p.Id == pid.GetString());
                     if (poll is null || !poll.Open || option < 0 || option >= poll.Options.Count) return false;
-                    if (poll.Votes.TryGetValue(cid, out var previous) && previous < 0) return false; // voted before a restart; the count is kept
-                    poll.Votes[cid] = option; // a changed mind replaces the earlier vote
+                    if (poll.Votes.TryGetValue(cid, out var previous))
+                    {
+                        if (previous < 0) return false;          // voted before a restart; the count is kept
+                        if (!poll.AllowChange) return false;     // first answer is final
+                        if (previous == option) return false;    // nothing changed
+                    }
+                    poll.Votes[cid] = option; // with AllowChange a changed mind replaces the earlier vote
                     room.Dirty = true;
                     broadcastPresenters = PollPayload(poll, true);
                     broadcastViewers = PollPayload(poll, false);
+                    broadcastHistory = PollsPayload(room);
                     break;
                 }
                 default:
@@ -326,6 +346,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
         if (broadcastAll is not null) await Deliver(slug, AudienceTarget.All, broadcastAll);
         if (broadcastPresenters is not null) await Deliver(slug, AudienceTarget.Presenters, broadcastPresenters);
         if (broadcastViewers is not null) await Deliver(slug, AudienceTarget.Viewers, broadcastViewers);
+        if (broadcastHistory is not null) await Deliver(slug, AudienceTarget.Presenters, broadcastHistory);
         return true;
     }
 
@@ -364,8 +385,9 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
     /// <summary>
     /// Accepted from presenting sockets:
     ///   {"t":"question","op":"answer"|"dismiss"|"pin"|"unpin"|"restore","id":string}
-    ///   {"t":"poll","op":"create","question":string,"options":[string,...]}  (opens at once)
+    ///   {"t":"poll","op":"create","question":string,"options":[string,...],"allowChange"?:bool}  (opens at once)
     ///   {"t":"poll","op":"close"|"open"|"show"|"hide"|"remove","id":string}
+    /// "show" works on any poll of the session, so earlier results can be put back on screen; "open" re-opens voting.
     /// </summary>
     public async Task<bool> HandlePresenterAsync(string slug, Session? session, int currentSlide, JsonElement root)
     {
@@ -374,7 +396,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
         if (!root.TryGetProperty("op", out var opEl) || opEl.ValueKind != JsonValueKind.String) return false;
         var op = opEl.GetString();
         var room = _rooms.GetOrAdd(slug, _ => new RoomState());
-        string? all = null, presenters = null, viewers = null;
+        string? all = null, presenters = null, viewers = null, history = null;
         lock (room.Gate)
         {
             if (room.SessionId != session.Id) { Reset(room); room.SessionId = session.Id; }
@@ -411,8 +433,9 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
                         if (root.TryGetProperty("options", out var arr) && arr.ValueKind == JsonValueKind.Array)
                             foreach (var o in arr.EnumerateArray()) { if (o.ValueKind != JsonValueKind.String) return false; var v = Clean(o.GetString()!, MaxOptionLength); if (v.Length > 0) opts.Add(v); }
                         if (opts.Count is < 2 or > MaxPollOptions) return false;
+                        var allowChange = root.TryGetProperty("allowChange", out var ac) && ac.ValueKind == JsonValueKind.True;
                         foreach (var p in room.Polls) { p.Open = false; p.Shown = false; } // one poll at a time
-                        poll = new PollState { Id = NewId(), Question = question, Options = opts, CreatedAt = DateTimeOffset.UtcNow, Slide = currentSlide };
+                        poll = new PollState { Id = NewId(), Question = question, Options = opts, CreatedAt = DateTimeOffset.UtcNow, Slide = currentSlide, AllowChange = allowChange };
                         room.Polls.Add(poll);
                     }
                     else
@@ -424,7 +447,9 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
                         {
                             case "close": poll.Open = false; break;
                             case "open": foreach (var p in room.Polls) { if (p != poll) { p.Open = false; p.Shown = false; } } poll.Open = true; break;
-                            case "show": foreach (var p in room.Polls) { if (p != poll) p.Shown = false; } poll.Shown = true; break;
+                            // Re-showing an earlier poll takes the stage: it becomes the current poll for everyone, and
+                            // an open poll elsewhere is closed so only one poll is ever in front of the room.
+                            case "show": foreach (var p in room.Polls) { if (p != poll) { p.Shown = false; p.Open = false; } } poll.Shown = true; break;
                             case "hide": poll.Shown = false; break;
                             case "remove": room.Polls.Remove(poll); poll = CurrentPoll(room); break;
                             default: return false;
@@ -434,6 +459,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
                     var current = CurrentPoll(room);
                     presenters = PollPayload(current, true);
                     viewers = PollPayload(current, false);
+                    history = PollsPayload(room);
                     break;
                 }
                 default:
@@ -443,6 +469,7 @@ public sealed class AudienceService(IOptions<AudienceOptions> options, IServiceS
         if (all is not null) await Deliver(slug, AudienceTarget.All, all);
         if (presenters is not null) await Deliver(slug, AudienceTarget.Presenters, presenters);
         if (viewers is not null) await Deliver(slug, AudienceTarget.Viewers, viewers);
+        if (history is not null) await Deliver(slug, AudienceTarget.Presenters, history);
         return true;
     }
 

@@ -121,13 +121,14 @@
         return;
       }
       pillBtn.hidden = false;
+      var ahead = bridge.locks && bridge.locks.ahead;
       if (bridge.following) {
         pillLabel.textContent = 'Live · following';
         pillBtn.textContent = 'Browse freely';
       } else {
         var here = bridge.position().page;
         var behind = presenter.page && presenter.page !== here ? ' · presenter on ' + presenter.page : '';
-        pillLabel.textContent = 'Live · browsing' + behind;
+        pillLabel.textContent = 'Live · browsing' + (ahead ? ' back' : '') + behind;
         pillBtn.textContent = 'Jump to live';
       }
     }
@@ -427,20 +428,37 @@
         sheet.appendChild(el('h3', { text: p.question }));
         var reveal = p.options.some(function (o) { return typeof o.votes === 'number'; });
         var total = reveal ? p.options.reduce(function (s, o) { return s + (o.votes || 0); }, 0) : 0;
+        var voted = myVotes[p.id] !== undefined;
+        // Final answers: tap to pick, then confirm, so a mis-tap on a phone is not the vote. Changeable: one tap votes.
+        var finalAnswers = !p.allowChange;
+        var canVote = p.open && !aud.muted && !(finalAnswers && voted);
         var opts = el('div', { class: 'podium-options' });
+        function castVote(i) { sendMsg({ t: 'vote', poll: p.id, option: i }); myVotes[p.id] = i; try { localStorage.setItem('podium-votes-' + cfg.slug, JSON.stringify(myVotes)); } catch (x) { /* private mode */ } pendingChoice = null; renderSheet(); renderAudience(); }
         p.options.forEach(function (o, i) {
           var mine = myVotes[p.id] === i;
-          var b = el('button', { type: 'button', class: 'podium-option' + (mine ? ' podium-mine' : ''), disabled: !p.open || aud.muted ? 'true' : null });
+          var picked = finalAnswers && !voted && pendingChoice === i;
+          var b = el('button', { type: 'button', class: 'podium-option' + (mine ? ' podium-mine' : '') + (picked ? ' podium-picked' : ''), disabled: canVote ? null : 'true', 'aria-pressed': picked || mine ? 'true' : 'false' });
           var label = el('span', { class: 'podium-olabel', text: o.text });
           b.appendChild(label);
           if (reveal) { var pct = total ? Math.round((o.votes || 0) * 100 / total) : 0; b.appendChild(el('span', { class: 'podium-obar', style: 'width:' + pct + '%' })); b.appendChild(el('span', { class: 'podium-opct', text: pct + '%' })); }
-          if (p.open && !aud.muted) b.addEventListener('click', function () { sendMsg({ t: 'vote', poll: p.id, option: i }); myVotes[p.id] = i; try { localStorage.setItem('podium-votes-' + cfg.slug, JSON.stringify(myVotes)); } catch (x) { /* private mode */ } renderSheet(); renderAudience(); });
+          if (canVote) b.addEventListener('click', function () { if (finalAnswers) { pendingChoice = i; renderSheet(); } else castVote(i); });
           opts.appendChild(b);
         });
         sheet.appendChild(opts);
-        sheet.appendChild(el('p', { class: 'podium-note', text: !p.open ? 'Voting is closed.' + (reveal ? ' ' + total + ' votes.' : '') : myVotes[p.id] !== undefined ? 'Thanks, your vote is in. You can still change it while voting is open.' : 'Tap an answer to vote.' }));
+        if (finalAnswers && canVote && pendingChoice !== null && pendingChoice < p.options.length) {
+          var confirmRow = el('div', { class: 'podium-row' });
+          var cancel = el('button', { type: 'button', class: 'podium-abtn', text: 'Cancel' }); cancel.addEventListener('click', function () { pendingChoice = null; renderSheet(); });
+          var submit = el('button', { type: 'button', class: 'podium-abtn podium-primary', text: 'Vote for \u201C' + p.options[pendingChoice].text + '\u201D' }); submit.addEventListener('click', function () { castVote(pendingChoice); });
+          confirmRow.append(cancel, submit);
+          sheet.appendChild(confirmRow);
+        }
+        var note = !p.open ? 'Voting is closed.' + (reveal ? ' ' + total + ' votes.' : '')
+          : voted ? (finalAnswers ? 'Thanks, your vote is in. Answers are final for this poll.' : 'Thanks, your vote is in. You can still change it while voting is open.')
+          : finalAnswers ? 'Tap an answer, then confirm. Answers are final.' : 'Tap an answer to vote.';
+        sheet.appendChild(el('p', { class: 'podium-note', text: note }));
       }
     }
+    var pendingChoice = null;
 
     // Floating reactions over the slide (projector and viewers), never in the presenter view.
     function floatEmoji(kind, n, own) {
@@ -549,6 +567,7 @@
     });
     bridge.on('poll', function (m) {
       var hadOpen = aud.poll && aud.poll.open;
+      if (!m.poll || !aud.poll || m.poll.id !== aud.poll.id) pendingChoice = null; // a different poll: forget a half-made choice
       aud.poll = m.poll || null;
       if (isViewer() && aud.poll && aud.poll.open && !hadOpen && myVotes[aud.poll.id] === undefined) { toggleSheet('poll'); if (navigator.vibrate) try { navigator.vibrate(20); } catch (e) { /* unsupported */ } }
       renderAudience(); renderHudAudience();
@@ -586,6 +605,9 @@
       render();
     });
     bridge.on('position', function () { render(); });
+    bridge.on('locked', function (m) {
+      toast(m.reason === 'presenter' ? 'The presenter view is for presenters.' : 'You can look back, but not ahead of the presenter while the talk is live.', 3500);
+    });
     bridge.on('role', function () { if (pill) pill.hidden = true; if (hud) hud.hidden = true; renderScreen(); render(); });
     bridge.on('open', function () { render(); });
     bridge.on('close', function (m) {

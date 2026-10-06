@@ -374,6 +374,7 @@ public static class PresenterToolsEndpoints
                   </span>
                 </div>
                 <div class="aud-poll" id="aud-poll" hidden></div>
+                <details class="aud-history" id="aud-history" hidden><summary id="aud-history-summary">Earlier polls</summary><ul id="aud-history-list"></ul></details>
                 <ul class="aud-questions" id="aud-questions"></ul>
               </section>
               <div class="hint" id="hint">Drives every open instance of this deck (audience view, projector). Keyboard: ← → Space, B black, G go to, L laser, T timer.</div>
@@ -402,6 +403,7 @@ public static class PresenterToolsEndpoints
               <label>Question<input id="poll-question" maxlength="200" placeholder="Which editor do you use?" autocomplete="off"></label>
               <div class="row presets"><span class="faint">Presets:</span><button type="button" class="small" data-preset="yesno">Yes / No</button><button type="button" class="small" data-preset="scale">1 – 5</button><button type="button" class="small" data-preset="abcd">A B C D</button></div>
               <div id="poll-options" class="poll-options"></div>
+              <label class="check"><input type="checkbox" id="poll-allow-change"> Voters may change their answer while voting is open</label>
               <div class="row"><button class="small primary" value="create">Start poll</button><button class="small" value="cancel">Cancel</button></div>
             </form></dialog>
             <script src="/js/remote.js"></script>

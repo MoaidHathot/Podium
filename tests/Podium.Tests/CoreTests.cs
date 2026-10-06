@@ -156,6 +156,18 @@ public class DeckConfigTests
     }
 
     [Fact]
+    public void Viewers_block_sets_the_courtesy_locks()
+    {
+        var cfg = DeckConfig.Parse("""
+            viewers:
+              presenter_view: yes
+            """)!;
+        Assert.True(cfg.Viewers!.PresenterView);
+        Assert.False(cfg.Viewers.BrowseAhead); // untouched keys keep the default
+        Assert.Null(DeckConfig.Parse("title: T")!.Viewers);
+    }
+
+    [Fact]
     public void Invalid_or_non_mapping_yaml_yields_null()
     {
         Assert.Null(DeckConfig.Parse("- just\n- a list"));

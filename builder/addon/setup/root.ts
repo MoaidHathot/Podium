@@ -19,7 +19,7 @@ import { toRaw, watch } from 'vue'
 import { addSyncMethod } from '@slidev/client/state/syncState.ts'
 import { useNav } from '@slidev/client/composables/useNav.ts'
 import { patch as patchShared, sharedState } from '@slidev/client/state/shared.ts'
-import { syncDirections } from '@slidev/client/state/storage.ts'
+import { showOverview, syncDirections } from '@slidev/client/state/storage.ts'
 
 type Handler = (data: Record<string, unknown>) => void
 type Listener = (msg: Record<string, unknown>) => void
@@ -75,6 +75,42 @@ function setupPodiumBridge() {
   const pending: string[] = []
   const nav = useNav()
   const role = () => (nav.isPresenter.value ? 'presenter' : 'play')
+
+  // ---- Viewer locks (non-presenters): presenter view / notes viewer, and browsing ahead while a session is live.
+  // The server decides which locks apply and announces them on the live-ui script tag; presenting sockets are never
+  // locked (canSend). Courtesy locks, not secrecy: the slides are in the bundle regardless.
+  const locks = (document.querySelector('script[src*="/_podium/live-ui.js"]')?.getAttribute('data-locks') || '').split(/\s+/).filter(Boolean)
+  const lockPresenter = locks.includes('presenter')
+  const lockAhead = locks.includes('ahead')
+  let presenterPage: number | null = null
+  let sessionLive = false
+  const aheadLocked = () => lockAhead && !canSend && sessionLive && presenterPage !== null
+  const maxPage = () => (aheadLocked() ? presenterPage! : Infinity)
+  let lastLockNotice = 0
+  function refuse(reason: 'presenter' | 'ahead') {
+    const now = Date.now()
+    if (now - lastLockNotice > 1500) { lastLockNotice = now; emit('locked', { reason, max: presenterPage }) }
+  }
+  if (lockPresenter || lockAhead) {
+    const router = (nav as unknown as { router?: { beforeEach: (guard: (to: { path: string }) => unknown) => void } }).router
+    router?.beforeEach((to) => {
+      if (canSend) return true
+      if (lockPresenter && /^\/(presenter|notes|notes-edit)(\/|$)/.test(to.path)) {
+        refuse('presenter')
+        const m = to.path.match(/^\/presenter\/(\d+)/)
+        return `/${m ? m[1] : nav.currentSlideNo.value}`
+      }
+      if (aheadLocked()) {
+        if (/^\/overview(\/|$)/.test(to.path)) { refuse('ahead'); return false }
+        const m = to.path.match(/^\/(\d+)(\/|$)/)
+        const target = m ? Number(m[1]) : to.path === '/' ? 1 : null
+        if (target !== null && target > maxPage()) { refuse('ahead'); return false }
+      }
+      return true
+    })
+    // The quick overview (`o`) is an overlay, not a route; it shows every slide.
+    watch(showOverview, (open) => { if (open && aheadLocked()) { showOverview.value = false; refuse('ahead') } })
+  }
 
   // ---- Slidev navigation: executing remote-control commands and reporting the position ------------------------
   async function executeNav(action: string, page?: number) {
@@ -210,10 +246,19 @@ function setupPodiumBridge() {
         case 'timer':
           if (canSend) applyTimer(msg.op)
           break
+        case 'info':
+          if (typeof msg.page === 'number') presenterPage = msg.page
+          break
+        case 'session':
+          sessionLive = !!msg.live
+          break
         case 'state': {
           if (typeof msg.channel !== 'string' || !msg.state || typeof msg.state !== 'object') break
+          const st = msg.state as Record<string, unknown>
+          // Known before Slidev applies the state, so a locked viewer's follow navigation is never refused.
+          if (typeof st.page === 'number' && msg.channel !== 'podium - pointer') presenterPage = st.page
           const h = handlers.get(msg.channel)
-          if (h) h(msg.state as Record<string, unknown>)
+          if (h) h(st)
           break
         }
       }
@@ -280,13 +325,14 @@ function setupPodiumBridge() {
   ;(window as any).__podiumBuild = document.querySelector('meta[name="podium-build"]')?.getAttribute('content') || null
 
   const bridge = {
-    protocol: 3.1,
+    protocol: 3.2,
     kind: 'slidev',
     slug,
     get role() { return role() },
     get canSend() { return canSend },
     get connected() { return connected },
     get following() { return following() },
+    get locks() { return { presenter: lockPresenter, ahead: aheadLocked(), max: presenterPage } },
     setFollowing,
     position,
     send(message: Record<string, unknown>) { if (canSend) send(JSON.stringify(message)) },

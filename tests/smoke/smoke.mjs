@@ -156,21 +156,62 @@ try {
   await remote.click('#poll-form button[value="create"]');
   await joiner.waitForSelector('#podium-sheet .podium-option', { timeout: 5000 }).catch(() => {});
   check('poll opens on the viewer', (await joiner.locator('#podium-sheet .podium-option').count()) === 2);
+  // Final answers (the default): pick, confirm, then the options lock.
   await joiner.click('#podium-sheet .podium-option >> nth=0');
+  await joiner.waitForTimeout(200);
+  check('final-answer poll asks to confirm', (await joiner.locator('#podium-sheet button:has-text("Vote for")').count()) === 1 && /answers are final/i.test(await joiner.locator('#podium-sheet').innerText()));
+  await joiner.click('#podium-sheet button:has-text("Vote for")');
   await remote.waitForFunction(() => /1 · 100%/.test(document.querySelector('#aud-poll')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
   check('vote counted on the remote', /1 · 100%/.test(await remote.locator('#aud-poll').innerText()), await remote.locator('#aud-poll').innerText());
+  check('answer is locked for the voter', (await joiner.locator('#podium-sheet .podium-option:disabled').count()) === 2 && /answers are final/i.test(await joiner.locator('#podium-sheet').innerText()));
   await remote.click('#aud-poll button:has-text("Show on screen")');
   await presenter.waitForSelector('#podium-results', { timeout: 5000 }).catch(() => {});
   check('poll results on the presenting window', /100%/.test(await presenter.locator('#podium-results').innerText().catch(() => '')));
-  await op.request.post(`${base}/api/decks/fixture-deck/sessions/end?unfreeze=true`, { headers: { 'x-podium-request': '1' } });
+  // A second poll with changeable answers; the first moves to the history and can be put back on screen.
+  await remote.click('#aud-newpoll');
+  await remote.fill('#poll-question', 'Coffee or tea?');
+  await remote.click('#poll-form [data-preset="yesno"]');
+  await remote.check('#poll-allow-change');
+  await remote.click('#poll-form button[value="create"]');
+  await joiner.waitForFunction(() => /Coffee or tea/.test(document.querySelector('#podium-sheet')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  await joiner.click('#podium-sheet .podium-option >> nth=1');
+  await joiner.waitForTimeout(300);
+  await joiner.click('#podium-sheet .podium-option >> nth=0');
+  await remote.waitForFunction(() => /Coffee or tea/.test(document.querySelector('#aud-poll')?.textContent || '') && /answers may change/.test(document.querySelector('#aud-poll')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  await remote.waitForTimeout(400);
+  check('changeable poll keeps one vote after a changed mind', /1 vote/.test(await remote.locator('#aud-poll').innerText()) && /answers may change/.test(await remote.locator('#aud-poll').innerText()), (await remote.locator('#aud-poll').innerText()).slice(0, 120));
+  check('earlier poll listed in the history', /Earlier polls \(1\)/.test(await remote.locator('#aud-history-summary').innerText()) && /Which editor/.test(await remote.locator('#aud-history').evaluate((e) => e.textContent)));
+  await remote.click('#aud-history summary');
+  await remote.click('#aud-history .aud-hpoll summary');
+  await remote.click('#aud-history .aud-hpoll button:has-text("Show on screen")');
+  await presenter.waitForFunction(() => /Which editor/.test(document.querySelector('#podium-results')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  check('earlier poll re-shown on the presenting window', /Which editor/.test(await presenter.locator('#podium-results').innerText().catch(() => '')));
+
+  // Viewer locks: while live, the room member cannot move ahead of the presenter (looking back is fine).
+  await joiner.keyboard.press('Escape');
+  const pBefore = await presenter.evaluate(() => window.__podium.position().page);
+  await joiner.keyboard.press('ArrowRight');
+  await joiner.waitForFunction(() => /not ahead of the presenter/.test(document.querySelector('#podium-toasts')?.textContent || ''), null, { timeout: 3000 }).catch(() => {});
+  check('viewer cannot browse ahead while live', (await joiner.evaluate(() => window.__podium.position().page)) === pBefore && /not ahead of the presenter/.test(await joiner.locator('#podium-toasts').innerText().catch(() => '')), `page ${await joiner.evaluate(() => window.__podium.position().page)}; toasts: ${(await joiner.locator('#podium-toasts').innerText().catch(() => '')).slice(0, 80)}`);
+  await joiner.keyboard.press('ArrowLeft'); await joiner.waitForTimeout(400);
+  check('viewer can still look back', (await joiner.evaluate(() => window.__podium.position().page)) === pBefore - 1);
+  await joiner.click('#podium-live button'); await joiner.waitForTimeout(300);
+
+  // Ending from the phone: the room is told, and the owner's deck page (open on the desktop) notices on its own.
+  await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
+  check('deck page shows the running session', (await op.locator('#session-end').count()) === 1);
+  remote.once('dialog', (d) => d.accept());
+  await remote.click('#session .danger');
   await joiner.waitForSelector('#podium-ended', { timeout: 5000 }).catch(() => {});
   check('room member is told the session ended', (await joiner.locator('#podium-ended').count()) === 1);
   check('code dies with the session', (await joiner.request.get(`${base}/j/${code}`)).status() === 404);
+  await op.waitForSelector('#session-start', { timeout: 12000 }).catch(() => {});
+  check('deck page refreshed itself after the phone ended the session', (await op.locator('#session-start').count()) === 1 && (await op.locator('#session-end').count()) === 0);
   await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
   check('deck page opens on the Present tab', (await op.locator('.tab[aria-selected="true"]').getAttribute('data-tab')) === 'present');
   await op.click('#tab-analytics');
   check('Analytics tab shows the recap', !(await op.locator('.tab-panel[data-tab="analytics"]').isHidden()) && (await op.locator('.tab-panel[data-tab="present"]').isHidden()));
-  check('recap lists the audience contribution', /2 reactions, 1 question, 1 poll/.test(await op.locator('#sessions').innerText().catch(() => '')), (await op.locator('#sessions summary').first().innerText().catch(() => '')).slice(0, 160));
+  check('recap lists the audience contribution', /2 reactions, 1 question, 2 polls/.test(await op.locator('#sessions').innerText().catch(() => '')), (await op.locator('#sessions summary').first().innerText().catch(() => '')).slice(0, 160));
   await op.goto(`${base}/decks/fixture-deck#access-requests`, { waitUntil: 'networkidle' });
   check('hash deep link opens the Share tab', (await op.locator('.tab[aria-selected="true"]').getAttribute('data-tab')) === 'share');
   await op.reload({ waitUntil: 'networkidle' });

@@ -49,6 +49,8 @@
   function show(n, byUser) {
     n = Math.min(count, Math.max(1, Math.round(n)));
     if (n === current) return;
+    // A viewer who may not browse ahead while the talk is live stays where the presenter is (the bridge explains).
+    if (byUser && bridge && !bridge.canGoTo(n)) return;
     current = n;
     img.classList.add('pp-loading');
     img.src = src(n);

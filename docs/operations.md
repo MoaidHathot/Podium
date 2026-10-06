@@ -145,13 +145,30 @@ While a session is live, people admitted through the join code can react (six em
 name, upvotes) and vote in polls the presenter starts from the phone remote. Per deck under *Share → Audience* (or
 `audience:` in `.podium.yml`; defaults: everything on, reactions float across the projector); per session the
 presenter can mute the room (`POST /api/decks/{slug}/sessions/audience`). `Podium:Audience:Enabled=false` switches it
-off globally. Server-side bounds: text ≤ 280 chars, names ≤ 24, reactions 1/s per client (burst 3) and 2000/min per
+off globally. Polls take final answers by default (the voter picks, then confirms); a poll created with *Voters may
+change their answer* accepts a replacement vote while open. Presenters keep the session's poll history (`polls`
+message) and can put any earlier result back on screen or reopen voting; one poll is in front of the room at a time. Server-side bounds: text ≤ 280 chars, names ≤ 24, reactions 1/s per client (burst 3) and 2000/min per
 room, one question per 20 s and at most 5 open per client, 50 questions/min and 200 per session per room, 20 client
 ids per address, one vote per client (changing is allowed), poll counts reach viewers only once shown. Everything is
 rendered as text, snapshotted into the session every minute and written into its recap at the end (also as CSV from
 the Analytics tab).
 
 Join codes are limited per address (300/min) and process-wide (2000/min, HTTP 429 with `Retry-After`).
+
+## Viewer locks
+
+Per deck under *Share → Viewers* (or `viewers:` in `.podium.yml`): whether non-presenters may open the presenter
+view and notes viewer (Slidev; default no) and whether, while a session is live, they may move past the presenter's
+slide or open the overview (default no; looking back is always allowed). The server bounces presenter/notes/overview
+URLs and announces the locks on the `live-ui.js` script tag (`data-locks`); the addon and the pages/presenterm
+adapters enforce them for in-app navigation and explain with a toast. Courtesy locks only: the slides are part of
+the bundle, so a determined viewer can still read them; notes are kept away by the notes-free build.
+
+## Live state on owner pages
+
+The deck page polls `/d/{slug}/session.json` every 5 s and the library polls `GET /api/sessions/live` every 15 s
+while visible, reloading when a session started or ended elsewhere (phone remote, presenter view, auto-end), so the
+desktop never shows a stale *End session* button.
 
 ## Backups and export
 

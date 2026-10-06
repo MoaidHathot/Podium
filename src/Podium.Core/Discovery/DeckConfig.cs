@@ -15,9 +15,12 @@ namespace Podium.Core.Discovery;
 ///   polls: true
 ///   floatReactions: true   # emoji float across the projector
 ///   nicknames: true        # questions may carry a name
+/// viewers:
+///   presenterView: false   # non-presenters may open the presenter view / notes viewer
+///   browseAhead: false     # while live, non-presenters may move past your slide
 /// </code>
 /// </summary>
-public sealed record DeckConfig(string? Title, string? Alias, IReadOnlyList<string>? Tags, bool? ExportPdf, bool? ExportPptx, bool? StripNotes, Visibility? Visibility, bool? NpmScripts, AudienceSettings? Audience = null)
+public sealed record DeckConfig(string? Title, string? Alias, IReadOnlyList<string>? Tags, bool? ExportPdf, bool? ExportPptx, bool? StripNotes, Visibility? Visibility, bool? NpmScripts, AudienceSettings? Audience = null, ViewerSettings? Viewers = null)
 {
     public static readonly string[] FileNames = [".podium.yml", ".podium.yaml", "podium.yml"];
 
@@ -59,7 +62,15 @@ public sealed record DeckConfig(string? Title, string? Alias, IReadOnlyList<stri
                     audience = new AudienceSettings(false, false, false, false, false);
                 }
             }
-            return new DeckConfig(string.IsNullOrEmpty(title) ? null : title.Length > 200 ? title[..200] : title, alias, tags, Bool("exportPdf") ?? Bool("export_pdf"), Bool("exportPptx") ?? Bool("export_pptx"), Bool("stripNotes") ?? Bool("strip_notes"), vis, Bool("npmScripts") ?? Bool("npm_scripts"), audience);
+            ViewerSettings? viewers = null;
+            if (map.Children.TryGetValue(new YamlScalarNode("viewers"), out var vn) && vn is YamlMappingNode vm)
+            {
+                string? VStr(params string[] keys) { foreach (var k in keys) if (vm.Children.TryGetValue(new YamlScalarNode(k), out var v) && v is YamlScalarNode s) return s.Value; return null; }
+                bool VBool(bool fallback, params string[] keys) => VStr(keys) is { } v ? ParseBool(v) : fallback;
+                var dv = ViewerSettings.Default;
+                viewers = new ViewerSettings(VBool(dv.PresenterView, "presenterView", "presenter_view"), VBool(dv.BrowseAhead, "browseAhead", "browse_ahead"));
+            }
+            return new DeckConfig(string.IsNullOrEmpty(title) ? null : title.Length > 200 ? title[..200] : title, alias, tags, Bool("exportPdf") ?? Bool("export_pdf"), Bool("exportPptx") ?? Bool("export_pptx"), Bool("stripNotes") ?? Bool("strip_notes"), vis, Bool("npmScripts") ?? Bool("npm_scripts"), audience, viewers);
         }
         catch (YamlDotNet.Core.YamlException) { return null; }
     }
