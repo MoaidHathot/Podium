@@ -145,6 +145,8 @@ builder.Services.AddSingleton<SecurityStamp>();
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<ViewTokenService>();
 builder.Services.AddSingleton<DeckAccessService>();
+builder.Services.AddOptions<Podium.Web.Sync.AudienceOptions>().Bind(config.GetSection(Podium.Web.Sync.AudienceOptions.Section));
+builder.Services.AddSingleton<Podium.Web.Sync.AudienceService>();
 builder.Services.AddSingleton<Podium.Web.Sync.SyncHub>();
 
 // ----- Auth -----
@@ -277,6 +279,7 @@ if (args.Length > 0 && string.Equals(args[0], "export", StringComparison.Ordinal
     hub.OnPresenterPosition = recorders.RecordPositionAsync;
     hub.OnPresence = recorders.RecordPresenceAsync;
     recorders.OnSessionChanged = session => hub.NotifySessionAsync(session);
+    app.Services.GetRequiredService<Podium.Web.Sync.AudienceService>().Send = (slug, target, payload) => hub.SendToAsync(slug, target, payload);
     var scopes = app.Services.GetRequiredService<IServiceScopeFactory>();
     hub.ResolveLiveSession = async slug =>
     {

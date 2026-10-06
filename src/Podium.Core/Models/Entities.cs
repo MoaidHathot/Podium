@@ -65,6 +65,8 @@ public sealed record Deck
     public bool OfflineCache { get; init; } = true;
     /// <summary>Hold Podium deployments while a live session of this deck is running (opt-in, see Session).</summary>
     public bool HoldDeploysWhileLive { get; init; }
+    /// <summary>Audience features offered to the room during live sessions (reactions, questions, polls).</summary>
+    public AudienceSettings Audience { get; init; } = AudienceSettings.Default;
     /// <summary>Id of the running live session, if any (denormalised for the library badge).</summary>
     public string? LiveSessionId { get; init; }
     /// <summary>Commit SHA the deck content was last changed at.</summary>
@@ -203,6 +205,14 @@ public sealed record Session
     /// <summary>Why the session ended: manual, idle, overtime, cap.</summary>
     public string? EndReason { get; init; }
     public SessionRecap? Recap { get; init; }
+    /// <summary>A rehearsal: recorded like any session but labelled so recaps and pace comparisons can tell them apart.</summary>
+    public bool Rehearsal { get; init; }
+    /// <summary>Audience features in effect for this session (null: the deck's settings at the time).</summary>
+    public AudienceSettings? Audience { get; init; }
+    /// <summary>The presenter silenced the room (reactions, questions and votes are dropped while true).</summary>
+    public bool AudienceMuted { get; init; }
+    /// <summary>Reactions, questions and polls; snapshotted every minute while live, final at the end.</summary>
+    public AudienceRecap? AudienceRecap { get; init; }
 }
 
 /// <summary>Pacing data computed when a session ends.</summary>
@@ -213,6 +223,57 @@ public sealed record SessionRecap(
     /// <summary>Seconds spent per slide index (1-based keys), summed over revisits.</summary>
     IReadOnlyDictionary<int, int> SecondsPerSlide,
     int? LastSlide);
+
+/// <summary>Which audience features a deck (or a session) offers the room through the join link.</summary>
+public sealed record AudienceSettings(
+    bool Reactions = true,
+    bool Questions = true,
+    bool Polls = true,
+    /// <summary>Reactions float across the projector (and viewers' screens), not just the presenter's counters.</summary>
+    bool FloatReactions = true,
+    /// <summary>Questions may carry a nickname; otherwise they are anonymous.</summary>
+    bool Nicknames = true)
+{
+    public static readonly AudienceSettings Default = new();
+    public bool Any => Reactions || Questions || Polls;
+}
+
+/// <summary>A question asked by the room during a session.</summary>
+public sealed record AudienceQuestion(
+    string Id,
+    string Text,
+    string? Nick,
+    DateTimeOffset At,
+    int Slide,
+    int Upvotes,
+    bool Answered,
+    bool Dismissed,
+    bool Pinned);
+
+public sealed record PollOption(string Text, int Votes);
+
+/// <summary>A poll the presenter ran; Open accepts votes, Shown renders results on the projector.</summary>
+public sealed record AudiencePoll(
+    string Id,
+    string Question,
+    IReadOnlyList<PollOption> Options,
+    DateTimeOffset CreatedAt,
+    int Slide,
+    bool Open,
+    bool Shown,
+    int TotalVotes,
+    /// <summary>Client ids that voted (random per browser; lets a restart keep one vote per client).</summary>
+    IReadOnlyList<string> Voters);
+
+/// <summary>Everything the room contributed during a session.</summary>
+public sealed record AudienceRecap(
+    IReadOnlyDictionary<string, int> Reactions,
+    IReadOnlyList<AudienceQuestion> Questions,
+    IReadOnlyList<AudiencePoll> Polls)
+{
+    public static readonly AudienceRecap Empty = new(new Dictionary<string, int>(), [], []);
+    public int ReactionTotal => Reactions.Values.Sum();
+}
 
 /// <summary>A signed-in visitor asking for access to a Shared/Private deck.</summary>
 public sealed record AccessRequest

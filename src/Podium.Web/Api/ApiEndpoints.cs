@@ -124,6 +124,7 @@ public static partial class ApiEndpoints
                 OfflineCache = patch.OfflineCache ?? deck.OfflineCache,
                 // Embedding only ever applies to Public decks; the flag is kept but ignored otherwise (see CSP/XFO).
                 AllowEmbedding = patch.AllowEmbedding ?? deck.AllowEmbedding,
+                Audience = patch.Audience ?? deck.Audience,
                 Title = string.IsNullOrWhiteSpace(patch.Title) ? deck.Title : patch.Title.Trim(),
                 Tags = tags ?? deck.Tags,
                 UpdatedAt = DateTimeOffset.UtcNow,
@@ -193,7 +194,7 @@ public static partial class ApiEndpoints
         // Live sessions: Go live (freeze + join link + recording) / End (revoke + recap).
         owner.MapPost("/decks/{slug}/sessions", async (string slug, StartSessionRequest req, SessionService sessions, DeckAccessService access, HttpContext http, CancellationToken ct) =>
         {
-            var (session, error) = await sessions.StartAsync(slug, req.PlannedMinutes, req.HoldDeploys, req.Freeze ?? true, req.Title, ct);
+            var (session, error) = await sessions.StartAsync(slug, req.PlannedMinutes, req.HoldDeploys, req.Freeze ?? true, req.Title, ct, req.Audience, req.Rehearsal ?? false);
             if (session is null) return Results.Conflict(new { error });
             access.Invalidate(slug);
             var joinUrl = session.LinkId is null ? null : $"{http.Request.Scheme}://{http.Request.Host}/d/{slug}/?share={session.LinkId}";
@@ -212,6 +213,20 @@ public static partial class ApiEndpoints
         {
             var s = await sessions.UpdatePlanAsync(slug, minutes, ct);
             return s is null ? Results.NotFound(new { error = "No live session, or minutes out of range (1-600)" }) : Results.Ok(s);
+        });
+
+        // Mid-session audience control: mute/unmute the room, switch features on or off.
+        owner.MapPost("/decks/{slug}/sessions/audience", async (string slug, AudienceUpdateRequest req, SessionService sessions, CancellationToken ct) =>
+        {
+            var s = await sessions.UpdateAudienceAsync(slug, req.Muted, req.Settings, ct);
+            return s is null ? Results.NotFound(new { error = "No live session" }) : Results.Ok(s);
+        });
+
+        // What the room has contributed to the live session so far (the recap is on the session once it ends).
+        owner.MapGet("/decks/{slug}/sessions/audience", async (string slug, SessionService sessions, Sync.AudienceService audience, CancellationToken ct) =>
+        {
+            var live = await sessions.GetLiveAsync(slug, ct);
+            return live is null ? Results.NotFound(new { error = "No live session" }) : Results.Ok(audience.Snapshot(slug));
         });
 
         owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
@@ -374,10 +389,11 @@ public static partial class ApiEndpoints
     private static bool IsValidGitHubName(string s) => s.Length is > 0 and <= 100 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.') && s != "." && s != "..";
 }
 
-public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null, bool? OfflineCache = null, bool? AllowEmbedding = null);
+public sealed record DeckPatch(Visibility? Visibility, Visibility? PdfVisibility, Visibility? PptxVisibility, bool? Pinned, bool? ExportPdf, bool? ExportPptx, string? Title, IReadOnlyList<string>? Tags, PptxViewer? PptxViewer = null, bool? StripNotesForViewers = null, string? Alias = null, bool? OfflineCache = null, bool? AllowEmbedding = null, AudienceSettings? Audience = null);
 public sealed record GrantRequest(string Login, bool Site = true, bool Pdf = false, bool Pptx = false, bool Present = false);
 public sealed record ShareLinkRequest(ArtifactKind Artifact, int? ExpiresInDays, string? Label, string? Passcode = null, int? MaxUses = null);
-public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title);
+public sealed record StartSessionRequest(int? PlannedMinutes, bool HoldDeploys, bool? Freeze, string? Title, AudienceSettings? Audience = null, bool? Rehearsal = null);
+public sealed record AudienceUpdateRequest(bool? Muted, AudienceSettings? Settings);
 public sealed record AccessDecisionRequest(bool Grant, bool Pdf = false, bool Pptx = false, bool Present = false);
 
 public static partial class ApiEndpoints

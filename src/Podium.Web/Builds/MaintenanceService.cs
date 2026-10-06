@@ -10,7 +10,7 @@ namespace Podium.Web.Builds;
 /// Periodic maintenance: polls sources that cannot deliver webhooks, safety-net polls the rest, reaps stale builds,
 /// and refreshes App installations on startup.
 /// </summary>
-public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue queue, IOptions<PodiumOptions> options, IOptions<BuilderOptions> builderOptions, ILogger<MaintenanceService> log) : BackgroundService
+public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue queue, IOptions<PodiumOptions> options, IOptions<BuilderOptions> builderOptions, ILogger<MaintenanceService> log, Podium.Web.Sync.AudienceService audience) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -57,6 +57,9 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
                 using var scope = scopes.CreateScope();
                 await scope.ServiceProvider.GetRequiredService<BuildService>().ReapStaleAsync(ct);
             }, stoppingToken);
+
+            // Reactions, questions and polls of live rooms are persisted once a minute so a restart loses little.
+            await RunSafely("audience snapshot", ct => audience.SnapshotAllAsync(ct), stoppingToken);
 
             // Live sessions whose presenter vanished, overran or hit the cap end by themselves (see LiveSessionOptions).
             await RunSafely("session sweep", async ct =>

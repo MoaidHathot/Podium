@@ -313,6 +313,171 @@ public sealed class SyncHubTests(PodiumWebFactory app)
         Assert.Equal(4410, await WaitForCloseAsync(viewer));
     }
 
+    private static async Task<JsonDocument> ReceiveUntilAsync(WebSocket ws, string type, Func<JsonElement, bool> where, int maxMessages = 30)
+    {
+        var seen = new List<string>();
+        for (var i = 0; i < maxMessages; i++)
+        {
+            var doc = await ReceiveAsync(ws) ?? throw new Xunit.Sdk.XunitException($"socket closed or silent while waiting for '{type}'; seen: {string.Join(" || ", seen)}");
+            seen.Add(doc.RootElement.GetRawText());
+            if (doc.RootElement.GetProperty("t").GetString() == type && where(doc.RootElement)) return doc;
+        }
+        throw new Xunit.Sdk.XunitException($"no matching '{type}' message within {maxMessages} messages; seen: {string.Join(" || ", seen)}");
+    }
+
+    private static async Task<bool> SilenceOfAsync(WebSocket ws, string type, TimeSpan window)
+    {
+        var until = DateTime.UtcNow + window;
+        while (DateTime.UtcNow < until)
+        {
+            var doc = await ReceiveAsync(ws, until - DateTime.UtcNow);
+            if (doc is null) return true;
+            if (doc.RootElement.GetProperty("t").GetString() == type) return false;
+        }
+        return true;
+    }
+
+    [Fact]
+    public async Task Room_reacts_asks_upvotes_and_votes_only_while_live_within_limits_and_it_all_lands_in_the_recap()
+    {
+        var deck = await app.SeedDeckAsync("audience-deck", Visibility.Public);
+        var owner = await OwnerCookieAsync();
+        var api = await app.OwnerClientAsync();
+        using var presenter = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(presenter, "hello");
+        await SendAsync(presenter, new { t = "hi", role = "presenter" });
+        await SendAsync(presenter, new { t = "info", page = 4, total = 9, clicks = 0, clicksTotal = 0, role = "presenter" });
+        using var alice = await ConnectAsync(deck.Slug, null);
+        await ReceiveUntilAsync(alice, "hello");
+        await SendAsync(alice, new { t = "hi", cid = "alice-browser-0001" });
+
+        // Nothing is live: input is dropped silently, nobody hears about it.
+        await SendAsync(alice, new { t = "react", kind = "clap" });
+        await SendAsync(alice, new { t = "question", text = "Is this thing on?" });
+        Assert.True(await SilenceOfAsync(presenter, "reactions", TimeSpan.FromMilliseconds(1200)));
+
+        var started = await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/sessions", new { plannedMinutes = 30, holdDeploys = false, freeze = false });
+        Assert.Equal(System.Net.HttpStatusCode.OK, started.StatusCode);
+        var state = await ReceiveUntilAsync(alice, "audience");
+        Assert.True(state.RootElement.GetProperty("live").GetBoolean());
+        Assert.True(state.RootElement.GetProperty("settings").GetProperty("reactions").GetBoolean());
+        Assert.True(state.RootElement.GetProperty("settings").GetProperty("floatReactions").GetBoolean());
+
+        // Reactions are aggregated into bursts; unknown kinds are dropped.
+        await SendAsync(alice, new { t = "react", kind = "clap" });
+        await SendAsync(alice, new { t = "react", kind = "clap" });
+        await SendAsync(alice, new { t = "react", kind = "bomb" });
+        var burst = await ReceiveUntilAsync(presenter, "reactions");
+        Assert.Equal(2, burst.RootElement.GetProperty("counts").GetProperty("clap").GetInt32());
+        Assert.Equal(2, burst.RootElement.GetProperty("totals").GetProperty("clap").GetInt32());
+
+        // A question (with a nick) reaches everyone, tagged with the presenter's slide; a second one inside the
+        // cooldown and a too-short one are dropped.
+        await SendAsync(alice, new { t = "question", text = "  How does  the laser\twork? ", nick = "Alice" });
+        var questions = await ReceiveUntilAsync(presenter, "questions");
+        var item = questions.RootElement.GetProperty("items").EnumerateArray().Single();
+        Assert.Equal("How does the laser work?", item.GetProperty("text").GetString());
+        Assert.Equal("Alice", item.GetProperty("nick").GetString());
+        Assert.Equal(4, item.GetProperty("slide").GetInt32());
+        Assert.Equal(1, item.GetProperty("upvotes").GetInt32());
+        var questionId = item.GetProperty("id").GetString()!;
+        await SendAsync(alice, new { t = "question", text = "Another one right away" });
+        await SendAsync(alice, new { t = "question", text = "x" });
+        Assert.True(await SilenceOfAsync(presenter, "questions", TimeSpan.FromMilliseconds(600)));
+
+        // Another viewer upvotes (toggle), without a client id nothing counts.
+        using var bob = await ConnectAsync(deck.Slug, null);
+        await ReceiveUntilAsync(bob, "hello");
+        var replay = await ReceiveUntilAsync(bob, "questions");
+        Assert.Equal(1, replay.RootElement.GetProperty("total").GetInt32());
+        await SendAsync(bob, new { t = "upvote", id = questionId });
+        Assert.True(await SilenceOfAsync(presenter, "questions", TimeSpan.FromMilliseconds(400)));
+        await SendAsync(bob, new { t = "hi", cid = "bob-browser-00000001" });
+        await SendAsync(bob, new { t = "upvote", id = questionId });
+        Assert.Equal(2, (await ReceiveUntilAsync(presenter, "questions")).RootElement.GetProperty("items")[0].GetProperty("upvotes").GetInt32());
+        await SendAsync(bob, new { t = "upvote", id = questionId });
+        Assert.Equal(1, (await ReceiveUntilAsync(presenter, "questions")).RootElement.GetProperty("items")[0].GetProperty("upvotes").GetInt32());
+
+        // Poll: the presenter creates it; viewers see options without counts until it is shown; one vote per client.
+        await SendAsync(presenter, new { t = "poll", op = "create", question = "Which editor?", options = new[] { "VS Code", "Neovim", "Other" } });
+        var pollForPresenter = await ReceiveUntilAsync(presenter, "poll");
+        var pollId = pollForPresenter.RootElement.GetProperty("poll").GetProperty("id").GetString()!;
+        Assert.Equal(0, pollForPresenter.RootElement.GetProperty("poll").GetProperty("total").GetInt32());
+        var pollForViewer = await ReceiveUntilAsync(alice, "poll");
+        Assert.Equal(JsonValueKind.Null, pollForViewer.RootElement.GetProperty("poll").GetProperty("options")[0].GetProperty("votes").ValueKind);
+        await SendAsync(alice, new { t = "vote", poll = pollId, option = 1 });
+        await SendAsync(alice, new { t = "vote", poll = pollId, option = 9 });
+        await SendAsync(bob, new { t = "vote", poll = pollId, option = 1 });
+        await SendAsync(bob, new { t = "vote", poll = pollId, option = 0 }); // changed mind: replaces, not adds
+        var tally = await ReceiveUntilAsync(presenter, "poll", p => p.GetProperty("poll").GetProperty("total").GetInt32() == 2 && p.GetProperty("poll").GetProperty("options")[0].GetProperty("votes").GetInt32() == 1);
+        Assert.Equal(1, tally.RootElement.GetProperty("poll").GetProperty("options")[1].GetProperty("votes").GetInt32());
+        await SendAsync(presenter, new { t = "poll", op = "show", id = pollId });
+        var shown = await ReceiveUntilAsync(alice, "poll", p => p.GetProperty("poll").GetProperty("shown").GetBoolean());
+        Assert.Equal(2, shown.RootElement.GetProperty("poll").GetProperty("total").GetInt32());
+
+        // Moderation: pin, answer.
+        await SendAsync(presenter, new { t = "question", op = "pin", id = questionId });
+        Assert.True((await ReceiveUntilAsync(alice, "questions", q => q.GetProperty("items")[0].GetProperty("pinned").GetBoolean())).RootElement.GetProperty("items")[0].GetProperty("pinned").GetBoolean());
+        await SendAsync(presenter, new { t = "question", op = "answer", id = questionId });
+        Assert.True((await ReceiveUntilAsync(alice, "questions", q => q.GetProperty("items")[0].GetProperty("answered").GetBoolean())).RootElement.GetProperty("items")[0].GetProperty("answered").GetBoolean());
+
+        // The live snapshot is available to the owner; ending writes it into the session recap.
+        var snapshot = await api.GetFromJsonAsync<JsonElement>($"/api/decks/{deck.Slug}/sessions/audience");
+        Assert.Equal(2, snapshot.GetProperty("reactions").GetProperty("clap").GetInt32());
+        await api.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+        var ended = await ReceiveUntilAsync(presenter, "session", s => !s.GetProperty("live").GetBoolean());
+        Assert.Equal(2, ended.RootElement.GetProperty("audience").GetProperty("reactions").GetInt32());
+        Assert.Equal(1, ended.RootElement.GetProperty("audience").GetProperty("questions").GetInt32());
+        Assert.Equal(1, ended.RootElement.GetProperty("audience").GetProperty("polls").GetInt32());
+        var list = await api.GetFromJsonAsync<JsonElement>($"/api/decks/{deck.Slug}/sessions");
+        var recap = list.EnumerateArray().First().GetProperty("audienceRecap");
+        Assert.Equal(2, recap.GetProperty("reactions").GetProperty("clap").GetInt32());
+        Assert.Equal("How does the laser work?", recap.GetProperty("questions")[0].GetProperty("text").GetString());
+        Assert.True(recap.GetProperty("questions")[0].GetProperty("answered").GetBoolean());
+        Assert.Equal(2, recap.GetProperty("polls")[0].GetProperty("totalVotes").GetInt32());
+        // After the end the room is deaf again.
+        Assert.False((await ReceiveUntilAsync(alice, "audience", a => !a.GetProperty("live").GetBoolean())).RootElement.GetProperty("live").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Audience_features_follow_the_deck_settings_and_the_room_can_be_muted()
+    {
+        var deck = await app.SeedDeckAsync("audience-off-deck", Visibility.Public);
+        var owner = await OwnerCookieAsync();
+        var api = await app.OwnerClientAsync();
+        Assert.Equal(System.Net.HttpStatusCode.OK, (await api.PatchAsync($"/api/decks/{deck.Slug}", JsonContent.Create(new { audience = new { reactions = false, questions = true, polls = true, floatReactions = false, nicknames = false } }))).StatusCode);
+        using var presenter = await ConnectAsync(deck.Slug, owner);
+        await ReceiveUntilAsync(presenter, "hello");
+        using var viewer = await ConnectAsync(deck.Slug, null);
+        await ReceiveUntilAsync(viewer, "hello");
+        await SendAsync(viewer, new { t = "hi", cid = "viewer-browser-0001" });
+        await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/sessions", new { plannedMinutes = 10, holdDeploys = false, freeze = false });
+        var state = await ReceiveUntilAsync(viewer, "audience");
+        Assert.False(state.RootElement.GetProperty("settings").GetProperty("reactions").GetBoolean());
+        Assert.False(state.RootElement.GetProperty("settings").GetProperty("nicknames").GetBoolean());
+
+        await SendAsync(viewer, new { t = "react", kind = "clap" });
+        Assert.True(await SilenceOfAsync(presenter, "reactions", TimeSpan.FromMilliseconds(1200)));
+        // Nicknames are off: the question arrives anonymous.
+        await SendAsync(viewer, new { t = "question", text = "Anonymous enough?", nick = "Eve" });
+        var q = await ReceiveUntilAsync(presenter, "questions");
+        Assert.Equal(JsonValueKind.Null, q.RootElement.GetProperty("items")[0].GetProperty("nick").ValueKind);
+
+        // Muting the room drops everything until unmuted; the room is told.
+        Assert.Equal(System.Net.HttpStatusCode.OK, (await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/sessions/audience", new { muted = true })).StatusCode);
+        Assert.True((await ReceiveUntilAsync(viewer, "audience", a => a.GetProperty("muted").GetBoolean())).RootElement.GetProperty("muted").GetBoolean());
+        using var other = await ConnectAsync(deck.Slug, null);
+        await ReceiveUntilAsync(other, "hello");
+        await SendAsync(other, new { t = "hi", cid = "other-browser-0001" });
+        await SendAsync(other, new { t = "question", text = "Can anyone hear me?" });
+        Assert.True(await SilenceOfAsync(presenter, "questions", TimeSpan.FromMilliseconds(600)));
+        await api.PostAsJsonAsync($"/api/decks/{deck.Slug}/sessions/audience", new { muted = false, settings = new { reactions = true, questions = true, polls = true, floatReactions = true, nicknames = true } });
+        await ReceiveUntilAsync(viewer, "audience", a => !a.GetProperty("muted").GetBoolean() && a.GetProperty("settings").GetProperty("reactions").GetBoolean());
+        await SendAsync(other, new { t = "react", kind = "heart" });
+        Assert.Equal(1, (await ReceiveUntilAsync(presenter, "reactions")).RootElement.GetProperty("counts").GetProperty("heart").GetInt32());
+        await api.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null);
+    }
+
     private static async Task<int> WaitForCloseAsync(WebSocket ws)
     {
         var buffer = new byte[4096];

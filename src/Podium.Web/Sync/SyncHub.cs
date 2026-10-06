@@ -29,14 +29,14 @@ namespace Podium.Web.Sync;
 /// are disconnected with close code 4410. Cached presenter state is dropped when the last presenter leaves, so a
 /// viewer opening the deck the next day is not teleported to where yesterday's talk ended.
 /// </summary>
-public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> options)
+public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> options, AudienceService audience)
 {
     private const int MaxMessageBytes = 256 * 1024;
     private const int MaxSocketsPerRoom = 200;
     /// <summary>Messages a single presenting socket may send per second (presenter cursor sharing is the chattiest legitimate source).</summary>
     private const int MaxMessagesPerSecond = 40;
-    /// <summary>Messages a viewer socket may send per second (handshake only in v3; audience features come with their own caps).</summary>
-    private const int MaxViewerMessagesPerSecond = 5;
+    /// <summary>Messages a viewer socket may send per second (handshake, reactions, questions, votes; each has its own tighter cap in the audience service).</summary>
+    private const int MaxViewerMessagesPerSecond = 10;
     /// <summary>Close code sent to sockets whose admission died with the live session (or a revoked link).</summary>
     public const int CloseSessionEnded = 4410;
     private const string InfoKey = "\u0000info";
@@ -57,6 +57,8 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
         public readonly ConcurrentDictionary<string, string> LastState = new(StringComparer.Ordinal);
         public string? Screen;
         public volatile Session? Session;
+        /// <summary>Last slide a presenting window reported (questions and polls are tagged with it).</summary>
+        public volatile int CurrentPage;
         public int Presenters => Sockets.Values.Count(c => c.CanSend);
         public int Viewers => Sockets.Values.Count(c => !c.CanSend);
         public int Windows => Sockets.Values.Count(c => c.CanSend && !c.IsRemote);
@@ -100,10 +102,11 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
     public async Task HandleAsync(HttpContext http, string slug, Caller caller, bool canPresent, CancellationToken ct, string? linkId = null)
     {
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
+        var clientAddress = http.Connection.RemoteIpAddress?.ToString();
         var created = false;
         var room = _rooms.GetOrAdd(slug, _ => { created = true; return new Room(); });
         if (created && ResolveLiveSession is { } resolve)
-            await Safe(async () => room.Session = await resolve(slug));
+            await Safe(async () => { room.Session = await resolve(slug); if (room.Session is { EndedAt: null } s) audience.Attach(slug, s); });
         if (room.Sockets.Count >= MaxSocketsPerRoom)
         {
             await socket.CloseAsync((WebSocketCloseStatus)4429, "room full", ct);
@@ -122,7 +125,14 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
             foreach (var (_, payload) in room.LastState)
                 await SendAsync(conn, payload, ct);
             if (room.Screen is { } screen) await SendAsync(conn, screen, ct);
-            if (room.Session is { EndedAt: null } live) await SendAsync(conn, SessionPayload(live, canPresent, replay: true), ct);
+            if (room.Session is { EndedAt: null } live)
+            {
+                await SendAsync(conn, SessionPayload(live, canPresent, replay: true), ct);
+                await SendAsync(conn, audience.StatePayload(live), ct);
+                var (questions, poll) = audience.ReplayPayloads(slug, canPresent);
+                if (questions is not null) await SendAsync(conn, questions, ct);
+                if (poll is not null) await SendAsync(conn, poll, ct);
+            }
             await BroadcastPresenceAsync(room, slug, ct);
 
             var buffer = new byte[16 * 1024];
@@ -172,8 +182,11 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
                         case "state":
                             room.LastState[parsed.Channel!] = payload;
                             await BroadcastAsync(room, id, payload, ct);
-                            if (parsed.Page is { } sp && OnPresenterPosition is { } onPos)
-                                await Safe(() => onPos(slug, sp, parsed.Clicks ?? 0, DateTimeOffset.UtcNow));
+                            if (parsed.Page is { } sp)
+                            {
+                                room.CurrentPage = sp;
+                                if (OnPresenterPosition is { } onPos) await Safe(() => onPos(slug, sp, parsed.Clicks ?? 0, DateTimeOffset.UtcNow));
+                            }
                             break;
                         case "info":
                             // Current position reported by a presenting deck window; kept so a remote joining later knows where we are.
@@ -184,8 +197,11 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
                             }
                             room.LastState[InfoKey] = payload;
                             await BroadcastAsync(room, id, payload, ct);
-                            if (parsed.Page is { } ip && OnPresenterPosition is { } onPos2)
-                                await Safe(() => onPos2(slug, ip, parsed.Clicks ?? 0, DateTimeOffset.UtcNow));
+                            if (parsed.Page is { } ip)
+                            {
+                                room.CurrentPage = ip;
+                                if (OnPresenterPosition is { } onPos2) await Safe(() => onPos2(slug, ip, parsed.Clicks ?? 0, DateTimeOffset.UtcNow));
+                            }
                             break;
                         case "nav":
                         case "pointer":
@@ -202,6 +218,16 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
                             // whether their window should go dark (deck windows do, the presenter view and the remote do not).
                             room.Screen = parsed.Channel == "none" ? null : payload;
                             await BroadcastAsync(room, id, payload, ct);
+                            break;
+                        case "audience":
+                            // Room input (react / question / upvote / vote) or presenter moderation (question ops, polls);
+                            // the audience service validates, bounds and broadcasts. Drops are silent by design.
+                            await Safe(async () =>
+                            {
+                                using var doc = JsonDocument.Parse(payload);
+                                if (canPresent) await audience.HandlePresenterAsync(slug, room.Session, room.CurrentPage, doc.RootElement);
+                                else await audience.HandleViewerAsync(slug, room.Session, conn.ClientId, clientAddress, room.CurrentPage, doc.RootElement);
+                            });
                             break;
                     }
                 }
@@ -245,13 +271,28 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
     /// </summary>
     public async Task NotifySessionAsync(Session session, CancellationToken ct = default)
     {
+        AudienceRecap? audienceRecap = null;
+        if (session.EndedAt is null) audience.Attach(session.DeckSlug, session);
+        else audienceRecap = await audience.FinalizeAsync(session, ct);
         if (!_rooms.TryGetValue(session.DeckSlug, out var room)) return;
         room.Session = session.EndedAt is null ? session : null;
-        var presenterPayload = SessionPayload(session, true);
+        var presenterPayload = SessionPayload(session, true, audienceRecap: audienceRecap);
         var viewerPayload = SessionPayload(session, false);
+        var audiencePayload = audience.StatePayload(room.Session);
         await Task.WhenAll(room.Sockets.Select(kv => SendSafeAsync(room, kv.Key, kv.Value, kv.Value.CanSend ? presenterPayload : viewerPayload, ct)));
+        await BroadcastAsync(room, Guid.Empty, audiencePayload, ct);
         if (session.EndedAt is not null && session.LinkId is not null)
             await CloseLinkAsync(session.DeckSlug, session.LinkId, ct);
+    }
+
+    /// <summary>Delivery for the audience service: a payload to everyone, to presenters or to viewers of a room.</summary>
+    public Task SendToAsync(string slug, AudienceTarget target, string payload, CancellationToken ct = default)
+    {
+        if (!_rooms.TryGetValue(slug, out var room)) return Task.CompletedTask;
+        var sends = room.Sockets
+            .Where(kv => target switch { AudienceTarget.Presenters => kv.Value.CanSend, AudienceTarget.Viewers => !kv.Value.CanSend, _ => true })
+            .Select(kv => SendSafeAsync(room, kv.Key, kv.Value, payload, ct)).ToList();
+        return sends.Count == 0 ? Task.CompletedTask : Task.WhenAll(sends);
     }
 
     /// <summary>Disconnects every viewer admitted through a share link (the link was revoked or its session ended).</summary>
@@ -281,7 +322,7 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
     public IReadOnlyList<string> RoomsWithPresenters() => _rooms.Where(kv => kv.Value.Presenters > 0).Select(kv => kv.Key).ToList();
 
     /// <param name="replay">True when sent to a newcomer about a session that was already running (no "started" toast).</param>
-    private string SessionPayload(Session s, bool forPresenter, bool replay = false)
+    private string SessionPayload(Session s, bool forPresenter, bool replay = false, AudienceRecap? audienceRecap = null)
     {
         var live = s.EndedAt is null;
         if (!forPresenter) return JsonSerializer.Serialize(new { t = "session", live, replay });
@@ -297,18 +338,22 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
                 plannedMinutes = s.PlannedMinutes,
                 holdDeploys = s.HoldDeploys,
                 title = s.Title,
+                rehearsal = s.Rehearsal,
                 joinCode = s.JoinCode is null ? null : SessionService.FormatJoinCode(s.JoinCode),
                 joinUrl = s.JoinCode is null ? null : SessionService.JoinUrl(options.Value.PublicBaseUrl, s.JoinCode),
                 serverTime = DateTimeOffset.UtcNow,
             });
         }
+        var a = audienceRecap ?? s.AudienceRecap;
         return JsonSerializer.Serialize(new
         {
             t = "session",
             live,
             id = s.Id,
             reason = s.EndReason,
+            rehearsal = s.Rehearsal,
             recap = s.Recap is null ? null : new { durationSeconds = s.Recap.DurationSeconds, peakViewers = s.Recap.PeakViewers, slidesVisited = s.Recap.SlidesVisited },
+            audience = a is null ? null : new { reactions = a.ReactionTotal, questions = a.Questions.Count, polls = a.Polls.Count },
         });
     }
 
@@ -378,7 +423,9 @@ public sealed class SyncHub(ILogger<SyncHub> log, IOptions<PodiumOptions> option
                 }
                 return new("hi", null, Role: role, ClientId: cid);
             }
-            if (!canPresent) return default;
+            // Room input is the only other thing a viewer may send; shapes and limits are checked by the audience service.
+            if (!canPresent) return kind is "react" or "question" or "upvote" or "vote" ? new("audience", null) : default;
+            if (kind is "poll" || (kind is "question" && root.TryGetProperty("op", out _))) return new("audience", null);
             switch (kind)
             {
                 case "state":

@@ -82,7 +82,7 @@ public sealed class SessionService(
 {
     private readonly ConcurrentDictionary<string, SessionRecorders.Recorder> _recorders = recorders.Recorders;
 
-    public async Task<(Session? Session, string? Error)> StartAsync(string slug, int? plannedMinutes, bool holdDeploys, bool freeze, string? title, CancellationToken ct = default)
+    public async Task<(Session? Session, string? Error)> StartAsync(string slug, int? plannedMinutes, bool holdDeploys, bool freeze, string? title, CancellationToken ct = default, AudienceSettings? audience = null, bool rehearsal = false)
     {
         var deck = await decks.GetAsync(slug, ct);
         if (deck is null || deck.Archived) return (null, "Deck not found");
@@ -125,6 +125,8 @@ public sealed class SessionService(
             FrozeDeck = froze,
             Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim()[..Math.Min(120, title.Trim().Length)],
             LastPresenterSeenAt = DateTimeOffset.UtcNow,
+            Audience = audience ?? deck.Audience,
+            Rehearsal = rehearsal,
         };
         await sessions.UpsertAsync(session, ct);
         var latest = await decks.GetAsync(slug, ct) ?? deck;
@@ -221,6 +223,17 @@ public sealed class SessionService(
         var s = await GetLiveAsync(slug, ct);
         if (s is null) return null;
         s = s with { PlannedMinutes = plannedMinutes };
+        await sessions.UpsertAsync(s, ct);
+        await NotifyAsync(s);
+        return s;
+    }
+
+    /// <summary>Mutes or unmutes the room and/or changes which audience features are offered, mid-session.</summary>
+    public async Task<Session?> UpdateAudienceAsync(string slug, bool? muted, AudienceSettings? settings, CancellationToken ct = default)
+    {
+        var s = await GetLiveAsync(slug, ct);
+        if (s is null) return null;
+        s = s with { AudienceMuted = muted ?? s.AudienceMuted, Audience = settings ?? s.Audience };
         await sessions.UpsertAsync(s, ct);
         await NotifyAsync(s);
         return s;

@@ -102,6 +102,7 @@ public sealed class DeckSyncService(
                 ExportPdf = config?.ExportPdf ?? prev?.ExportPdf ?? (c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf),
                 ExportPptx = config?.ExportPptx ?? prev?.ExportPptx ?? false,
                 StripNotesForViewers = config?.StripNotes ?? prev?.StripNotesForViewers ?? true,
+                Audience = config?.Audience ?? prev?.Audience ?? AudienceSettings.Default,
                 // Only declarative via .podium.yml (trusted repositories): a deck cannot grant itself scripts from the UI.
                 NpmScripts = source.Trusted && (config?.NpmScripts ?? prev?.NpmScripts ?? false),
                 LastCommitSha = last?.Sha ?? prev?.LastCommitSha ?? sha,

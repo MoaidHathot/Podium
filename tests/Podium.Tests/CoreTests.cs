@@ -132,6 +132,27 @@ public class DeckConfigTests
         Assert.False(cfg.StripNotes);
         Assert.Equal(Visibility.Public, cfg.Visibility);
         Assert.True(cfg.NpmScripts);
+        Assert.Null(cfg.Audience); // not mentioned: the deck keeps whatever it had
+    }
+
+    [Fact]
+    public void Audience_block_sets_features_with_defaults_and_false_switches_everything_off()
+    {
+        var partial = DeckConfig.Parse("""
+            title: T
+            audience:
+              reactions: no
+              float_reactions: off
+            """)!.Audience!;
+        Assert.False(partial.Reactions);
+        Assert.False(partial.FloatReactions);
+        Assert.True(partial.Questions);
+        Assert.True(partial.Polls);
+        Assert.True(partial.Nicknames);
+
+        var none = DeckConfig.Parse("audience: false")!.Audience!;
+        Assert.False(none.Any);
+        Assert.Null(DeckConfig.Parse("audience: true")!.Audience); // "true" says nothing new
     }
 
     [Fact]
