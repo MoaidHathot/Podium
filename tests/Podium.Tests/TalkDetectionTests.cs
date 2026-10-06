@@ -138,9 +138,21 @@ public class TalkDetectionTests
 
         var bare = TalkFiles.ReadSubmission("---\nevent: Meetup\nstatus: weird\n---\n", "2024-06-05-meetup.md")!;
         Assert.Equal(new DateOnly(2024, 6, 5), bare.Date); // from the file name
+        Assert.Equal("day", bare.DatePrecision);
         Assert.Equal("submitted", bare.Status);
         Assert.Null(bare.Abstract);
-        Assert.Equal(new DateOnly(2023, 4, 1), TalkFiles.ReadSubmission("---\ndate: April 2023\n---\n", "x.md")!.Date);
+        Assert.Equal("Jun 5, 2024", bare.DateLabel());
+        Assert.Equal("Jun 2024", bare.DateLabel(compact: true));
+
+        // Historical records: a month or a bare year keep their precision and render without an invented day.
+        var month = TalkFiles.ReadSubmission("---\ndate: April 2023\n---\n", "x.md")!;
+        Assert.Equal((new DateOnly(2023, 4, 1), "month", "Apr 2023"), (month.Date, month.DatePrecision, month.DateLabel()));
+        var dashed = TalkFiles.ReadSubmission("---\ndate: 2017-09\n---\n", "x.md")!;
+        Assert.Equal((new DateOnly(2017, 9, 1), "month"), (dashed.Date, dashed.DatePrecision));
+        var year = TalkFiles.ReadSubmission("---\ndate: 2019\n---\n", "x.md")!;
+        Assert.Equal((new DateOnly(2019, 1, 1), "year", "2019"), (year.Date, year.DatePrecision, year.DateLabel(compact: true)));
+        Assert.Null(TalkFiles.ReadSubmission("---\ndate: soon\n---\n", "x.md")!.Date);
+        Assert.Null(TalkFiles.ReadSubmission("---\ndate: 1066\n---\n", "x.md")!.Date);
     }
 
     [Fact]
@@ -187,7 +199,7 @@ public class TalkDetectionTests
         repo.Tree.AddRange([
             $"{home}/slides.md", $"{home}/slides.ndc.md", $"{home}/abstract.md", $"{home}/submissions/2025-11-18-dotnet-conf-il.md", $"{home}/submissions/2026-03-10-ndc-oslo.md",
             "meetups/agents-lightning/config.yaml", "meetups/agents-lightning/2025_07_30.md", "meetups/agents-lightning/2025_11_18.md", "meetups/agents-lightning/.podium.yml",
-            "talks/debugging-jedi/abstract.md", "talks/debugging-jedi/submissions/2017-09-21-dotnet-summit-minsk.md", "talks/debugging-jedi/jedi.pdf",
+            "talks/debugging-jedi/abstract.md", "talks/debugging-jedi/submissions/2017-09-21-dotnet-summit-minsk.md", "talks/debugging-jedi/jedi.pdf", "talks/debugging-jedi/.podium.yml",
             "speaker.md", "other/orphan/slides.md",
         ]);
         repo.Files[$"{home}/slides.md"] = "---\ntitle: 75 agents\n---\n";
@@ -198,7 +210,8 @@ public class TalkDetectionTests
         repo.Files["meetups/agents-lightning/2025_07_30.md"] = "---\ntitle: Agents in 10 minutes\n---\n";
         repo.Files["meetups/agents-lightning/2025_11_18.md"] = "---\ntitle: Agents in 10 minutes (v2)\n---\n";
         repo.Files["meetups/agents-lightning/.podium.yml"] = "talk: agents\n";
-        repo.Files["talks/debugging-jedi/abstract.md"] = "---\ntitle: How to become a .NET debugging Jedi\nstatus: retired\n---\nJedi abstract.";
+        repo.Files["talks/debugging-jedi/abstract.md"] = "---\ntitle: How to become a .NET debugging Jedi\nstatus: retired\ntags: [debugging, dotnet]\n---\nJedi abstract.";
+        repo.Files["talks/debugging-jedi/.podium.yml"] = "title: Folder title\nalias: jedi-alias\nvisibility: link\n";
         repo.Files["talks/debugging-jedi/submissions/2017-09-21-dotnet-summit-minsk.md"] = "---\nevent: .NET Summit\nstatus: delivered\ndeck: jedi.pdf\n---\n";
         repo.Files["speaker.md"] = "---\nname: Moaid\n---\nBio.";
         repo.Files["other/orphan/slides.md"] = "---\ntitle: Orphan\n---\n";
@@ -235,7 +248,12 @@ public class TalkDetectionTests
         Assert.Equal("retired", jedi.Status);
         Assert.Equal(["slides-jedi"], jedi.DeckSlugs);
         Assert.Equal("slides-jedi", jedi.Submissions[0].DeckSlug);
-        Assert.Equal("slides-debugging-jedi", all.Single(d => d.Slug == "slides-jedi").TalkId);
+        var jediPdf = all.Single(d => d.Slug == "slides-jedi");
+        Assert.Equal("slides-debugging-jedi", jediPdf.TalkId);
+        Assert.Equal(["debugging", "dotnet"], jediPdf.Tags);            // a file deck without tags of its own carries its talk's tags
+        Assert.Equal(Visibility.Link, jediPdf.Visibility);               // folder .podium.yml applies to file decks too (seeded once)
+        Assert.Equal("jedi", jediPdf.Title);                             // ...but the folder title does not rename a file deck
+        Assert.Null(jediPdf.Alias);
         Assert.Equal("Moaid", (await talks.GetSpeakerAsync(source.Id))!.Name);
 
         // A live session Podium linked to a submission survives a re-sync that edits the submission file.

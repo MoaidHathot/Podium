@@ -190,18 +190,25 @@ async function checkout(repoDir) {
 
   // Fetch exactly the requested commit; the credential lives only on this command line, never in .git/config.
   // A transfer that stalls below 1 KB/s for 45 s is aborted and retried once rather than hanging until the build timeout.
-  // Decks in a sub-folder use a partial clone (no blobs) plus a cone sparse-checkout of that folder, so the download is
-  // the deck and the files on its parent path, not every PowerPoint in the repository; the lazy blob fetch during
-  // checkout reuses the same one-shot credential (git -c propagates to its child processes).
-  const sparse = deckPath.length > 0;
+  // Decks in a sub-folder use a partial clone (no blobs) plus a sparse checkout, so the download is the deck rather
+  // than every file in the repository: a cone of the deck folder for Slidev/presenterm/static decks (they may import
+  // siblings), just the file itself (plus a same-named PDF export) for PowerPoint/PDF decks, whose folder may hold
+  // dozens of other presentations. The lazy blob fetch during checkout reuses the same one-shot credential.
+  const fileDeck = kind === 'powerpoint' || kind === 'pdf';
+  const sparse = deckPath.length > 0 || fileDeck;
   const gitTransfer = [...gitAuth, '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=45', '-c', 'credential.helper='];
   const fetchArgs = [...gitTransfer, 'fetch', '-q', '--depth', '1', ...(sparse ? ['--filter=blob:none'] : []), 'origin', sha];
+  const filePrefix = deckPath ? `/${deckPath}/` : '/';
+  const sidecarPdf = `${filePrefix}${entry.replace(/\.[^.]+$/, '')}.pdf`;
+  const sparseArgs = fileDeck
+    ? ['sparse-checkout', 'set', '--no-cone', `${filePrefix}${entry}`, ...(sidecarPdf !== `${filePrefix}${entry}` ? [sidecarPdf] : [])]
+    : ['sparse-checkout', 'set', '--cone', deckPath];
   for (let attempt = 1; ; attempt++) {
     // A killed fetch leaves lock files behind (shallow.lock, FETCH_HEAD.lock): every attempt starts from a fresh repo.
     if (attempt > 1) { rmSync(repoDir, { recursive: true, force: true }); mkdirForDeck(repoDir); }
     await run('git', ['init', '-q'], { cwd: repoDir, echo: attempt === 1 });
     await run('git', ['remote', 'add', 'origin', cleanUrl], { cwd: repoDir, echo: attempt === 1 });
-    if (sparse) await run('git', ['sparse-checkout', 'set', '--cone', deckPath], { cwd: repoDir, echo: attempt === 1 });
+    if (sparse) await run('git', sparseArgs, { cwd: repoDir, echo: attempt === 1 });
     log(`$ git fetch --depth 1${sparse ? ' --filter=blob:none' : ''} origin ${sha.slice(0, 7)}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
     const r = await run('git', fetchArgs, { cwd: repoDir, echo: false, allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { GCM_INTERACTIVE: 'never' } });
     if (r.code !== 0) { if (attempt >= 2) throw new Error(`git fetch failed (exit ${r.code})`); continue; }

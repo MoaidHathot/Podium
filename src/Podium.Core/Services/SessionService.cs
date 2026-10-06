@@ -183,7 +183,7 @@ public sealed class SessionService(
             if (talk is null || talk.Archived) return null;
             var day = DateOnly.FromDateTime(session.StartedAt.UtcDateTime);
             var match = talk.Submissions
-                .Where(s => s.Date is { } d && Math.Abs(d.DayNumber - day.DayNumber) <= 1)
+                .Where(s => s.Date is { } d && s.DatePrecision == "day" && Math.Abs(d.DayNumber - day.DayNumber) <= 1)
                 .Where(s => s.Status is "accepted" or "submitted" or "delivered")
                 .Where(s => s.SessionId is null || s.SessionId == session.Id)
                 .Where(s => s.DeckSlug is null || s.DeckSlug == deck.Slug)

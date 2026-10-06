@@ -152,8 +152,8 @@ else
                     <div class="card-tags">@foreach (var tag in t.Tags.Take(6)) { <a class="tag" href="/talks?tag=@Uri.EscapeDataString(tag)">#@tag</a> }</div>
                 }
                 <div class="talk-foot">
-                    @if (v.NextUp is { } next) { <span class="chip chip-soft" title="@SubStatus(next.Status)">Next: @next.Event@(next.Date is { } nd ? $" · {nd:MMM d, yyyy}" : "")</span> }
-                    else if (v.LastDelivered is { } last) { <span class="chip chip-soft">Last: @last.Event@(last.Date is { } ld ? $" · {ld:MMM yyyy}" : "")</span> }
+                    @if (v.NextUp is { } next) { <span class="chip chip-soft" title="@SubStatus(next.Status)">Next: @next.Event@(next.DateLabel() is { } nd ? $" · {nd}" : "")</span> }
+                    else if (v.LastDelivered is { } last) { <span class="chip chip-soft">Last: @last.Event@(last.DateLabel(compact: true) is { } ld ? $" · {ld}" : "")</span> }
                     <span class="row" style="margin-left:auto; gap:.4rem">
                         <a class="btn btn-sm btn-primary" href="/talks/@t.Id">Open</a>
                         @if (v.MainDeck is { CurrentBuildId: not null } md) { <a class="btn btn-sm" href="/d/@md.Slug/" target="_blank" rel="noopener">@(Model.IsOwner ? "Present" : "Slides")</a> }

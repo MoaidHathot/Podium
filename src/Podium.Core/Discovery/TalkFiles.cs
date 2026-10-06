@@ -110,11 +110,13 @@ public static partial class TalkFiles
         var key = fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? fileName[..^3] : fileName;
         var status = Str(fm, "status")?.Trim().ToLowerInvariant();
         var format = Str(fm, "format")?.Trim().ToLowerInvariant();
+        var when = Date(fm, "date") ?? (DeckDetector.DateOf(fileName) is { } fromName ? (fromName, "day") : null);
         return new Submission
         {
             Key = key,
             Event = Truncate(Str(fm, "event")?.Trim(), 200) ?? "",
-            Date = Date(fm, "date") ?? DeckDetector.DateOf(fileName),
+            Date = when?.Date,
+            DatePrecision = when?.Precision ?? "day",
             Status = status is not null && SubmissionStatuses.Contains(status) ? status : "submitted",
             Format = format is not null && Formats.Contains(format) ? format : "talk",
             Duration = Ints(fm, "duration").FirstOrDefault(d => d is > 0 and <= 600) is { } d and > 0 ? d : null,
@@ -181,13 +183,15 @@ public static partial class TalkFiles
         };
     }
     private static IEnumerable<int> Ints(YamlMappingNode map, string key) => Strings(map, key).Select(s => int.TryParse(s.Trim().TrimEnd('m').Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) ? i : -1).Where(i => i > 0);
-    private static DateOnly? Date(YamlMappingNode map, string key)
+    /// <summary>A date with the precision it was written at: a full date, a month (2017-09, September 2017) or a bare year (2019).</summary>
+    private static (DateOnly Date, string Precision)? Date(YamlMappingNode map, string key)
     {
         var v = Str(map, key)?.Trim();
         if (string.IsNullOrEmpty(v)) return null;
-        if (DateOnly.TryParseExact(v, ["yyyy-MM-dd", "yyyy/MM/dd", "yyyy.MM.dd", "yyyy_MM_dd"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)) return d;
-        if (DateTimeOffset.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dt)) return DateOnly.FromDateTime(dt.UtcDateTime);
-        if (DateOnly.TryParseExact(v, ["yyyy-MM", "yyyy/MM", "MMMM yyyy", "MMM yyyy"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var month)) return month;
+        if (DateOnly.TryParseExact(v, ["yyyy-MM-dd", "yyyy/MM/dd", "yyyy.MM.dd", "yyyy_MM_dd"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)) return (d, "day");
+        if (DateOnly.TryParseExact(v, ["yyyy-MM", "yyyy/MM", "MMMM yyyy", "MMM yyyy"], CultureInfo.InvariantCulture, DateTimeStyles.None, out var month)) return (month, "month");
+        if (v.Length == 4 && int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out var year) && year is >= 1900 and <= 2200) return (new DateOnly(year, 1, 1), "year");
+        if (DateTimeOffset.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dt)) return (DateOnly.FromDateTime(dt.UtcDateTime), "day");
         return null;
     }
     private static string? Url(string? v)

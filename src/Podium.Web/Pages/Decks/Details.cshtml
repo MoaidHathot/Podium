@@ -145,7 +145,7 @@
         @if (usedHere.Count > 0)
         {
             <div class="faint" style="margin-top:.8rem; font-size:.9rem">Given with this deck:
-                @foreach (var s in usedHere.Take(5)) { <span class="chip chip-soft" style="margin:.15rem .2rem 0 0">@s.Event@(s.Date is { } sd ? $" · {sd:MMM yyyy}" : "")</span> }
+                @foreach (var s in usedHere.Take(5)) { <span class="chip chip-soft" style="margin:.15rem .2rem 0 0">@s.Event@(s.DateLabel(compact: true) is { } sd ? $" · {sd}" : "")</span> }
                 @if (usedHere.Count > 5) { <a href="/talks/@talk.Id#events">+@(usedHere.Count - 5) more</a> }
             </div>
         }

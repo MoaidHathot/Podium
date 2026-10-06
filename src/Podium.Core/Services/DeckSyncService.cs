@@ -107,12 +107,15 @@ public sealed class DeckSyncService(
             var last = touched ? await repos.LastCommitForPathAsync(source, sha, fileBased ? c.EntryPath : c.Path, ct) : null;
 
             configs.TryGetValue(c.Path, out var config);
-            // Folder-level settings apply to every deck in the folder; the title and alias name the folder's main deck only.
-            var folderConfig = fileBased ? null : config;
-            var titleConfig = c.Variant is null ? folderConfig?.Title : null;
+            // Folder-level settings apply to every deck in the folder, PowerPoint and PDF files included; the title and
+            // alias name the folder's main source deck only (a folder of files has no single main deck).
+            var folderConfig = config;
+            var titleConfig = c.Variant is null && !fileBased ? folderConfig?.Title : null;
             var talkId = talkDrafts.TryGetValue(c.Path, out var homeTalk) ? homeTalk.Id
                 : config?.Talk is { } joined && talkIdByLocal.TryGetValue(joined, out var joinedId) ? joinedId
                 : config?.Talk is { } unknownTalk ? LogUnknownTalk(unknownTalk, c.Path) : (touched ? null : prev?.TalkId);
+            // A member deck without tags of its own carries its talk's tags, so the library filters find every variant.
+            var talkTags = homeTalk is { Tags.Count: > 0 } ? homeTalk.Tags : null;
             var variantTitle = c.Variant is not null && mainTitles.TryGetValue(c.Path, out var mt) ? $"{mt} ({c.Variant})" : null;
 
             var deck = (prev ?? new Deck
@@ -134,7 +137,7 @@ public sealed class DeckSyncService(
                 Title = titleConfig ?? metadata?.Title ?? prev?.Title ?? variantTitle ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
                 Author = metadata?.Author ?? prev?.Author,
                 Description = metadata?.Description ?? prev?.Description,
-                Tags = folderConfig?.Tags ?? metadata?.Tags ?? prev?.Tags ?? [],
+                Tags = folderConfig?.Tags ?? metadata?.Tags ?? (prev?.Tags is { Count: > 0 } ownTags ? ownTags : null) ?? talkTags ?? prev?.Tags ?? [],
                 ExportPdf = folderConfig?.ExportPdf ?? prev?.ExportPdf ?? (c.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf),
                 ExportPptx = folderConfig?.ExportPptx ?? prev?.ExportPptx ?? false,
                 StripNotesForViewers = folderConfig?.StripNotes ?? prev?.StripNotesForViewers ?? true,
@@ -147,7 +150,7 @@ public sealed class DeckSyncService(
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             if (c.Variant is null && !fileBased) mainTitles[c.Path] = deck.Title;
-            if (c.Variant is null && folderConfig?.Alias is { } alias && alias != deck.Alias)
+            if (c.Variant is null && !fileBased && folderConfig?.Alias is { } alias && alias != deck.Alias)
             {
                 // A clash with any slug or another deck's alias is logged and skipped rather than hijacking a deck.
                 if (takenSlugs.Contains(alias)) log.LogWarning("Alias '{Alias}' for {Deck} is already in use; ignoring", alias, deck.Slug);

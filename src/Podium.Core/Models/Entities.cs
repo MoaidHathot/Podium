@@ -407,6 +407,8 @@ public sealed record Submission
     public required string Key { get; init; }
     public string Event { get; init; } = "";
     public DateOnly? Date { get; init; }
+    /// <summary>How precise <see cref="Date"/> is: day (default), month (<c>date: 2017-09</c>) or year (<c>date: 2019</c>) for historical records.</summary>
+    public string DatePrecision { get; init; } = "day";
     /// <summary>submitted | accepted | declined | delivered | cancelled.</summary>
     public string Status { get; init; } = "submitted";
     /// <summary>talk | workshop | lightning | keynote | panel | course | webinar.</summary>
@@ -433,6 +435,13 @@ public sealed record Submission
     public string EffectiveAbstract(Talk talk) => string.IsNullOrWhiteSpace(Abstract) ? talk.Abstract : Abstract!;
     public bool IsPublicFact => Status is "accepted" or "delivered";
     public TalkPart? Part(string name) { var k = TalkPart.Normalize(name); return Parts.FirstOrDefault(p => p.Key == k); }
+    /// <summary>The date as precisely as it is known: "May 20, 2025", "Sep 2017" or "2019"; the compact form drops the day.</summary>
+    public string? DateLabel(bool compact = false) => Date is not { } d ? null : DatePrecision switch
+    {
+        "year" => d.ToString("yyyy", System.Globalization.CultureInfo.InvariantCulture),
+        "month" => d.ToString("MMM yyyy", System.Globalization.CultureInfo.InvariantCulture),
+        _ => d.ToString(compact ? "MMM yyyy" : "MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture),
+    };
 }
 
 /// <summary>The speaker, from <c>speaker.md</c> at the repository root: bio variants, photo, links.</summary>

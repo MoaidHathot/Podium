@@ -155,7 +155,7 @@
                     var deck = s.DeckSlug is not null ? decksBySlug.GetValueOrDefault(s.DeckSlug) : null;
                     Model.LinkedSessions.TryGetValue(s.SessionId ?? "", out var session);
                     <li class="tl-item tl-@s.Status">
-                        <div class="tl-when">@(s.Date is { } dt ? dt.ToString("MMM d, yyyy") : "date unknown")</div>
+                        <div class="tl-when">@(s.DateLabel() ?? "date unknown")</div>
                         <div class="tl-body">
                             <div class="row" style="gap:.4rem; flex-wrap:wrap; align-items:center">
                                 <strong>@s.Event</strong>
