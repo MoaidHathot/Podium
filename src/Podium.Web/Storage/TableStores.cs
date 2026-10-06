@@ -559,3 +559,45 @@ public sealed class TableSettingsStore(TableClients tables) : ISettingsStore
         await t.UpsertEntityAsync(new TableEntity("setting", TableJson.Key(key)) { ["Value"] = value }, TableUpdateMode.Replace, ct);
     }
 }
+
+public sealed class TableDeviceStore(TableClients tables) : IDeviceStore
+{
+    private const string Table = "devices";
+
+    public async Task<Device?> GetAsync(string principal, string sid, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try
+        {
+            var e = await t.GetEntityAsync<TableEntity>(TableJson.Key(principal), TableJson.Key(sid), cancellationToken: ct);
+            return TableJson.Deserialize<Device>(e.Value);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+    }
+
+    public async Task<IReadOnlyList<Device>> ListAsync(string principal, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        var pk = TableJson.Key(principal);
+        var list = new List<Device>();
+        await foreach (var e in t.QueryAsync<TableEntity>(x => x.PartitionKey == pk, cancellationToken: ct))
+        {
+            var d = TableJson.Deserialize<Device>(e);
+            if (d is not null) list.Add(d);
+        }
+        return list.OrderByDescending(d => d.LastSeenAt).ToList();
+    }
+
+    public async Task UpsertAsync(Device device, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        await t.UpsertEntityAsync(new TableEntity(TableJson.Key(device.Principal), TableJson.Key(device.Sid)) { ["Json"] = TableJson.Serialize(device), ["Revoked"] = device.Revoked }, TableUpdateMode.Replace, ct);
+    }
+
+    public async Task DeleteAsync(string principal, string sid, CancellationToken ct = default)
+    {
+        var t = await tables.GetAsync(Table, ct);
+        try { await t.DeleteEntityAsync(TableJson.Key(principal), TableJson.Key(sid), cancellationToken: ct); }
+        catch (RequestFailedException ex) when (ex.Status == 404) { }
+    }
+}

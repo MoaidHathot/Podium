@@ -19,6 +19,15 @@ namespace Podium.Web.Serving;
 /// </summary>
 public static class PresenterToolsEndpoints
 {
+    /// <summary>Process-wide ceiling on join-code resolutions: 2000 per minute on top of 300 per address.</summary>
+    private static readonly System.Threading.RateLimiting.SlidingWindowRateLimiter JoinCeiling = new(new System.Threading.RateLimiting.SlidingWindowRateLimiterOptions
+    {
+        PermitLimit = 2000,
+        Window = TimeSpan.FromMinutes(1),
+        SegmentsPerWindow = 6,
+        QueueLimit = 0,
+    });
+
     public static IEndpointRouteBuilder MapPresenterTools(this IEndpointRouteBuilder app)
     {
         // QR of the deck URL (same access rules as the deck). With ?join=1 and a live session, presenters get a QR of
@@ -72,11 +81,18 @@ public static class PresenterToolsEndpoints
         }).RequireAuthorization(PodiumClaims.OwnerPolicy);
 
         // The room types this: slides.example/j/ABC-123. Valid only while the session is live; afterwards (and for
-        // codes that never existed) the same "ended" page, so nothing is learned from a guess.
+        // codes that never existed) the same "ended" page, so nothing is learned from a guess. Besides the per-address
+        // limit, a process-wide ceiling keeps a distributed guessing attempt from turning into a code search.
         app.MapGet("/j/{code}", async (string code, HttpContext http, SessionService sessions, CancellationToken ct) =>
         {
-            var live = await sessions.FindLiveByJoinCodeAsync(code, ct);
             http.Response.Headers[HeaderNames.CacheControl] = "no-store";
+            using var lease = JoinCeiling.AttemptAcquire();
+            if (!lease.IsAcquired)
+            {
+                http.Response.Headers.RetryAfter = "30";
+                return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+            }
+            var live = await sessions.FindLiveByJoinCodeAsync(code, ct);
             if (live?.LinkId is null)
             {
                 http.Response.StatusCode = StatusCodes.Status404NotFound;

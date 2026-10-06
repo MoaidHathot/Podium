@@ -124,3 +124,13 @@ public sealed class InMemorySettingsStore : ISettingsStore
     public Task<string?> GetAsync(string key, CancellationToken ct = default) => Task.FromResult(_items.GetValueOrDefault(key));
     public Task SetAsync(string key, string value, CancellationToken ct = default) { _items[key] = value; return Task.CompletedTask; }
 }
+
+public sealed class InMemoryDeviceStore : IDeviceStore
+{
+    private readonly ConcurrentDictionary<(string, string), Device> _items = new();
+    public Task<Device?> GetAsync(string principal, string sid, CancellationToken ct = default) => Task.FromResult(_items.GetValueOrDefault((principal, sid)));
+    public Task<IReadOnlyList<Device>> ListAsync(string principal, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<Device>>(_items.Values.Where(d => d.Principal == principal).OrderByDescending(d => d.LastSeenAt).ToList());
+    public Task UpsertAsync(Device device, CancellationToken ct = default) { _items[(device.Principal, device.Sid)] = device; return Task.CompletedTask; }
+    public Task DeleteAsync(string principal, string sid, CancellationToken ct = default) { _items.TryRemove((principal, sid), out _); return Task.CompletedTask; }
+}

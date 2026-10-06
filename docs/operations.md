@@ -130,11 +130,28 @@ deploys immediately with the `force` input. Sessions end by themselves when no p
 minutes, 30 minutes past the planned length, or after 4 hours, so a forgotten session never blocks for long. Deck
 builds are never affected by the guard.
 
-## Audit trail and sessions
+## Audit trail, sessions and devices
 
 Every mutating owner API call is recorded (actor, action, target, bounded details with passcodes masked, IP) and
-shown per deck and on `/activity`; `GET /api/activity` returns the newest 100. *Sign out everywhere* (Sources page)
-bumps a security stamp that invalidates every session cookie issued before it.
+shown per deck and on `/activity`; `GET /api/activity` returns the newest 100. Every login records a **device**
+(browser/OS summary, address, signed in, last seen; table `devices`) and puts a random id in the cookie; the Sources
+page lists them and *Sign out device* refuses that cookie from its next request on (30 s cache). *Sign out everywhere*
+bumps a security stamp that invalidates every session cookie issued before it, including cookies from before device
+tracking existed.
+
+## Audience features
+
+While a session is live, people admitted through the join code can react (six emoji), ask questions (optional
+name, upvotes) and vote in polls the presenter starts from the phone remote. Per deck under *Share → Audience* (or
+`audience:` in `.podium.yml`; defaults: everything on, reactions float across the projector); per session the
+presenter can mute the room (`POST /api/decks/{slug}/sessions/audience`). `Podium:Audience:Enabled=false` switches it
+off globally. Server-side bounds: text ≤ 280 chars, names ≤ 24, reactions 1/s per client (burst 3) and 2000/min per
+room, one question per 20 s and at most 5 open per client, 50 questions/min and 200 per session per room, 20 client
+ids per address, one vote per client (changing is allowed), poll counts reach viewers only once shown. Everything is
+rendered as text, snapshotted into the session every minute and written into its recap at the end (also as CSV from
+the Analytics tab).
+
+Join codes are limited per address (300/min) and process-wide (2000/min, HTTP 429 with `Retry-After`).
 
 ## Backups and export
 

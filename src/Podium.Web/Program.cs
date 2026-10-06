@@ -46,6 +46,7 @@ if (string.Equals(storage.ConnectionString, "memory", StringComparison.OrdinalIg
     builder.Services.AddSingleton<IViewHistoryStore, InMemoryViewHistoryStore>();
     builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
     builder.Services.AddSingleton<IAccessRequestStore, InMemoryAccessRequestStore>();
+    builder.Services.AddSingleton<IDeviceStore, InMemoryDeviceStore>();
     builder.Services.AddSingleton<IAuditStore, InMemoryAuditStore>();
     builder.Services.AddSingleton<ISettingsStore, InMemorySettingsStore>();
     builder.Services.AddSingleton<IArtifactStore, LocalArtifactStore>();
@@ -73,6 +74,7 @@ else
     builder.Services.AddSingleton<IViewHistoryStore, TableViewHistoryStore>();
     builder.Services.AddSingleton<ISessionStore, TableSessionStore>();
     builder.Services.AddSingleton<IAccessRequestStore, TableAccessRequestStore>();
+    builder.Services.AddSingleton<IDeviceStore, TableDeviceStore>();
     builder.Services.AddSingleton<IAuditStore, TableAuditStore>();
     builder.Services.AddSingleton<ISettingsStore, TableSettingsStore>();
     builder.Services.AddSingleton<IArtifactStore, BlobArtifactStore>();
@@ -147,6 +149,7 @@ builder.Services.AddSingleton<ViewTokenService>();
 builder.Services.AddSingleton<DeckAccessService>();
 builder.Services.AddOptions<Podium.Web.Sync.AudienceOptions>().Bind(config.GetSection(Podium.Web.Sync.AudienceOptions.Section));
 builder.Services.AddSingleton<Podium.Web.Sync.AudienceService>();
+builder.Services.AddSingleton<Podium.Web.Security.DeviceService>();
 builder.Services.AddSingleton<Podium.Web.Sync.SyncHub>();
 
 // ----- Auth -----
@@ -180,6 +183,17 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
             return Task.CompletedTask;
         };
         // "Sign out everywhere": tickets issued before the security stamp are rejected and the cookie cleared.
+        // Per-device sign-out: every login records a device with a random sid in the ticket; a revoked device's
+        // tickets are rejected on their next request (30 s cache). Tickets without a sid predate device tracking.
+        o.Events.OnSigningIn = async ctx =>
+        {
+            var identity = (ClaimsIdentity)ctx.Principal!.Identity!;
+            if (identity.HasClaim(c => c.Type == Podium.Web.Security.DeviceService.SidClaim)) return;
+            var caller = ctx.HttpContext.RequestServices.GetRequiredService<CallerResolver>().Resolve(ctx.Principal);
+            if (caller.Principal is null) return;
+            var sid = await ctx.HttpContext.RequestServices.GetRequiredService<Podium.Web.Security.DeviceService>().RegisterAsync(caller.Principal, ctx.HttpContext, ctx.HttpContext.RequestAborted);
+            identity.AddClaim(new Claim(Podium.Web.Security.DeviceService.SidClaim, sid));
+        };
         o.Events.OnValidatePrincipal = async ctx =>
         {
             var stamp = ctx.HttpContext.RequestServices.GetRequiredService<SecurityStamp>();
@@ -187,7 +201,20 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
             {
                 ctx.RejectPrincipal();
                 await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                return;
             }
+            var sid = Podium.Web.Security.DeviceService.SidOf(ctx.Principal);
+            if (sid is null) return;
+            var caller = ctx.HttpContext.RequestServices.GetRequiredService<CallerResolver>().Resolve(ctx.Principal);
+            if (caller.Principal is null) return;
+            var devices = ctx.HttpContext.RequestServices.GetRequiredService<Podium.Web.Security.DeviceService>();
+            if (await devices.IsRevokedAsync(caller.Principal, sid, ctx.HttpContext.RequestAborted))
+            {
+                ctx.RejectPrincipal();
+                await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                return;
+            }
+            await devices.TouchAsync(caller.Principal, sid, ctx.HttpContext, ctx.HttpContext.RequestAborted);
         };
     });
 
@@ -339,6 +366,25 @@ app.MapPost("/api/security/sign-out-everywhere", async (HttpContext http, Securi
     await stamp.BumpAsync(ct);
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Ok(new { ok = true });
+}).RequireAuthorization(PodiumClaims.OwnerPolicy).AddEndpointFilter<Podium.Web.Api.RequestHeaderFilter>();
+
+// Signed-in devices of the owner: list, and sign out one of them (revoking the current one signs this browser out).
+app.MapGet("/api/security/devices", async (HttpContext http, CallerResolver callers, Podium.Web.Security.DeviceService devices, CancellationToken ct) =>
+{
+    var caller = callers.Resolve(http.User);
+    var current = Podium.Web.Security.DeviceService.SidOf(http.User);
+    var list = await devices.ListAsync(caller.Principal!, ct);
+    return Results.Ok(list.Where(d => !d.Revoked || (d.RevokedAt is { } r && r > DateTimeOffset.UtcNow.AddDays(-7))).Select(d => new { d.Sid, d.Client, d.Ip, d.CreatedAt, d.LastSeenAt, d.Revoked, d.RevokedAt, current = d.Sid == current }));
+}).RequireAuthorization(PodiumClaims.OwnerPolicy);
+app.MapPost("/api/security/devices/{sid}/revoke", async (string sid, HttpContext http, CallerResolver callers, Podium.Web.Security.DeviceService devices, AuditService audit, CancellationToken ct) =>
+{
+    if (sid.Length > 64 || !sid.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_')) return Results.BadRequest();
+    var caller = callers.Resolve(http.User);
+    if (!await devices.RevokeAsync(caller.Principal!, sid, ct)) return Results.NotFound();
+    await audit.RecordAsync(http, "security.device-revoke", sid);
+    var self = Podium.Web.Security.DeviceService.SidOf(http.User) == sid;
+    if (self) await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Ok(new { ok = true, signedOut = self });
 }).RequireAuthorization(PodiumClaims.OwnerPolicy).AddEndpointFilter<Podium.Web.Api.RequestHeaderFilter>();
 
 if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin"))

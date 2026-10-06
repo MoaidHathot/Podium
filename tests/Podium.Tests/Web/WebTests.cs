@@ -451,6 +451,49 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Equal(HttpStatusCode.Unauthorized, (await app.Client().GetAsync($"/api/decks/{deck.Slug}/sessions/{sessionId}/recap.csv")).StatusCode);
     }
 
+    [Fact]
+    public async Task Devices_are_recorded_at_login_and_can_be_signed_out_one_at_a_time()
+    {
+        var laptop = await app.OwnerClientAsync();
+        var phone = app.Client();
+        phone.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1");
+        Assert.Equal(HttpStatusCode.Redirect, (await phone.GetAsync("/dev-login?returnUrl=/")).StatusCode);
+        phone.DefaultRequestHeaders.Add("X-Podium-Request", "1");
+
+        var seenByLaptop = await laptop.GetFromJsonAsync<JsonElement>("/api/security/devices");
+        var mine = seenByLaptop.EnumerateArray().Single(d => d.GetProperty("current").GetBoolean());
+        Assert.Equal("Unknown browser", mine.GetProperty("client").GetString());
+        var seenByPhone = await phone.GetFromJsonAsync<JsonElement>("/api/security/devices");
+        var phoneDevice = seenByPhone.EnumerateArray().Single(d => d.GetProperty("current").GetBoolean());
+        Assert.Equal("Safari on iPhone", phoneDevice.GetProperty("client").GetString());
+        var phoneSid = phoneDevice.GetProperty("sid").GetString()!;
+        Assert.Contains(seenByLaptop.EnumerateArray(), d => d.GetProperty("sid").GetString() == phoneSid && !d.GetProperty("current").GetBoolean());
+        Assert.Equal("Edge on Windows", DeviceServiceSummary("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Edg/130.0"));
+
+        // The laptop signs the phone out: the phone's cookie is refused from its next request on; the laptop keeps working.
+        var revoke = await laptop.PostAsync($"/api/security/devices/{phoneSid}/revoke", null);
+        Assert.Equal(HttpStatusCode.OK, revoke.StatusCode);
+        Assert.False((await revoke.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("signedOut").GetBoolean());
+        Assert.Equal(HttpStatusCode.Unauthorized, (await phone.GetAsync("/api/decks")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await laptop.GetAsync("/api/decks")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await laptop.PostAsync("/api/security/devices/does-not-exist/revoke", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await laptop.PostAsync("/api/security/devices/bad%20sid!/revoke", null)).StatusCode);
+        var afterwards = await laptop.GetFromJsonAsync<JsonElement>("/api/security/devices");
+        Assert.True(afterwards.EnumerateArray().Single(d => d.GetProperty("sid").GetString() == phoneSid).GetProperty("revoked").GetBoolean());
+        // Revoked devices are audited; the Sources page lists devices.
+        var activity = await laptop.GetFromJsonAsync<JsonElement>("/api/activity");
+        Assert.Contains(activity.EnumerateArray(), a => a.GetProperty("action").GetString() == "security.device-revoke" && a.GetProperty("target").GetString() == phoneSid);
+        Assert.Contains("id=\"devices\"", await (await laptop.SendAsync(PodiumWebFactory.Navigation("/sources"))).Content.ReadAsStringAsync());
+
+        // Signing out the current device ends this very session.
+        var self = seenByLaptop.EnumerateArray().Single(d => d.GetProperty("current").GetBoolean()).GetProperty("sid").GetString()!;
+        var bye = await laptop.PostAsync($"/api/security/devices/{self}/revoke", null);
+        Assert.True((await bye.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("signedOut").GetBoolean());
+        Assert.Equal(HttpStatusCode.Unauthorized, (await laptop.GetAsync("/api/decks")).StatusCode);
+    }
+
+    private static string DeviceServiceSummary(string ua) => typeof(Podium.Web.Security.DeviceService).GetMethod("Summarize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, [ua]) as string ?? "";
+
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };

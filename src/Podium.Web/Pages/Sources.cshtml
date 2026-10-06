@@ -67,20 +67,56 @@
     </section>
 }
 
-<section class="panel" style="margin-top:1rem">
+<section class="panel" style="margin-top:1rem" id="security">
     <h3>Security</h3>
-    <p class="hint">Lost a device, or a session looks off? Signing out everywhere invalidates every Podium session cookie at once (including this one); share links and the GitHub App are unaffected.</p>
-    <button class="btn btn-danger btn-sm" id="sign-out-everywhere">Sign out everywhere</button>
+    <p class="hint">Every browser you signed in from. Sign out a single device, or everywhere at once (invalidates every Podium session cookie, including this one); share links and the GitHub App are unaffected.</p>
+    <div class="table-wrap"><table class="table" id="devices">
+        <thead><tr><th>Device</th><th>Signed in</th><th>Last seen</th><th>Address</th><th></th></tr></thead>
+        <tbody><tr><td colspan="5" class="faint">Loading…</td></tr></tbody>
+    </table></div>
+    <div class="row" style="margin-top:.8rem"><button class="btn btn-danger btn-sm" id="sign-out-everywhere">Sign out everywhere</button></div>
 </section>
 
 @section Scripts {
 <script nonce="@Podium.Web.Security.Csp.Nonce(HttpContext)">
 (function () {
-  const { api, toast } = Podium;
+  const { api, toast, relative } = Podium;
   document.getElementById('sign-out-everywhere').addEventListener('click', async () => {
     if (!confirm('Sign out every browser, including this one?')) return;
     try { await api('POST', '/api/security/sign-out-everywhere'); location.href = '/login'; } catch (e) { toast(e.message, 'error'); }
   });
+  async function loadDevices() {
+    const tbody = document.querySelector('#devices tbody');
+    try {
+      const list = await api('GET', '/api/security/devices');
+      tbody.innerHTML = '';
+      if (!list.length) { tbody.innerHTML = '<tr><td colspan="5" class="faint">No devices recorded yet (sessions from before device tracking are covered by "Sign out everywhere").</td></tr>'; return; }
+      for (const d of list) {
+        const tr = document.createElement('tr');
+        if (d.revoked) tr.className = 'faint';
+        const cell = (text) => { const td = document.createElement('td'); td.textContent = text; return td; };
+        const dev = cell(d.client || 'Unknown browser');
+        if (d.current) { const b = document.createElement('span'); b.className = 'badge'; b.style.marginLeft = '.4rem'; b.textContent = 'this device'; dev.appendChild(b); }
+        if (d.revoked) { const b = document.createElement('span'); b.className = 'badge'; b.style.marginLeft = '.4rem'; b.textContent = 'signed out'; dev.appendChild(b); }
+        const when = (iso) => { const t = document.createElement('time'); t.dateTime = iso; t.textContent = relative ? relative(iso) : new Date(iso).toLocaleString(); t.title = new Date(iso).toLocaleString(); return t; };
+        const signed = document.createElement('td'); signed.appendChild(when(d.createdAt));
+        const seen = document.createElement('td'); seen.appendChild(when(d.lastSeenAt));
+        const act = document.createElement('td');
+        if (!d.revoked) {
+          const btn = document.createElement('button'); btn.className = 'btn btn-sm' + (d.current ? '' : ' btn-danger'); btn.textContent = d.current ? 'Sign out' : 'Sign out device';
+          btn.addEventListener('click', async () => {
+            if (!confirm(d.current ? 'Sign out this browser?' : `Sign out ${d.client || 'this device'}? It will have to sign in again.`)) return;
+            try { const r = await api('POST', `/api/security/devices/${encodeURIComponent(d.sid)}/revoke`); if (r.signedOut) { location.href = '/login'; return; } toast('Device signed out', 'ok'); loadDevices(); }
+            catch (e) { toast(e.message, 'error'); }
+          });
+          act.appendChild(btn);
+        }
+        tr.append(dev, signed, seen, cell(d.ip || ''), act);
+        tbody.appendChild(tr);
+      }
+    } catch (e) { tbody.innerHTML = ''; tbody.appendChild(document.createElement('tr')).innerHTML = `<td colspan="5" class="faint">Could not load devices</td>`; }
+  }
+  loadDevices();
   document.getElementById('refresh').addEventListener('click', async (e) => {
     e.target.disabled = true;
     try { const r = await api('POST', '/api/installations/refresh'); toast(`Installations refreshed (${r.added} new)`, 'ok'); setTimeout(() => location.reload(), 800); }

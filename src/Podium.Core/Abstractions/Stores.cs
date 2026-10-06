@@ -153,3 +153,12 @@ public interface IRepositoryClient
     Task<Uri> GetAuthenticatedCloneUrlAsync(Source source, CancellationToken ct = default);
     Task<(bool IsPrivate, string DefaultBranch, bool CallerIsOwner, long RepoId)> GetRepoInfoAsync(string owner, string repo, CancellationToken ct = default);
 }
+
+public interface IDeviceStore
+{
+    Task<Device?> GetAsync(string principal, string sid, CancellationToken ct = default);
+    /// <summary>Devices of one principal, most recently seen first.</summary>
+    Task<IReadOnlyList<Device>> ListAsync(string principal, CancellationToken ct = default);
+    Task UpsertAsync(Device device, CancellationToken ct = default);
+    Task DeleteAsync(string principal, string sid, CancellationToken ct = default);
+}

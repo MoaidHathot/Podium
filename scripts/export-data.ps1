@@ -39,7 +39,7 @@ if (-not $StorageAccount) {
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 Write-Host "Exporting $StorageAccount to $Out"
 
-$tables = 'sources', 'decks', 'builds', 'activebuilds', 'grants', 'sharelinks', 'views', 'deckviews', 'recentdismissals', 'sessions', 'livesessions', 'accessrequests', 'audit', 'settings'
+$tables = 'sources', 'decks', 'builds', 'activebuilds', 'grants', 'sharelinks', 'views', 'deckviews', 'recentdismissals', 'sessions', 'livesessions', 'accessrequests', 'audit', 'settings', 'devices'
 $existing = @(Invoke-Az @('storage', 'table', 'list', '--account-name', $StorageAccount, '--auth-mode', 'login', '--query', '[].name'))
 $decks = @()
 foreach ($t in $tables) {

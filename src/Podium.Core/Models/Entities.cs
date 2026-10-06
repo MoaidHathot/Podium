@@ -302,3 +302,22 @@ public sealed record AuditEntry
     public string? Details { get; init; }
     public string? Ip { get; init; }
 }
+
+/// <summary>
+/// One signed-in browser (a cookie issued at login). Lets the owner see where they are signed in and sign out a
+/// single device; "sign out everywhere" still covers tickets that predate device tracking.
+/// </summary>
+public sealed record Device
+{
+    /// <summary>Principal id, e.g. "github:1234567".</summary>
+    public required string Principal { get; init; }
+    /// <summary>Random id carried by the cookie (urn:podium:sid).</summary>
+    public required string Sid { get; init; }
+    public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastSeenAt { get; init; } = DateTimeOffset.UtcNow;
+    /// <summary>Short, human description of the browser/OS (never the raw user agent).</summary>
+    public string? Client { get; init; }
+    public string? Ip { get; init; }
+    public bool Revoked { get; init; }
+    public DateTimeOffset? RevokedAt { get; init; }
+}
