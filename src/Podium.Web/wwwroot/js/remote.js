@@ -492,7 +492,7 @@
     if ($('golive-dialog').returnValue !== 'start') return;
     const minutes = Number($('golive-minutes').value) || null;
     try {
-      await ownerApi('POST', `/api/decks/${encodeURIComponent(slug)}/sessions`, { plannedMinutes: minutes, holdDeploys: $('golive-hold').checked, freeze: $('golive-freeze').checked });
+      await ownerApi('POST', `/api/decks/${encodeURIComponent(slug)}/sessions`, { plannedMinutes: minutes, holdDeploys: $('golive-hold').checked, freeze: $('golive-freeze').checked, rehearsal: $('golive-rehearsal').checked });
       if (minutes) store.set(`podium-plan-${slug}`, minutes);
       await loadSession();
       if (session && session.live) { const d = sessionEl.querySelector('details'); if (d) d.open = true; }

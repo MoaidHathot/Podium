@@ -167,7 +167,15 @@ try {
   check('room member is told the session ended', (await joiner.locator('#podium-ended').count()) === 1);
   check('code dies with the session', (await joiner.request.get(`${base}/j/${code}`)).status() === 404);
   await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
+  check('deck page opens on the Present tab', (await op.locator('.tab[aria-selected="true"]').getAttribute('data-tab')) === 'present');
+  await op.click('#tab-analytics');
+  check('Analytics tab shows the recap', !(await op.locator('.tab-panel[data-tab="analytics"]').isHidden()) && (await op.locator('.tab-panel[data-tab="present"]').isHidden()));
   check('recap lists the audience contribution', /2 reactions, 1 question, 1 poll/.test(await op.locator('#sessions').innerText().catch(() => '')), (await op.locator('#sessions summary').first().innerText().catch(() => '')).slice(0, 160));
+  await op.goto(`${base}/decks/fixture-deck#access-requests`, { waitUntil: 'networkidle' });
+  check('hash deep link opens the Share tab', (await op.locator('.tab[aria-selected="true"]').getAttribute('data-tab')) === 'share');
+  await op.reload({ waitUntil: 'networkidle' });
+  await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
+  check('last tab is remembered', (await op.locator('.tab[aria-selected="true"]').getAttribute('data-tab')) === 'analytics');
   await op.request.patch(`${base}/api/decks/fixture-deck`, { headers: { 'x-podium-request': '1' }, data: { visibility: 'Public' } });
 
   // Anonymous access rules.

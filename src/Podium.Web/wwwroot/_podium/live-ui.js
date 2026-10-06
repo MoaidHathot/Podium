@@ -233,9 +233,11 @@
         var minutes = el('input', { type: 'number', min: '1', max: '600', value: String(storedPlan()) });
         var freeze = el('input', { type: 'checkbox' }); freeze.checked = true;
         var hold = el('input', { type: 'checkbox' });
+        var rehearsal = el('input', { type: 'checkbox' });
         pop.appendChild(el('label', {}, ['Planned length ', minutes, ' minutes']));
         pop.appendChild(el('label', {}, [freeze, ' Freeze the deck while live']));
         pop.appendChild(el('label', {}, [hold, ' Hold deployments while live']));
+        pop.appendChild(el('label', {}, [rehearsal, ' This is a rehearsal']));
         var err = el('p', { class: 'podium-error', hidden: true });
         pop.appendChild(err);
         var row2 = el('div', { class: 'podium-row' });
@@ -245,7 +247,7 @@
         startBtn.addEventListener('click', function () {
           var mins = Math.max(1, Math.min(600, Number(minutes.value) || 45));
           startBtn.disabled = true;
-          ownerApi('POST', '/api/decks/' + encodeURIComponent(cfg.slug) + '/sessions', { plannedMinutes: mins, holdDeploys: hold.checked, freeze: freeze.checked })
+          ownerApi('POST', '/api/decks/' + encodeURIComponent(cfg.slug) + '/sessions', { plannedMinutes: mins, holdDeploys: hold.checked, freeze: freeze.checked, rehearsal: rehearsal.checked })
             .then(function () { try { localStorage.setItem('podium-plan-' + cfg.slug, String(mins)); } catch (e) { /* private mode */ } closePop(); })
             .catch(function (e) { err.hidden = false; err.textContent = e.message || 'Could not start the session'; startBtn.disabled = false; });
         });

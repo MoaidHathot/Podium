@@ -404,6 +404,53 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         Assert.Equal(HttpStatusCode.NotFound, (await app.Client().GetAsync($"/d/{pub.Slug}/qr.svg?remote=1")).StatusCode);
     }
 
+    [Fact]
+    public async Task Deck_page_is_organised_in_tabs_and_recaps_carry_the_rehearsal_flag_and_export_as_csv()
+    {
+        var deck = await app.SeedDeckAsync("tabs-deck");
+        var owner = await app.OwnerClientAsync();
+        var html = await (await owner.SendAsync(PodiumWebFactory.Navigation($"/decks/{deck.Slug}"))).Content.ReadAsStringAsync();
+        Assert.Contains("id=\"deck-tabs\"", html);
+        foreach (var tab in new[] { "present", "share", "analytics", "build" })
+        {
+            Assert.Contains($"data-tab=\"{tab}\" aria-selected=", html);
+            Assert.Contains($"class=\"tab-panel\" data-tab=\"{tab}\"", html);
+        }
+        // Settings live where one would look for them: audience under Share, exports under Build, follow-along under Present.
+        var share = html[html.IndexOf("data-tab=\"share\" role=\"tabpanel\"", StringComparison.Ordinal)..html.IndexOf("data-tab=\"analytics\" role=\"tabpanel\"", StringComparison.Ordinal)];
+        Assert.Contains("id=\"audience-settings\"", share);
+        Assert.Contains("Who can see this", share);
+        var build = html[html.IndexOf("data-tab=\"build\" role=\"tabpanel\"", StringComparison.Ordinal)..];
+        Assert.Contains("id=\"exportPdf\"", build);
+        Assert.Contains("id=\"builds\"", build);
+        var present = html[html.IndexOf("data-tab=\"present\" role=\"tabpanel\"", StringComparison.Ordinal)..html.IndexOf("data-tab=\"share\" role=\"tabpanel\"", StringComparison.Ordinal)];
+        Assert.Contains("id=\"follow-along\"", present);
+        Assert.Contains("id=\"session-rehearsal\"", present);
+
+        // A rehearsal session: flagged on the record, badged on the page, exportable as CSV with pacing rows.
+        var start = await owner.PostAsync($"/api/decks/{deck.Slug}/sessions", JsonContent.Create(new { plannedMinutes = 20, holdDeploys = false, freeze = false, rehearsal = true }));
+        Assert.Equal(HttpStatusCode.OK, start.StatusCode);
+        var sessionId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("session").GetProperty("id").GetString()!;
+        var recorders = app.Services.GetRequiredService<Podium.Core.Services.SessionRecorders>();
+        await recorders.RecordPositionAsync(deck.Slug, 1, 0, DateTimeOffset.UtcNow.AddSeconds(-30));
+        await recorders.RecordPositionAsync(deck.Slug, 2, 0, DateTimeOffset.UtcNow.AddSeconds(-10));
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsync($"/api/decks/{deck.Slug}/sessions/end?unfreeze=true", null)).StatusCode);
+        var list = await owner.GetFromJsonAsync<JsonElement>($"/api/decks/{deck.Slug}/sessions");
+        Assert.True(list.EnumerateArray().First().GetProperty("rehearsal").GetBoolean());
+        var page = await (await owner.SendAsync(PodiumWebFactory.Navigation($"/decks/{deck.Slug}"))).Content.ReadAsStringAsync();
+        Assert.Contains("Rehearsal</span>", page);
+        Assert.Contains($"/api/decks/{deck.Slug}/sessions/{sessionId}/recap.csv", page);
+        var csv = await owner.GetAsync($"/api/decks/{deck.Slug}/sessions/{sessionId}/recap.csv");
+        Assert.Equal(HttpStatusCode.OK, csv.StatusCode);
+        Assert.Equal("text/csv", csv.Content.Headers.ContentType!.MediaType);
+        var body = await csv.Content.ReadAsStringAsync();
+        Assert.StartsWith("section,slide,label,value,extra1,extra2", body);
+        Assert.Contains("\"rehearsal\"", body);
+        Assert.Contains("pace,1,\"seconds\",", body);
+        Assert.Equal(HttpStatusCode.NotFound, (await owner.GetAsync($"/api/decks/{deck.Slug}/sessions/nope/recap.csv")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await app.Client().GetAsync($"/api/decks/{deck.Slug}/sessions/{sessionId}/recap.csv")).StatusCode);
+    }
+
     private async Task<HttpResponseMessage> Deliver(string eventName, string body)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/github/webhook") { Content = new StringContent(body, Encoding.UTF8, "application/json") };

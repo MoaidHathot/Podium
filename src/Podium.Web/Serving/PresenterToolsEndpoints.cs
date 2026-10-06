@@ -376,6 +376,7 @@ public static class PresenterToolsEndpoints
               <label>Planned length (minutes)<input id="golive-minutes" type="number" min="1" max="600" inputmode="numeric" value="45"></label>
               <label class="check"><input type="checkbox" id="golive-freeze" checked> Freeze the deck while live</label>
               <label class="check"><input type="checkbox" id="golive-hold"> Hold Podium deployments while live</label>
+              <label class="check"><input type="checkbox" id="golive-rehearsal"> This is a rehearsal</label>
               <div class="row"><button class="small primary" value="start">Go live</button><button class="small" value="cancel">Cancel</button></div>
             </form></dialog>
             <dialog id="plan-dialog"><form method="dialog"><label>Planned length (minutes)<input id="plan-minutes" type="number" min="1" max="600" inputmode="numeric"></label><div class="row"><button class="small primary" value="set">Update</button><button class="small" value="cancel">Cancel</button></div></form></dialog>

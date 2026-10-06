@@ -85,7 +85,19 @@
     </div>
 }
 
-<div class="two-col">
+@{
+    var pendingCount = Model.PendingRequests.Count;
+    var hasAnalytics = Model.Sessions.Any(s => s.EndedAt is not null) || Model.Activity.Count > 0 || Model.RecentViews.Count > 0 || (d.CurrentHasSlideSheet && d.CurrentSlideCount > 0 && servable);
+}
+<nav class="tabs" role="tablist" aria-label="Deck sections" id="deck-tabs">
+    <button class="tab" role="tab" data-tab="present" aria-selected="true" id="tab-present">Present@(Model.LiveSession is not null ? Html.Raw(" <span class=\"tab-dot\" title=\"Live\"></span>") : null)</button>
+    <button class="tab" role="tab" data-tab="share" aria-selected="false" id="tab-share">Share@(pendingCount > 0 ? Html.Raw($" <span class=\"tab-badge\" title=\"Pending access requests\">{pendingCount}</span>") : null)</button>
+    <button class="tab" role="tab" data-tab="analytics" aria-selected="false" id="tab-analytics">Analytics</button>
+    <button class="tab" role="tab" data-tab="build" aria-selected="false" id="tab-build">Build@(building ? Html.Raw(" <span class=\"tab-spinner\" title=\"Building\"></span>") : null)</button>
+</nav>
+
+<div class="tab-panel" data-tab="present" role="tabpanel" aria-labelledby="tab-present">
+<div class="@(d.Kind == DeckKind.PowerPoint ? "two-col" : "stack")">
     <section class="panel">
         <h3>Present</h3>
         <p class="hint">@(isDoc ? "Opens the slides in Podium's viewer (arrow keys, swipe, deep links); the original file is available below." : "Open the deck on the presenting machine, and the presenter view on your own device. The presenter view drives all other open instances of this deck.")</p>
@@ -202,6 +214,7 @@
                         <label class="row" style="gap:.3rem; font-size:.85rem">Planned <input class="input" id="session-minutes" type="number" min="1" max="600" value="45" style="width:5rem" /> min</label>
                         <label class="row" style="gap:.3rem; font-size:.85rem"><input type="checkbox" id="session-freeze" checked /> freeze deck</label>
                         <label class="row" style="gap:.3rem; font-size:.85rem" title="Pushes to Podium itself wait until this session ends (max 45 min); deck builds are never affected"><input type="checkbox" id="session-hold" @(d.HoldDeploysWhileLive ? "checked" : "") /> hold Podium deployments</label>
+                        <label class="row" style="gap:.3rem; font-size:.85rem" title="Recorded like any session but labelled, so recaps and pace comparisons can tell it apart"><input type="checkbox" id="session-rehearsal" /> rehearsal</label>
                         <button class="btn btn-primary btn-sm" id="session-start">Go live</button>
                     </div>
                 }
@@ -241,27 +254,22 @@
         </p>
     </section>
     }
-    <section class="panel" @(isDoc || d.Kind == DeckKind.Static ? "hidden" : "")>
-        <h3>Exports</h3>
-        <p class="hint">Generated on every build by the Slidev exporter (headless Chromium).</p>
-        <label class="row" style="gap:.5rem"><input type="checkbox" id="exportPdf" @(d.ExportPdf ? "checked" : "") /> Export PDF</label>
-        <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="exportPptx" @(d.ExportPptx ? "checked" : "") /> Export PowerPoint (PPTX)</label>
-        @if (d.Kind == DeckKind.Slidev)
-        {
-            <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="stripNotes" @(d.StripNotesForViewers ? "checked" : "") /> Hide speaker notes from viewers</label>
-            <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Builds a second copy without notes for everyone except you and people granted <em>Present</em>. Notes are otherwise part of the deck bundle and visible in its presenter view.@(d.StripNotesForViewers && !d.CurrentHasPublicSite ? " The current build has no notes-free copy yet; rebuild to apply." : "")</p>
-        }
-        <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="allowEmbedding" @(d.AllowEmbedding ? "checked" : "") /> Allow embedding in other sites</label>
-        <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Only effective while the deck is <strong>Public</strong>. Snippet: <code>&lt;iframe src="@Model.Origin/d/@(d.Slug)/" width="960" height="540" allowfullscreen&gt;&lt;/iframe&gt;</code></p>
-        <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="offlineCache" @(d.OfflineCache ? "checked" : "") /> Offline cache</label>
-        <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">A service worker keeps the deck available if the venue network drops: your browsers precache the whole build, viewers cache what they visit. Applies on the next page load.</p>
-        <p class="faint" style="margin-top:.6rem; font-size:.85rem">Export changes apply to the next build.</p>
-    </section>
+</div>
+@* Slide strip belongs to presenting (copy a link to a slide, see what is where). *@
+@if (d.CurrentHasSlideSheet && d.CurrentSlideCount > 0 && servable)
+{
+<section class="panel" style="margin-top:1rem" id="slides">
+    <h3>Slides</h3>
+    <p class="hint">Hover a slide for its number; click to open it; the link button copies a deep link to that slide.</p>
+    <div class="slide-strip" id="slide-strip" data-count="@d.CurrentSlideCount" data-sheet="/d/@(d.Slug)/slides.jpg?v=@d.CurrentBuildId" data-meta="/d/@(d.Slug)/slides.json?v=@d.CurrentBuildId" data-base="@Model.PublicOrigin/d/@(d.Slug)/"></div>
+</section>
+}
 </div>
 
+<div class="tab-panel" data-tab="share" role="tabpanel" aria-labelledby="tab-share" hidden>
 @if (drivable)
 {
-<section class="panel" style="margin-top:1rem" id="audience-settings">
+<section class="panel" id="audience-settings">
     <h3>Audience</h3>
     <p class="hint">What the room can do from their phones while you are live (through the join code). Everything is moderated from the phone remote, bounded per person and per room, and lands in the session recap. Can also be set in <code>.podium.yml</code> under <code>audience:</code>.</p>
     <div class="row" style="gap:1.2rem; flex-wrap:wrap; align-items:flex-start">
@@ -404,19 +412,17 @@
         <div id="new-link" class="url-box hidden" style="margin-top:.6rem"></div>
     </section>
 </div>
+</div>
 
-@if (d.CurrentHasSlideSheet && d.CurrentSlideCount > 0 && servable)
+<div class="tab-panel" data-tab="analytics" role="tabpanel" aria-labelledby="tab-analytics" hidden>
+@if (!hasAnalytics)
 {
-<section class="panel" style="margin-top:1rem">
-    <h3>Slides</h3>
-    <p class="hint">Click a slide to copy a link that opens the deck right there.</p>
-    <div class="slide-strip" id="slide-strip" data-count="@d.CurrentSlideCount" data-sheet="/d/@(d.Slug)/slides.jpg?v=@d.CurrentBuildId" data-meta="/d/@(d.Slug)/slides.json?v=@d.CurrentBuildId" data-base="@Model.Origin/d/@(d.Slug)/"></div>
-</section>
+    <div class="empty section"><h3>Nothing to show yet</h3><p>Views, live-session recaps and the change log appear here once the deck has been opened or presented.</p></div>
 }
 
 @if (Model.Sessions.Any(s => s.EndedAt is not null))
 {
-<section class="panel" style="margin-top:1rem" id="sessions">
+<section class="panel" id="sessions">
     <h3>Sessions</h3>
     <p class="hint">Pacing from past live sessions: how long each slide was on screen (summed over revisits), and what the room sent in.</p>
     @foreach (var s in Model.Sessions.Where(s => s.Recap is not null).Take(5))
@@ -426,7 +432,7 @@
         var max = Math.Max(1, r.SecondsPerSlide.Values.DefaultIfEmpty(1).Max());
         var avgPace = r.SlidesVisited > 0 ? r.DurationSeconds / (double)r.SlidesVisited : 0;
         <details style="margin-bottom:.6rem" @(s == Model.Sessions.First(x => x.Recap is not null) ? "open" : null)>
-            <summary><strong>@s.StartedAt.ToString("yyyy-MM-dd HH:mm")</strong>@(s.Rehearsal ? Html.Raw(" <span class=\"badge\">Rehearsal</span>") : null) <span class="faint">· @TimeSpan.FromSeconds(r.DurationSeconds).ToString(r.DurationSeconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss")@(s.PlannedMinutes is { } pm ? $" of {pm} min planned" : "") · peak @r.PeakViewers viewer@(r.PeakViewers == 1 ? "" : "s") · @r.SlidesVisited slide@(r.SlidesVisited == 1 ? "" : "s") visited@(avgPace > 0 ? $" · {TimeSpan.FromSeconds(avgPace):m\\:ss} per slide" : "")@(a is not null && (a.ReactionTotal > 0 || a.Questions.Count > 0 || a.Polls.Count > 0) ? $" · {a.ReactionTotal} reaction{(a.ReactionTotal == 1 ? "" : "s")}, {a.Questions.Count} question{(a.Questions.Count == 1 ? "" : "s")}, {a.Polls.Count} poll{(a.Polls.Count == 1 ? "" : "s")}" : "") · ended: @s.EndReason</span></summary>
+            <summary><strong>@s.StartedAt.ToString("yyyy-MM-dd HH:mm")</strong>@(s.Rehearsal ? Html.Raw(" <span class=\"badge\">Rehearsal</span>") : null) <span class="faint">· @TimeSpan.FromSeconds(r.DurationSeconds).ToString(r.DurationSeconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss")@(s.PlannedMinutes is { } pm ? $" of {pm} min planned" : "") · peak @r.PeakViewers viewer@(r.PeakViewers == 1 ? "" : "s") · @r.SlidesVisited slide@(r.SlidesVisited == 1 ? "" : "s") visited@(avgPace > 0 ? $" · {TimeSpan.FromSeconds(avgPace):m\\:ss} per slide" : "")@(a is not null && (a.ReactionTotal > 0 || a.Questions.Count > 0 || a.Polls.Count > 0) ? $" · {a.ReactionTotal} reaction{(a.ReactionTotal == 1 ? "" : "s")}, {a.Questions.Count} question{(a.Questions.Count == 1 ? "" : "s")}, {a.Polls.Count} poll{(a.Polls.Count == 1 ? "" : "s")}" : "") · ended: @s.EndReason</span> <a class="btn btn-sm" href="/api/decks/@d.Slug/sessions/@s.Id/recap.csv" style="margin-left:.5rem" title="Download this recap as CSV">CSV</a></summary>
             @if (r.SecondsPerSlide.Count > 0)
             {
                 <div class="session-bars" style="margin-top:.5rem">
@@ -528,8 +534,11 @@
     }
     else { <p class="faint">No views recorded yet.</p> }
 </section>
+</div>
 
-<section class="panel" style="margin-top:1rem">
+<div class="tab-panel" data-tab="build" role="tabpanel" aria-labelledby="tab-build" hidden>
+<div class="stack">
+<section class="panel" id="builds">
     <h3>Builds</h3>
     <div class="table-wrap"><table class="table">
         <thead><tr><th>Build</th><th>Commit</th><th>Status</th><th>Started</th><th>Duration</th><th>Artifacts</th><th>Trigger</th><th></th></tr></thead>
@@ -563,12 +572,64 @@
         </tbody>
     </table></div>
 </section>
+<section class="panel" @(isDoc || d.Kind == DeckKind.Static ? "hidden" : "")>
+    <h3>Exports &amp; serving</h3>
+    <p class="hint">Exports are generated on every build (Slidev: headless Chromium; presenterm: weasyprint). Serving options apply on the next page load.</p>
+    <label class="row" style="gap:.5rem"><input type="checkbox" id="exportPdf" @(d.ExportPdf ? "checked" : "") /> Export PDF</label>
+    <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="exportPptx" @(d.ExportPptx ? "checked" : "") /> Export PowerPoint (PPTX)</label>
+    @if (d.Kind == DeckKind.Slidev)
+    {
+        <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="stripNotes" @(d.StripNotesForViewers ? "checked" : "") /> Hide speaker notes from viewers</label>
+        <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Builds a second copy without notes for everyone except you and people granted <em>Present</em>. Notes are otherwise part of the deck bundle and visible in its presenter view.@(d.StripNotesForViewers && !d.CurrentHasPublicSite ? " The current build has no notes-free copy yet; rebuild to apply." : "")</p>
+    }
+    <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="allowEmbedding" @(d.AllowEmbedding ? "checked" : "") /> Allow embedding in other sites</label>
+    <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">Only effective while the deck is <strong>Public</strong>. Snippet: <code>&lt;iframe src="@Model.Origin/d/@(d.Slug)/" width="960" height="540" allowfullscreen&gt;&lt;/iframe&gt;</code></p>
+    <label class="row" style="gap:.5rem; margin-top:.4rem"><input type="checkbox" id="offlineCache" @(d.OfflineCache ? "checked" : "") /> Offline cache</label>
+    <p class="faint" style="margin:.2rem 0 0 1.6rem; font-size:.82rem">A service worker keeps the deck available if the venue network drops: your browsers precache the whole build, viewers cache what they visit.</p>
+    <p class="faint" style="margin-top:.6rem; font-size:.85rem">Export changes apply to the next build.</p>
+</section>
+</div>
+</div>
 
 @section Scripts {
 <script nonce="@Podium.Web.Security.Csp.Nonce(HttpContext)">
 (function () {
   const slug = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(d.Slug));
   const { api, toast } = Podium;
+
+  // Tabs: Present / Share / Analytics / Build. The last choice is remembered per browser; a hash deep link
+  // (#access-requests, #sessions, #builds, ...) opens the tab that holds it.
+  (function tabs() {
+    const bar = document.getElementById('deck-tabs');
+    if (!bar) return;
+    const owners = { 'access-requests': 'share', grants: 'share', links: 'share', 'audience-settings': 'share', sessions: 'analytics', views: 'analytics', activity: 'analytics', builds: 'build', slides: 'present', 'follow-along': 'present', 'session-panel': 'present', 'phone-remote': 'present' };
+    const key = 'podium-deck-tab';
+    function show(name, { remember = true, scrollTo = null } = {}) {
+      bar.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.tab === name)));
+      document.querySelectorAll('.tab-panel').forEach((p) => { p.hidden = p.dataset.tab !== name; });
+      if (remember) try { localStorage.setItem(key, name); } catch {}
+      if (scrollTo) requestAnimationFrame(() => document.getElementById(scrollTo)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    }
+    bar.addEventListener('click', (e) => { const t = e.target.closest('.tab'); if (t) show(t.dataset.tab); });
+    bar.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      const tabs = [...bar.querySelectorAll('.tab')];
+      const i = tabs.findIndex((t) => t.getAttribute('aria-selected') === 'true');
+      const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+      next.focus(); show(next.dataset.tab);
+    });
+    function fromHash() {
+      const id = location.hash.replace(/^#/, '');
+      if (id && owners[id]) { show(owners[id], { remember: false, scrollTo: id }); return true; }
+      return false;
+    }
+    if (!fromHash()) {
+      let saved = null; try { saved = localStorage.getItem(key); } catch {}
+      if (new URLSearchParams(location.search).get('notBuilt') === '1') saved = 'build';
+      show(saved && bar.querySelector(`.tab[data-tab="${saved}"]`) ? saved : 'present', { remember: false });
+    }
+    window.addEventListener('hashchange', fromHash);
+  })();
 
   async function patch(body, okMsg) {
     try { await api('PATCH', `/api/decks/${slug}`, body); toast(okMsg || 'Saved', 'ok'); }
@@ -630,7 +691,7 @@
   document.getElementById('session-start')?.addEventListener('click', async () => {
     const minutes = Number(document.getElementById('session-minutes').value) || null;
     try {
-      const r = await api('POST', `/api/decks/${slug}/sessions`, { plannedMinutes: minutes, holdDeploys: document.getElementById('session-hold').checked, freeze: document.getElementById('session-freeze').checked });
+      const r = await api('POST', `/api/decks/${slug}/sessions`, { plannedMinutes: minutes, holdDeploys: document.getElementById('session-hold').checked, freeze: document.getElementById('session-freeze').checked, rehearsal: document.getElementById('session-rehearsal')?.checked || false });
       toast('Live. Share the join link with the room.', 'ok'); setTimeout(() => location.reload(), 500);
     } catch (e) { toast(e.message, 'error'); }
   });

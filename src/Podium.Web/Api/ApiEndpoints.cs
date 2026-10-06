@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Podium.Core.Abstractions;
@@ -230,6 +231,31 @@ public static partial class ApiEndpoints
         });
 
         owner.MapGet("/decks/{slug}/sessions", async (string slug, ISessionStore sessions, CancellationToken ct) => Results.Ok(await sessions.ListForDeckAsync(slug, 20, ct)));
+
+        // One session's recap as CSV: pacing per slide, then what the room sent in (text is quoted; nothing is HTML).
+        owner.MapGet("/decks/{slug}/sessions/{id}/recap.csv", async (string slug, string id, ISessionStore sessions, CancellationToken ct) =>
+        {
+            var s = await sessions.GetAsync(slug, id, ct);
+            if (s is null || s.Recap is null) return Results.NotFound();
+            static string Q(object? v) { var t = v?.ToString() ?? ""; return "\"" + t.Replace("\"", "\"\"") + "\""; }
+            var sb = new StringBuilder();
+            sb.AppendLine("section,slide,label,value,extra1,extra2");
+            sb.AppendLine($"session,,{Q("started")},{Q(s.StartedAt.ToString("o"))},{Q(s.Rehearsal ? "rehearsal" : "live")},{Q(s.EndReason)}");
+            sb.AppendLine($"session,,{Q("duration_seconds")},{s.Recap.DurationSeconds},{Q("planned_minutes")},{s.PlannedMinutes}");
+            sb.AppendLine($"session,,{Q("peak_viewers")},{s.Recap.PeakViewers},{Q("slides_visited")},{s.Recap.SlidesVisited}");
+            foreach (var kv in s.Recap.SecondsPerSlide.OrderBy(k => k.Key))
+                sb.AppendLine($"pace,{kv.Key},{Q("seconds")},{kv.Value},,");
+            if (s.AudienceRecap is { } a)
+            {
+                foreach (var kv in a.Reactions.OrderByDescending(k => k.Value)) sb.AppendLine($"reaction,,{Q(kv.Key)},{kv.Value},,");
+                foreach (var q in a.Questions.OrderByDescending(q => q.Upvotes).ThenBy(q => q.At))
+                    sb.AppendLine($"question,{q.Slide},{Q(q.Text)},{q.Upvotes},{Q(q.Nick)},{Q(q.Answered ? "answered" : q.Dismissed ? "dismissed" : "open")}");
+                foreach (var p in a.Polls)
+                    foreach (var o in p.Options) sb.AppendLine($"poll,{p.Slide},{Q(p.Question)},{o.Votes},{Q(o.Text)},{Q(p.TotalVotes)}");
+            }
+            var name = $"{slug}-{s.StartedAt:yyyyMMdd-HHmm}-recap.csv";
+            return Results.File(Encoding.UTF8.GetBytes(sb.ToString()), "text/csv; charset=utf-8", name);
+        });
 
         // Audit trail (owner only): newest first, optionally for one deck.
         owner.MapGet("/activity", async (string? target, IAuditStore audit, CancellationToken ct) => Results.Ok(await audit.RecentAsync(string.IsNullOrWhiteSpace(target) ? null : target, 100, ct)));
