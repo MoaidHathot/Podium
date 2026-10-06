@@ -105,7 +105,7 @@
             <h3 style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap">
                 <span class="faint" style="font-weight:500">Talk</span>
                 <a href="/talks/@talk.Id">@talk.Title</a>
-                @if (d.Variant is not null) { <span class="badge badge-variant">@d.Variant</span> } else if (Model.Siblings.Count > 0 && talk.DeckSlugs.Count > 0 && talk.DeckSlugs[0] == d.Slug) { <span class="badge badge-variant">main</span> }
+                @if (d.Variant is not null) { <span class="badge badge-variant">@d.Variant</span> } else if (Model.Siblings.Count > 0 && talk.DeckSlugs.Count > 0 && talk.DeckSlugs[0] == d.Slug && !Podium.Core.Discovery.DeckDetector.IsFileBased(d.Kind)) { <span class="badge badge-variant">main</span> }
                 @if (d.Path != talk.Path) { <span class="badge" title="Joined through .podium.yml">joined</span> }
             </h3>
             <div class="row" style="gap:.4rem">
@@ -134,7 +134,7 @@
                     <ul style="margin:.2rem 0 0; padding-left:1.1rem">
                         @foreach (var s in Model.Siblings)
                         {
-                            <li><a href="/decks/@s.Slug">@s.Title</a>@(s.Variant is not null ? $" · {s.Variant}" : "")@(talk.DeckSlugs.Count > 0 && talk.DeckSlugs[0] == s.Slug ? " · main" : "")
+                            <li><a href="/decks/@s.Slug">@s.Title</a>@(s.Variant is not null ? $" · {s.Variant}" : "")@(talk.DeckSlugs.Count > 0 && talk.DeckSlugs[0] == s.Slug && !Podium.Core.Discovery.DeckDetector.IsFileBased(s.Kind) ? " · main" : "")
                                 @if (d.CurrentHasText && s.CurrentHasText) { <a class="faint" href="/decks/@d.Slug/compare/@s.Slug" title="Which slides differ between the two decks">compare</a> }
                             </li>
                         }

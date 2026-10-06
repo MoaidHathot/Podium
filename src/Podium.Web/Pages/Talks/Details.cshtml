@@ -107,7 +107,7 @@
                         <div class="variant-text">
                             <div class="row" style="gap:.4rem; flex-wrap:wrap; align-items:center">
                                 <strong>@d.Title</strong>
-                                @if (d.Variant is not null) { <span class="badge badge-variant">@d.Variant</span> } else if (Model.Decks.Count > 1 && t.DeckSlugs.Count > 0 && t.DeckSlugs[0] == d.Slug) { <span class="badge badge-variant">main</span> }
+                                @if (d.Variant is not null) { <span class="badge badge-variant">@d.Variant</span> } else if (Model.Decks.Count > 1 && t.DeckSlugs.Count > 0 && t.DeckSlugs[0] == d.Slug && !Podium.Core.Discovery.DeckDetector.IsFileBased(d.Kind)) { <span class="badge badge-variant">main</span> }
                                 @if (!isHome && Model.IsOwner) { <span class="badge" title="Joined this talk through .podium.yml">joined</span> }
                                 <span class="badge badge-kind-@d.Kind.ToString().ToLowerInvariant()">@(d.Kind switch { DeckKind.PowerPoint => "PowerPoint", DeckKind.Pdf => "PDF", DeckKind.Static => "HTML", _ => d.Kind.ToString() })</span>
                                 @if (Model.IsOwner) { <span class="badge badge-vis-@d.Visibility.ToString().ToLowerInvariant()">@d.Visibility</span> }
