@@ -190,18 +190,25 @@ async function checkout(repoDir) {
 
   // Fetch exactly the requested commit; the credential lives only on this command line, never in .git/config.
   // A transfer that stalls below 1 KB/s for 45 s is aborted and retried once rather than hanging until the build timeout.
-  const fetchArgs = [...gitAuth, '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=45', '-c', 'credential.helper=', 'fetch', '-q', '--depth', '1', 'origin', sha];
+  // Decks in a sub-folder use a partial clone (no blobs) plus a cone sparse-checkout of that folder, so the download is
+  // the deck and the files on its parent path, not every PowerPoint in the repository; the lazy blob fetch during
+  // checkout reuses the same one-shot credential (git -c propagates to its child processes).
+  const sparse = deckPath.length > 0;
+  const gitTransfer = [...gitAuth, '-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=45', '-c', 'credential.helper='];
+  const fetchArgs = [...gitTransfer, 'fetch', '-q', '--depth', '1', ...(sparse ? ['--filter=blob:none'] : []), 'origin', sha];
   for (let attempt = 1; ; attempt++) {
     // A killed fetch leaves lock files behind (shallow.lock, FETCH_HEAD.lock): every attempt starts from a fresh repo.
     if (attempt > 1) { rmSync(repoDir, { recursive: true, force: true }); mkdirForDeck(repoDir); }
     await run('git', ['init', '-q'], { cwd: repoDir, echo: attempt === 1 });
     await run('git', ['remote', 'add', 'origin', cleanUrl], { cwd: repoDir, echo: attempt === 1 });
-    log(`$ git fetch --depth 1 origin ${sha.slice(0, 7)}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+    if (sparse) await run('git', ['sparse-checkout', 'set', '--cone', deckPath], { cwd: repoDir, echo: attempt === 1 });
+    log(`$ git fetch --depth 1${sparse ? ' --filter=blob:none' : ''} origin ${sha.slice(0, 7)}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
     const r = await run('git', fetchArgs, { cwd: repoDir, echo: false, allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { GCM_INTERACTIVE: 'never' } });
-    if (r.code === 0) break;
-    if (attempt >= 2) throw new Error(`git fetch failed (exit ${r.code})`);
+    if (r.code !== 0) { if (attempt >= 2) throw new Error(`git fetch failed (exit ${r.code})`); continue; }
+    const c = await run('git', [...gitTransfer, 'checkout', '-q', 'FETCH_HEAD'], { cwd: repoDir, echo: false, allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { GCM_INTERACTIVE: 'never' } });
+    if (c.code === 0) break;
+    if (attempt >= 2) throw new Error(`git checkout failed (exit ${c.code})`);
   }
-  await run('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: repoDir });
   // Deck code runs during the build; make sure nothing sensitive is on disk when it does.
   rmSync(join(repoDir, '.git'), { recursive: true, force: true });
 }
