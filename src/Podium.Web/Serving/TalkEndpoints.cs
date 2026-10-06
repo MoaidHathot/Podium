@@ -26,10 +26,12 @@ public static class TalkEndpoints
         owner.MapGet("/{id}/cfp.md", (string id, ITalkStore talks, HttpContext http, CancellationToken ct) => PackAsync(id, "md", talks, http, ct));
         owner.MapGet("/{id}/cfp.txt", (string id, ITalkStore talks, HttpContext http, CancellationToken ct) => PackAsync(id, "txt", talks, http, ct));
 
-        app.MapGet("/talks/photo/{owner}/{repo}", async (string owner, string repo, ITalkStore talks, ISourceStore sources, IRepositoryClient repos, Microsoft.Extensions.Caching.Memory.IMemoryCache cache, HttpContext http, CancellationToken ct) =>
+        app.MapGet("/talks/photo/{owner}/{repo}", async (string owner, string repo, ITalkStore talks, ISourceStore sources, IRepositoryClient repos, Microsoft.Extensions.Caching.Memory.IMemoryCache cache, CallerResolver callers, HttpContext http, CancellationToken ct) =>
         {
             var source = await sources.GetAsync(Source.MakeId(owner, repo), ct);
             if (source is null || !source.Trusted) return Results.NotFound();
+            // The photo is as public as the speaker page: the owner always, everyone else once a talk of this source is public.
+            if (!callers.Resolve(http.User).IsOwner && !(await talks.ListBySourceAsync(source.Id, ct)).Any(t => t.Public && !t.Archived && t.Status != "draft")) return Results.NotFound();
             var speaker = await talks.GetSpeakerAsync(source.Id, ct);
             // Only repository-relative photos are served here; absolute URLs are linked directly by the page.
             if (speaker?.Photo is not { } path || Podium.Core.Discovery.TalkFiles.RepoPath(path) is null || path.Contains("://", StringComparison.Ordinal)) return Results.NotFound();

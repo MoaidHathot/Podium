@@ -334,6 +334,17 @@ public sealed class TalkPagesTests(PodiumWebFactory app)
         app.Repository.Files["evil.svg"] = System.Text.Encoding.UTF8.GetBytes("<svg onload=\"alert(1)\"></svg>");
         Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync("/talks/photo/owner/slides")).StatusCode);
         await talks.UpsertSpeakerAsync((await talks.GetSpeakerAsync("owner/slides"))! with { Photo = "photo.jpg" });
+
+        // While no talk of the source is public, visitors get nothing (the owner still sees the photo on the catalog).
+        var publicTalks = (await talks.ListBySourceAsync("owner/slides")).Where(t => t.Public).ToList();
+        foreach (var t in publicTalks) await talks.UpsertAsync(t with { Public = false });
+        try
+        {
+            Assert.Equal(HttpStatusCode.NotFound, (await anon.GetAsync("/talks/photo/owner/slides")).StatusCode);
+            var owner = await app.OwnerClientAsync();
+            Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync("/talks/photo/owner/slides")).StatusCode);
+        }
+        finally { foreach (var t in publicTalks) await talks.UpsertAsync(t); }
     }
 
     [Theory]
