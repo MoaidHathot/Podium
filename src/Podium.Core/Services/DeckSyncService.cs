@@ -18,6 +18,12 @@ public sealed partial class DeckSyncService(
     ILogger<DeckSyncService> log,
     ITalkStore? talks = null)
 {
+    /// <summary>
+    /// Version of the rules that derive deck records from a repository (titles, tags, talk membership, variants...).
+    /// Bump it when a rule changes so existing records are re-derived once after the deploy (see MaintenanceService).
+    /// </summary>
+    public const string RulesVersion = "2026-10-07.1";
+
     /// <summary>Scans a source. When <paramref name="changedPaths"/> is given (webhook), only decks touching those paths are rebuilt.</summary>
     public async Task<SyncResult> SyncAsync(Source source, IReadOnlyCollection<string>? changedPaths = null, bool forceRebuild = false, string? triggeredBy = null, CancellationToken ct = default)
     {

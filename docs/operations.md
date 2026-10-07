@@ -249,11 +249,23 @@ is pinned to a commit SHA (Dependabot bumps the pins).
 - Builds run `Builder:MaxConcurrentBuilds` (3) at a time; the rest wait and start as slots free up. Raise it for large
   installations; each build is one job execution (2 vCPU / 4 GiB).
 
-## Builder image updates
+## Builder image updates and per-kind rebuilds
 
 The builder image is identified by the git tree hash of `builder/`. A deploy whose `builder/` is unchanged reuses the
-existing image, so web-only deploys do not rebuild decks. When the image does change, every deck is rebuilt (bounded by
-the concurrency limit) on the next hourly check or app start; failures are listed on each deck's page.
+existing image, so web-only deploys do not rebuild decks. Which decks a builder change rebuilds is decided per kind:
+`builder/fingerprint.mjs` lists the files that build each kind (common: orchestrator, `lib/shared.mjs`, annotations,
+sheet, package files, Dockerfile, entrypoint; Slidev: `kinds/slidev.mjs`, `notes.mjs`, `thumb.mjs`, `addon/`;
+presenterm: `kinds/presenterm.mjs`, `lib/images.mjs`, `thumb.mjs`; PowerPoint/PDF: `kinds/files.mjs`, `lib/docdates.mjs`,
+`lib/zip.mjs`; static: `kinds/static.mjs`, `thumb.mjs`) and hashes them. `deploy.yml` puts the result on the builder job
+as `PODIUM_BUILDER_FINGERPRINTS=slidev=...,presenterm=...`; the web app reads it from the job template, stamps every
+build with the version of its kind (`slidev=1d6a...`) and rebuilds a deck on the hourly check (or at start) only when
+that version changed. A builder without the variable falls back to the image reference for every kind. The unit test
+in `builder/tests/fingerprint.test.mjs` fails when a kind module imports a file its fingerprint does not cover.
+
+Sync rules (how deck records are derived from a repository: titles, tags, talk membership, variants) are versioned
+by `DeckSyncService.RulesVersion`; a deploy that bumps it re-syncs every source once at start (`sync:rules-version`
+in the settings table), so existing records follow the new rule without a push. Bump it whenever a derivation rule
+changes.
 
 ## GitHub check runs
 

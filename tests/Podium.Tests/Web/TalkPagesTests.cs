@@ -131,6 +131,34 @@ public sealed class CfpPackTests
     }
 }
 
+public sealed class SyncRulesUpgradeTests
+{
+    [Fact]
+    public async Task A_new_rules_version_resyncs_every_source_once()
+    {
+        var settings = new Podium.Core.InMemory.InMemorySettingsStore();
+        var sources = new Podium.Core.InMemory.InMemorySourceStore();
+        await sources.UpsertAsync(new Source { Id = "o/a", Owner = "o", Repo = "a", Trusted = true });
+        await sources.UpsertAsync(new Source { Id = "o/b", Owner = "o", Repo = "b" });
+        var jobs = new List<Podium.Web.GitHub.SyncJob>();
+        bool Enqueue(Podium.Web.GitHub.SyncJob j) { jobs.Add(j); return true; }
+
+        Assert.Equal(2, await Podium.Web.Builds.MaintenanceService.ResyncAfterRulesChangeAsync(settings, sources, Enqueue, CancellationToken.None));
+        Assert.Equal(["o/a", "o/b"], jobs.Select(j => j.SourceId));
+        Assert.All(jobs, j => { Assert.False(j.Force); Assert.Null(j.ChangedPaths); Assert.Equal("rules-upgrade", j.TriggeredBy); });
+        Assert.Equal(Podium.Core.Services.DeckSyncService.RulesVersion, await settings.GetAsync("sync:rules-version"));
+
+        // Same version on the next start: nothing happens.
+        jobs.Clear();
+        Assert.Equal(0, await Podium.Web.Builds.MaintenanceService.ResyncAfterRulesChangeAsync(settings, sources, Enqueue, CancellationToken.None));
+        Assert.Empty(jobs);
+
+        // An older recorded version (a previous deploy) triggers the re-sync again.
+        await settings.SetAsync("sync:rules-version", "2020-01-01.0");
+        Assert.Equal(2, await Podium.Web.Builds.MaintenanceService.ResyncAfterRulesChangeAsync(settings, sources, Enqueue, CancellationToken.None));
+    }
+}
+
 [Collection(nameof(WebCollection))]
 public sealed class TalkPagesTests(PodiumWebFactory app)
 {

@@ -47,6 +47,17 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
             await scope.ServiceProvider.GetRequiredService<InstallationDiscovery>().DiscoverAsync(ct);
         }, stoppingToken);
 
+        // Sync rules that derive deck records from the repository (titles, tags, talk membership...) change with
+        // Podium itself, not with the repository. After a deploy that bumps the rules version, every source is synced
+        // once at the current commit so existing records pick the new rules up without waiting for a push or a poll.
+        // The diff is empty, so nothing is rebuilt.
+        await RunSafely("sync rules", async ct =>
+        {
+            using var scope = scopes.CreateScope();
+            var queued = await ResyncAfterRulesChangeAsync(scope.ServiceProvider.GetRequiredService<ISettingsStore>(), scope.ServiceProvider.GetRequiredService<ISourceStore>(), queue.TryEnqueue, ct);
+            if (queued > 0) log.LogInformation("Sync rules {Version}: queued a re-sync of {Count} source(s)", Podium.Core.Services.DeckSyncService.RulesVersion, queued);
+        }, stoppingToken);
+
         var lastUpgradeCheck = DateTimeOffset.MinValue;
         var lastRetentionSweep = DateTimeOffset.MinValue;
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
@@ -140,5 +151,20 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
         try { await action(ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) { log.LogError(ex, "Maintenance task {Task} failed", name); }
+    }
+
+    /// <summary>
+    /// Queues one sync per source when the deployed sync rules differ from the version recorded in settings, and
+    /// records the deployed version. Returns how many syncs were queued (0 when the rules are unchanged).
+    /// </summary>
+    public static async Task<int> ResyncAfterRulesChangeAsync(ISettingsStore settings, ISourceStore sources, Func<SyncJob, bool> enqueue, CancellationToken ct)
+    {
+        const string key = "sync:rules-version";
+        if (await settings.GetAsync(key, ct) == Podium.Core.Services.DeckSyncService.RulesVersion) return 0;
+        var all = await sources.ListAsync(ct);
+        var queued = 0;
+        foreach (var s in all) if (enqueue(new SyncJob(s.Id, null, false, "rules-upgrade"))) queued++;
+        await settings.SetAsync(key, Podium.Core.Services.DeckSyncService.RulesVersion, ct);
+        return queued;
     }
 }
