@@ -1,0 +1,56 @@
+@model Podium.Web.Pages.TalkGroup
+@using Podium.Web.Security
+@{
+    var t = Model.Talk;
+    var main = Model.Main;
+    var thumb = Model.Thumbnail;
+    var given = Model.LastGiven;
+    string StatusLabel(string s) => s switch { "draft" => "Draft", "retired" => "Retired", _ => "Available" };
+}
+<article class="card talk-pool-card" data-talk-card
+         data-slug="talk:@t.Id" data-search="@Model.SearchText" data-kind="@Model.Kinds" data-kind-label="Talk" data-vis="@Model.Visibilities" data-vis-label="@(Model.Variants.Count == 1 ? Model.Variants[0].VisibilityLabel : "Mixed")" data-status="@Model.StatusKey"
+         data-repo="@Model.RepoLabel" data-tags="@string.Join(" ", Model.Tags)" data-title="@t.Title.ToLowerInvariant()" data-updated="@Model.Saved.UtcDateTime.ToString("o")" data-viewed="@(Model.LastViewed?.UtcDateTime.ToString("o"))" data-year="@Model.Saved.Year"
+         data-talk="@t.Title" data-talk-id="@t.Id" data-talk-status="@Model.TalkStatusLabel" data-section="@Model.Section"
+         data-saved="@Model.Saved.UtcDateTime.ToString("o")" data-created="@Model.Created.UtcDateTime.ToString("o")" data-committed="@Model.Committed.UtcDateTime.ToString("o")" data-given="@(given?.Date?.ToString("yyyy-MM-dd"))" data-year-given="@(given?.Date?.Year)" data-year-created="@Model.Created.Year">
+    <a class="card-thumb kind-talk" href="/talks/@t.Id" tabindex="-1" aria-hidden="true">
+        @if (thumb is not null)
+        {
+            <img src="@thumb.ThumbnailUrl" alt="" loading="lazy" decoding="async" width="320" height="180" />
+        }
+        else
+        {
+            <span class="thumb-placeholder">@(t.Title.Length > 0 ? t.Title[..1].ToUpperInvariant() : "T")</span>
+        }
+        @if (Model.Variants.Count > 1) { <span class="thumb-badge talk-count" title="@Model.Variants.Count decks are variants of this talk">@Model.Variants.Count decks</span> }
+    </a>
+    <div class="card-body">
+        <div class="card-text">
+            <div class="card-title"><a href="/talks/@t.Id">@t.Title</a></div>
+            <div class="card-sub talk-short" title="@Markdown.ToText(t.ShortAbstract)">@Markdown.ToText(t.ShortAbstract)</div>
+        </div>
+        <div class="card-meta">
+            <span class="badge badge-status-@t.Status kind">@StatusLabel(t.Status)</span>
+            @if (t.Level is not null) { <span class="badge vis">@char.ToUpperInvariant(t.Level[0])@t.Level[1..]</span> }
+            @if (t.Public) { <span class="badge" title="Listed on your public talks page">Public</span> }
+            <span class="status" title="@(given is not null ? $"Last given at {given.Event}" : "Not given yet")"><span class="dot @(Model.StatusKey == "failed" ? "dot-bad" : Model.StatusKey == "building" ? "dot-busy" : "dot-ok")"></span> <span class="status-long">@(given is not null ? $"{given.Event} · {given.DateLabel(compact: true)}" : "Not given yet")</span><span class="status-short">@(given?.DateLabel(compact: true) ?? "—")</span></span>
+            <span class="faint updated" title="Newest variant saved"><span class="sep">· </span>saved <time datetime="@Model.Saved.UtcDateTime.ToString("o")">@Model.Saved.ToString("yyyy-MM-dd")</time></span>
+        </div>
+        @if (Model.Tags.Count > 0)
+        {
+            <div class="card-tags">@foreach (var tag in Model.Tags.Take(6)) { <button type="button" class="tag" data-tag="@tag">#@tag</button> }</div>
+        }
+        <div class="card-variants">
+            @foreach (var v in Model.Variants.Take(8))
+            {
+                <a class="chip chip-variant" href="/decks/@v.Deck.Slug" title="@v.Deck.Title · @v.KindLabel · @(v.SavedFromDocument ? "saved" : "updated") @v.Saved.ToString("yyyy-MM-dd")"><span class="badge badge-kind-@v.KindCss">@v.KindLabel</span> @(v.VariantLabel ?? v.Deck.Title)</a>
+            }
+            @if (Model.Variants.Count > 8) { <a class="chip chip-soft" href="/talks/@t.Id">+@(Model.Variants.Count - 8) more</a> }
+        </div>
+        <div class="card-actions">
+            @if (main is { Servable: true }) { <a class="btn btn-primary btn-sm act-primary" href="/d/@main.Deck.Slug/" target="_blank" rel="noopener" data-present>@(main.Deck.Kind is DeckKind.PowerPoint or DeckKind.Pdf ? "Open" : "Present")</a> }
+            <a class="btn btn-sm" href="/talks/@t.Id">Talk</a>
+            @if (main is not null) { <a class="btn btn-sm act-remote" href="/d/@main.Deck.Slug/remote" title="Phone remote for the main deck" aria-disabled="@(main.Servable ? null : "true")">Remote</a> }
+            <a class="btn btn-sm btn-ghost" href="/talks/@t.Id/cfp.md" title="CfP pack as Markdown">CfP</a>
+        </div>
+    </div>
+</article>

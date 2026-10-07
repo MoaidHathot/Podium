@@ -18,6 +18,8 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
     public bool AnyBuilding { get; private set; }
     public bool HasSources { get; private set; }
     public bool HasTalks { get; private set; }
+    /// <summary>The talks the decks belong to, each with its variants, for the one-card-per-talk density.</summary>
+    public IReadOnlyList<TalkGroup> TalkGroups { get; private set; } = [];
     /// <summary>Set when /remote found nothing to open (no live session, nothing presented yet).</summary>
     [Microsoft.AspNetCore.Mvc.BindProperty(SupportsGet = true)] public string? Remote { get; set; }
 
@@ -53,6 +55,11 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
         var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null) { Talk = TalkOf(d) }).ToList();
         Decks = rows.OrderByDescending(r => r.Saved).ToList();
         Pinned = Decks.Where(r => r.Deck.Pinned).ToList();
+        // One card per talk for the Talks density: the talk, its variants (as rows) and the facets of the newest variant.
+        TalkGroups = Decks.Where(r => r.Talk is not null).GroupBy(r => r.Talk!.Id, StringComparer.Ordinal)
+            .Select(g => new TalkGroup(g.First().Talk!, g.OrderByDescending(r => r.Saved).ToList()))
+            .OrderByDescending(g => g.Saved)
+            .ToList();
         // A dismissed deck stays hidden from the shelf until it is presented again (a view newer than the dismissal).
         RecentlyViewed = rows
             .Where(r => r.LastViewed is { } seen && (!dismissed.TryGetValue(r.Deck.Slug, out var gone) || seen > gone))
@@ -61,6 +68,28 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
             .ToList();
         AnyBuilding = all.Any(d => d.LatestBuildStatus is BuildStatus.Queued or BuildStatus.Running);
     }
+}
+
+/// <summary>A talk and its variant decks as shown by the library's Talks density (one card per talk).</summary>
+public sealed record TalkGroup(Talk Talk, IReadOnlyList<DeckRow> Variants)
+{
+    /// <summary>The variant the card's thumbnail and Present button use: the talk's first member when it is built, else the newest built one.</summary>
+    public DeckRow? Main => Variants.FirstOrDefault(v => v.Deck.Slug == Talk.DeckSlugs.FirstOrDefault() && v.Servable) ?? Variants.FirstOrDefault(v => v.Servable) ?? Variants.FirstOrDefault();
+    public DeckRow? Thumbnail => Variants.FirstOrDefault(v => v.Deck.Slug == Talk.DeckSlugs.FirstOrDefault() && v.HasThumbnail) ?? Variants.FirstOrDefault(v => v.HasThumbnail);
+    public DateTimeOffset Saved => Variants.Max(v => v.Saved);
+    public DateTimeOffset Created => Variants.Min(v => v.Created);
+    public DateTimeOffset Committed => Variants.Max(v => v.Committed);
+    public DateTimeOffset? LastViewed => Variants.Select(v => v.LastViewed).Where(d => d is not null).DefaultIfEmpty(null).Max();
+    public Submission? LastGiven => Talk.Submissions.Where(s => s.Date is not null && s.Status is "delivered" or "accepted").OrderByDescending(s => s.Date).FirstOrDefault();
+    public string RepoLabel => Variants[0].RepoLabel;
+    public string Section => Variants.Select(v => v.Section).Distinct().Count() == 1 ? Variants[0].Section : Talk.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "(root)";
+    public string StatusKey => Variants.Any(v => v.StatusKey == "failed") ? "failed" : Variants.Any(v => v.StatusKey == "building") ? "building" : "ok";
+    public string TalkStatusLabel => Talk.Status switch { "draft" => "Draft talk", "retired" => "Retired talk", _ => "Available talk" };
+    public IReadOnlyList<string> Tags => Talk.Tags.Count > 0 ? Talk.Tags : Variants.SelectMany(v => v.Deck.Tags).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    /// <summary>Facet values matched by the library filters: a talk matches when any variant does.</summary>
+    public string Kinds => string.Join(' ', Variants.Select(v => v.KindCss).Distinct());
+    public string Visibilities => string.Join(' ', Variants.Select(v => v.Deck.Visibility.ToString().ToLowerInvariant()).Distinct());
+    public string SearchText => string.Join(' ', [Talk.Title, Talk.LocalId, Podium.Web.Security.Markdown.ToText(Talk.ShortAbstract), string.Join(' ', Tags), .. Variants.Select(v => v.SearchText)]).ToLowerInvariant();
 }
 
 public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastViewed)

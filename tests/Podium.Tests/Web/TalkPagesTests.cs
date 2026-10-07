@@ -207,6 +207,12 @@ public sealed class TalkPagesTests(PodiumWebFactory app)
         Assert.DoesNotContain(priv.Title, pageHtml);
         Assert.DoesNotContain("New talk", pageHtml);
         Assert.Contains("og:title", pageHtml);
+        // Razor that fell out of a code block would render as text; neither page may show any.
+        Assert.DoesNotMatch(@"(^|\n)\s*(else|\}|@if)\b", pageHtml.Replace("<", "\n<"));
+        Assert.DoesNotMatch(@"(^|\n)\s*(else|\}|@if)\b", html.Replace("<", "\n<"));
+        Assert.Contains("id=\"talk-group\"", html);       // catalog controls for the owner
+        Assert.Contains("value=\"status\"", html);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(pageHtml, "id=\"talk-search\"")); // one search box on the public page with several talks
 
         var publicDetail = await anon.SendAsync(PodiumWebFactory.Navigation($"/talks/{pub.Id}"));
         Assert.Equal(HttpStatusCode.OK, publicDetail.StatusCode);

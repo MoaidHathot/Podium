@@ -162,6 +162,11 @@ else
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg><span class="sr-only">Grid</span></label>
             <input type="radio" name="density" id="density-list" value="list" /><label for="density-list" title="Compact list">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3" y="4" width="18" height="3" rx="1.5"/><rect x="3" y="10.5" width="18" height="3" rx="1.5"/><rect x="3" y="17" width="18" height="3" rx="1.5"/></svg><span class="sr-only">List</span></label>
+            @if (Model.HasTalks)
+            {
+                <input type="radio" name="density" id="density-talks" value="talks" /><label for="density-talks" title="One card per talk (variants listed inside)">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="14" height="12" rx="2"/><path d="M7 21h12a2 2 0 0 0 2-2V9"/></svg><span class="sr-only">Talks</span></label>
+            }
         </div>
     </div>
 
@@ -225,6 +230,7 @@ else
             <div class="section-head"><h2>All decks</h2><span class="faint count"></span></div>
             <div class="grid cards-grid" id="pool">
                 @foreach (var r in Model.Decks) { <partial name="_DeckCard" model="r" /> }
+                @foreach (var g in Model.TalkGroups) { <partial name="_TalkCard" model="g" /> }
             </div>
         </section>
     </div>
@@ -289,7 +295,10 @@ else
   const shelves = [...document.querySelectorAll('section.shelf, section#archived')];
   const noResults = document.getElementById('no-results');
   // The pool cards are the canonical nodes; grouping moves them between sections.
-  const cards = [...document.querySelectorAll('#pool > .card')];
+  const poolCards = [...document.querySelectorAll('#pool > .card')];
+  // In the Talks density a talk is one card and its variants are listed inside it; decks without a talk keep their card.
+  const inDensity = (c) => state.density === 'talks' ? (c.hasAttribute('data-talk-card') || !c.dataset.talkId) : !c.hasAttribute('data-talk-card');
+  let cards = poolCards;
 
   const KEY = 'podium.library.v1';
   const state = Object.assign({ group: 'repo', sort: 'saved', dir: 'desc', density: 'grid', collapsed: {}, kind: null, vis: null, status: null, tag: null }, load());
@@ -344,8 +353,8 @@ else
   function matches(c) {
     const q = search.value.trim().toLowerCase();
     return (!q || c.dataset.search.includes(q))
-      && (!state.kind || c.dataset.kind === state.kind)
-      && (!state.vis || c.dataset.vis === state.vis)
+      && (!state.kind || c.dataset.kind.split(' ').includes(state.kind))
+      && (!state.vis || c.dataset.vis.split(' ').includes(state.vis))
       && (!state.status || c.dataset.status === state.status)
       && (!state.tag || (c.dataset.tags || '').split(' ').includes(state.tag));
   }
@@ -403,6 +412,8 @@ else
     clearBtn.classList.toggle('hidden', !filtering);
     document.body.dataset.group = state.group;
     document.body.dataset.density = state.density;
+    // Cards of the other density simply stay detached: the group render below re-appends only what it shows.
+    cards = poolCards.filter(inDensity);
 
     const visible = cards.filter(matches).sort(sorter());
     const groups = new Map();
@@ -430,7 +441,9 @@ else
       const btn = document.createElement('button'); btn.className = 'group-toggle'; btn.type = 'button'; btn.setAttribute('aria-expanded', String(!collapsed));
       btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2></h2>`;
       btn.querySelector('h2').textContent = key;
-      const count = document.createElement('span'); count.className = 'faint count'; count.textContent = `${groups.get(key).length} deck${groups.get(key).length === 1 ? '' : 's'}`;
+      const n = groups.get(key).length, talks = groups.get(key).filter((c) => c.hasAttribute('data-talk-card')).length;
+      const count = document.createElement('span'); count.className = 'faint count';
+      count.textContent = talks === n ? `${n} talk${n === 1 ? '' : 's'}` : talks > 0 ? `${talks} talk${talks === 1 ? '' : 's'}, ${n - talks} deck${n - talks === 1 ? '' : 's'}` : `${n} deck${n === 1 ? '' : 's'}`;
       btn.addEventListener('click', () => { state.collapsed[state.group + ':' + key] = !state.collapsed[state.group + ':' + key]; save(); render(); });
       head.append(btn, count);
       const grid = document.createElement('div'); grid.className = 'grid cards-grid';
@@ -468,8 +481,9 @@ else
   const selected = new Set();
   let lastSelected = null;
   const bulkbar = document.getElementById('bulkbar');
-  // Shelves render their own copies of a deck's card; selection is by slug so every copy reflects it.
-  const allCards = [...document.querySelectorAll('.card[data-slug]')];
+  // Shelves render their own copies of a deck's card; selection is by slug so every copy reflects it. Talk cards are
+  // not decks (nothing to patch in bulk) and stay out of the selection.
+  const allCards = [...document.querySelectorAll('.card[data-slug]:not([data-talk-card])')];
   for (const c of allCards) {
     c.tabIndex = 0;
     const box = document.createElement('button');

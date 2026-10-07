@@ -41,6 +41,17 @@
         @if (Model.GalleryEnabled) { <a class="btn" href="/gallery" style="align-self:flex-start">All public decks</a> }
     </section>
     <h2 style="margin:1.5rem 0 .6rem">Talks</h2>
+    @if (Model.Talks.Count > 1)
+    {
+        <div class="toolbar" role="toolbar" aria-label="Catalog controls" style="margin-bottom:1rem">
+            <div class="search-wrap">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input class="input" id="talk-search" type="search" placeholder="Search talks…" autocomplete="off" aria-label="Search talks" />
+                <kbd>/</kbd>
+            </div>
+            <partial name="_TalkControls" model="Model.IsOwner" />
+        </div>
+    }
 }
 else
 {
@@ -82,8 +93,13 @@ else
         </form>
     </dialog>
 
-    <div class="toolbar" style="margin-bottom:1rem">
-        <input class="input" id="talk-search" type="search" placeholder="Search title, abstract, event, tag…" aria-label="Search talks" style="max-width:26rem" />
+    <div class="toolbar" role="toolbar" aria-label="Catalog controls" style="margin-bottom:1rem">
+        <div class="search-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input class="input" id="talk-search" type="search" placeholder="Search title, abstract, event, tag…" autocomplete="off" aria-label="Search talks" />
+            <kbd>/</kbd>
+        </div>
+        <partial name="_TalkControls" model="Model.IsOwner" />
         <div class="row" style="gap:.4rem; flex-wrap:wrap">
             <a class="chip @(Model.Status is null ? "active" : "")" href="/talks@(Model.Tag is not null ? $"?tag={Uri.EscapeDataString(Model.Tag)}" : "")">All</a>
             @foreach (var (value, label) in statuses)
@@ -118,11 +134,14 @@ else
 }
 else
 {
-    <div class="talk-list" id="talk-list">
+    <div class="talk-list" id="talk-list" aria-live="polite">
     @foreach (var v in Model.Talks)
     {
         var t = v.Talk;
-        <article class="talk-card status-@t.Status" data-search="@v.SearchText" data-status="@t.Status">
+        <article class="talk-card status-@t.Status" data-search="@v.SearchText" data-status="@t.Status" data-status-label="@StatusLabel(t.Status)"
+                 data-title="@t.Title.ToLowerInvariant()" data-level="@(t.Level is null ? "" : char.ToUpperInvariant(t.Level[0]) + t.Level[1..])" data-active="@v.LastActivity.UtcDateTime.ToString("o")"
+                 data-given="@(v.LastDelivered?.Date?.ToString("yyyy-MM-dd"))" data-year-given="@(v.LastDelivered?.Date?.Year)" data-next="@(v.NextUp?.Date?.ToString("yyyy-MM-dd"))"
+                 data-decks="@v.Decks.Count" data-events="@v.Submissions.Count" data-kind="@(t.Durations.Any(d => d >= 120) || v.Submissions.Any(s => s.Format is "course" or "workshop") ? "Courses and workshops" : "Talks")">
             @if (v.Thumbnail is { } th)
             {
                 <a class="talk-thumb" href="/talks/@t.Id" tabindex="-1" aria-hidden="true"><img src="/d/@(th.Slug).jpg?v=@th.CurrentBuildId" alt="" loading="lazy" decoding="async" width="320" height="180" /></a>
@@ -171,17 +190,90 @@ else
 <script nonce="@Csp.Nonce(HttpContext)">
 (function () {
   const search = document.getElementById('talk-search');
-  if (search) {
-    const cards = [...document.querySelectorAll('.talk-card')];
+  const list = document.getElementById('talk-list');
+  if (search && list) {
+    const cards = [...list.querySelectorAll('.talk-card')];
     const none = document.getElementById('talk-none');
-    const apply = () => {
-      const q = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      let shown = 0;
-      for (const c of cards) { const ok = q.every((w) => c.dataset.search.includes(w)); c.hidden = !ok; if (ok) shown++; }
-      none.classList.toggle('hidden', shown > 0 || cards.length === 0);
+    const groupSel = document.getElementById('talk-group'), sortSel = document.getElementById('talk-sort'), dirBtn = document.getElementById('talk-dir');
+    const KEY = 'podium.talks.v1';
+    const state = Object.assign({ group: 'none', sort: 'active', dir: 'desc', collapsed: {} }, (() => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } })());
+    const save = () => localStorage.setItem(KEY, JSON.stringify({ group: state.group, sort: state.sort, dir: state.dir, collapsed: state.collapsed }));
+    if (groupSel && ![...groupSel.options].some((o) => o.value === state.group)) state.group = 'none';
+    if (sortSel && ![...sortSel.options].some((o) => o.value === state.sort)) state.sort = 'active';
+    if (groupSel) groupSel.value = state.group;
+    if (sortSel) sortSel.value = state.sort;
+
+    const labels = {
+      status: (c) => c.dataset.statusLabel,
+      kind: (c) => c.dataset.kind,
+      level: (c) => c.dataset.level || 'No level',
+      yeargiven: (c) => c.dataset.yearGiven || 'Not given yet',
     };
-    search.addEventListener('input', apply);
+    const byDate = (key) => (a, b) => (b.dataset[key] || '').localeCompare(a.dataset[key] || '');
+    const byNumber = (key) => (a, b) => Number(b.dataset[key] || 0) - Number(a.dataset[key] || 0);
+    const sorters = {
+      active: byDate('active'),
+      given: (a, b) => byDate('given')(a, b) || byDate('active')(a, b),
+      // Soonest upcoming event first; talks without one sink to the bottom whatever the direction.
+      next: (a, b) => (!!b.dataset.next - !!a.dataset.next) || (a.dataset.next || '').localeCompare(b.dataset.next || '') || byDate('active')(a, b),
+      title: (a, b) => a.dataset.title.localeCompare(b.dataset.title),
+      decks: (a, b) => byNumber('decks')(a, b) || byDate('active')(a, b),
+      events: (a, b) => byNumber('events')(a, b) || byDate('active')(a, b),
+    };
+    const sorter = () => {
+      const base = sorters[state.sort] || sorters.active;
+      if (state.dir !== 'asc') return base;
+      if (state.sort === 'next') return (a, b) => (!!b.dataset.next - !!a.dataset.next) || -((a.dataset.next || '').localeCompare(b.dataset.next || ''));
+      return (a, b) => -base(a, b);
+    };
+    const paintDir = () => {
+      if (!dirBtn) return;
+      const desc = state.dir !== 'asc';
+      dirBtn.setAttribute('aria-pressed', String(!desc));
+      dirBtn.classList.toggle('flipped', !desc);
+      const kind = state.sort === 'title' ? ['A to Z', 'Z to A'] : state.sort === 'decks' || state.sort === 'events' ? ['Most first', 'Fewest first'] : state.sort === 'next' ? ['Soonest first', 'Latest first'] : ['Newest first', 'Oldest first'];
+      dirBtn.title = desc ? `${kind[0]}; click for ${kind[1].toLowerCase()}` : `${kind[1]}; click for ${kind[0].toLowerCase()}`;
+    };
+
+    function render() {
+      const q = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const visible = cards.filter((c) => q.every((w) => c.dataset.search.includes(w))).sort(sorter());
+      const groups = new Map();
+      for (const c of visible) {
+        const key = state.group === 'none' ? '' : (labels[state.group]?.(c) || 'Other');
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(c);
+      }
+      const order = [...groups.keys()];
+      if (state.group === 'yeargiven') { const isYear = (k) => /^\d{4}$/.test(k); order.sort((a, b) => (isYear(b) - isYear(a)) || (state.dir === 'asc' ? a.localeCompare(b) : b.localeCompare(a))); }
+      if (state.group === 'status') { const rank = { Available: 0, Draft: 1, Retired: 2 }; order.sort((a, b) => (rank[a] ?? 9) - (rank[b] ?? 9)); }
+      if (state.group === 'level') { const rank = { Beginner: 0, Intermediate: 1, Advanced: 2 }; order.sort((a, b) => (rank[a] ?? 9) - (rank[b] ?? 9)); }
+      list.replaceChildren();
+      for (const key of order) {
+        const items = groups.get(key);
+        if (key === '') { list.append(...items); continue; }
+        const collapsed = !!state.collapsed[state.group + ':' + key] && q.length === 0;
+        const sec = document.createElement('section'); sec.className = 'section group talk-group' + (collapsed ? ' collapsed' : ''); sec.dataset.groupKey = key;
+        const head = document.createElement('div'); head.className = 'section-head';
+        const btn = document.createElement('button'); btn.className = 'group-toggle'; btn.type = 'button'; btn.setAttribute('aria-expanded', String(!collapsed));
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2></h2>';
+        btn.querySelector('h2').textContent = key;
+        const count = document.createElement('span'); count.className = 'faint count'; count.textContent = `${items.length} talk${items.length === 1 ? '' : 's'}`;
+        btn.addEventListener('click', () => { state.collapsed[state.group + ':' + key] = !state.collapsed[state.group + ':' + key]; save(); render(); });
+        head.append(btn, count);
+        const body = document.createElement('div'); body.className = 'talk-list'; body.append(...items);
+        sec.append(head, body); list.append(sec);
+      }
+      for (const c of cards) c.hidden = !visible.includes(c);
+      none.classList.toggle('hidden', visible.length > 0 || cards.length === 0);
+      paintDir();
+    }
+    search.addEventListener('input', render);
+    groupSel?.addEventListener('change', () => { state.group = groupSel.value; save(); render(); });
+    sortSel?.addEventListener('change', () => { state.sort = sortSel.value; save(); render(); });
+    dirBtn?.addEventListener('click', () => { state.dir = state.dir === 'asc' ? 'desc' : 'asc'; save(); render(); });
     document.addEventListener('keydown', (e) => { if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) { e.preventDefault(); search.focus(); } });
+    render();
   }
   const dlg = document.getElementById('new-talk-dialog');
   document.getElementById('new-talk')?.addEventListener('click', () => dlg.showModal());

@@ -64,11 +64,29 @@ try {
   await op.selectOption('#group', 'year'); await op.waitForTimeout(200);
   check('library groups by year saved', (await op.locator('#groups section.group[data-group-key="2025"] .card').count()) === 1 && (await op.locator('#groups section.group[data-group-key="2024"] .card').count()) === 1);
   await op.selectOption('#group', 'repo');
+  // Talks density: one card per talk with its variants inside; filters match any variant; decks without a talk keep their card.
+  await op.click('label[for="density-talks"]'); await op.waitForTimeout(250);
+  check('talks density shows one card for the fixture talk', (await op.locator('#groups .card[data-talk-card][data-talk-id="fixture-slides-fixture"]').count()) === 1 && (await op.locator('#groups .card[data-slug="fixture-deck"]').count()) === 0);
+  check('talk card lists both variants', (await op.locator('#groups .card[data-talk-card] .chip-variant').count()) === 2);
+  check('talk card has no bulk select box', (await op.locator('#groups .card[data-talk-card] .select-box').count()) === 0);
+  await op.click('#filters .chip[data-filter="kind"][data-value="pdf"]'); await op.waitForTimeout(200);
+  check('kind filter matches the talk through its variants', (await op.locator('#groups .card[data-talk-card]').count()) === 1);
+  await op.click('#filters .chip[data-filter="kind"][data-value="pdf"]');
+  await op.click('label[for="density-grid"]'); await op.waitForTimeout(250);
+  check('grid density shows the deck cards again', (await op.locator('#groups .card[data-slug="fixture-deck"]').count()) === 1 && (await op.locator('#groups .card[data-talk-card]').count()) === 0);
 
   // Talks: owner catalog, detail with CfP pack, compare view, and the public speaker page.
   await op.goto(`${base}/talks`, { waitUntil: 'networkidle' });
   check('talks catalog lists the fixture talk', (await op.locator('.talk-card .talk-title a[href="/talks/fixture-slides-fixture"]').count()) === 1);
   check('talks catalog shows next event', /Workshop Days/.test(await op.locator('.talk-card .talk-foot').innerText()));
+  // Catalog controls: grouping renders headers, sorting flips with the direction button, choices are remembered.
+  await op.selectOption('#talk-group', 'level'); await op.waitForTimeout(150);
+  check('talks catalog groups by level', (await op.locator('#talk-list section.talk-group[data-group-key="Intermediate"] .talk-card').count()) === 1);
+  await op.selectOption('#talk-group', 'none'); await op.selectOption('#talk-sort', 'title'); await op.click('#talk-dir'); await op.waitForTimeout(150);
+  check('talks catalog direction toggle is pressed', (await op.getAttribute('#talk-dir', 'aria-pressed')) === 'true' && /Z to A/.test(await op.getAttribute('#talk-dir', 'title')));
+  await op.reload({ waitUntil: 'networkidle' });
+  check('talks catalog remembers sort and direction', (await op.inputValue('#talk-sort')) === 'title' && (await op.getAttribute('#talk-dir', 'aria-pressed')) === 'true');
+  await op.click('#talk-dir'); await op.selectOption('#talk-sort', 'active');
   await op.fill('#talk-search', 'nothing-matches-this'); await op.waitForTimeout(100);
   check('talks search hides non-matching talks', (await op.locator('.talk-card:not([hidden])').count()) === 0 && !(await op.locator('#talk-none').isHidden()));
   await op.fill('#talk-search', '');
