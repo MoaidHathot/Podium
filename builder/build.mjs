@@ -207,16 +207,17 @@ async function checkout(repoDir) {
     : ['sparse-checkout', 'set', '--cone', deckPath];
   for (let attempt = 1; ; attempt++) {
     // A killed fetch leaves lock files behind (shallow.lock, FETCH_HEAD.lock): every attempt starts from a fresh repo.
-    if (attempt > 1) { rmSync(repoDir, { recursive: true, force: true }); mkdirForDeck(repoDir); }
+    // GitHub hiccups tend to last a minute or two, so later attempts wait before trying again.
+    if (attempt > 1) { await new Promise((r) => setTimeout(r, Math.min(remainingMs() / 4, attempt === 2 ? 20_000 : 60_000))); rmSync(repoDir, { recursive: true, force: true }); mkdirForDeck(repoDir); }
     await run('git', ['init', '-q'], { cwd: repoDir, echo: attempt === 1 });
     await run('git', ['remote', 'add', 'origin', cleanUrl], { cwd: repoDir, echo: attempt === 1 });
     if (sparse) await run('git', sparseArgs, { cwd: repoDir, echo: attempt === 1 });
     log(`$ git fetch --depth 1${sparse ? ' --filter=blob:none' : ''} origin ${sha.slice(0, 7)}${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
     const r = await run('git', fetchArgs, { cwd: repoDir, echo: false, allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { GCM_INTERACTIVE: 'never' } });
-    if (r.code !== 0) { if (attempt >= 2) throw new Error(`git fetch failed (exit ${r.code})`); continue; }
+    if (r.code !== 0) { if (attempt >= 3) throw new Error(`git fetch failed (exit ${r.code})`); continue; }
     const c = await run('git', [...gitTransfer, 'checkout', '-q', 'FETCH_HEAD'], { cwd: repoDir, echo: false, allowFail: true, timeoutMs: Math.min(remainingMs(), 4 * 60 * 1000), envExtra: { GCM_INTERACTIVE: 'never' } });
     if (c.code === 0) break;
-    if (attempt >= 2) throw new Error(`git checkout failed (exit ${c.code})`);
+    if (attempt >= 3) throw new Error(`git checkout failed (exit ${c.code})`);
   }
   // Deck code runs during the build; make sure nothing sensitive is on disk when it does.
   rmSync(join(repoDir, '.git'), { recursive: true, force: true });
