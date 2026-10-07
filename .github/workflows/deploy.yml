@@ -42,6 +42,7 @@ jobs:
     outputs:
       web_digest: ${{ steps.web.outputs.digest }}
       builder_digest: ${{ steps.reuse.outputs.digest || steps.builder.outputs.digest }}
+      builder_fingerprints: ${{ steps.fingerprints.outputs.env }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -73,6 +74,17 @@ jobs:
       - name: Builder tree hash
         id: tree
         run: echo "sha=$(git rev-parse HEAD:builder)" >> "$GITHUB_OUTPUT"
+      # Per-kind fingerprints (builder/fingerprint.mjs): the web app rebuilds a deck only when the files that build
+      # its kind changed, so a Slidev addon tweak no longer rebuilds every PowerPoint deck. Published on the job below.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Builder fingerprints
+        id: fingerprints
+        run: |
+          FP=$(node builder/fingerprint.mjs --env)
+          echo "$FP"
+          echo "env=$FP" >> "$GITHUB_OUTPUT"
       - name: Reuse builder image when builder/ is unchanged
         id: reuse
         run: |
@@ -143,7 +155,7 @@ jobs:
           WEB="${WEB_IMAGE,,}@${{ needs.images.outputs.web_digest }}"
           BUILDER="${BUILDER_IMAGE,,}@${{ needs.images.outputs.builder_digest }}"
           if az containerapp job show -g "$RG" -n podium-builder -o none 2>/dev/null; then
-            az containerapp job update -g "$RG" -n podium-builder --image "$BUILDER" -o none && echo "builder: $BUILDER"
+            az containerapp job update -g "$RG" -n podium-builder --image "$BUILDER" --set-env-vars "PODIUM_BUILDER_FINGERPRINTS=${{ needs.images.outputs.builder_fingerprints }}" -o none && echo "builder: $BUILDER (${{ needs.images.outputs.builder_fingerprints }})"
           else
             echo "builder job not provisioned yet; skipping"
           fi

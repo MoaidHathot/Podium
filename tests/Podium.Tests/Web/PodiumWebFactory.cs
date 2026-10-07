@@ -153,7 +153,7 @@ public sealed class RecordingRunner : IBuildRunner
         lock (_started) _started.Add(request);
         return Task.FromResult("exec-" + request.Build.Id);
     }
-    public Task<string> GetBuilderVersionAsync(CancellationToken ct = default) => Task.FromResult("test-builder");
+    public Task<BuilderVersion> GetBuilderVersionAsync(CancellationToken ct = default) => Task.FromResult(BuilderVersion.Single("test-builder"));
 }
 
 /// <summary>Artifact store backed by dictionaries; mirrors what the builder uploads per build.</summary>

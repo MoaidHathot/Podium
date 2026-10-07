@@ -31,9 +31,11 @@ internal sealed class FakeRunner : IBuildRunner
     public List<BuildRequest> Started { get; } = [];
     public bool Fail { get; set; }
     public string Version { get; set; } = "builder-v1";
+    /// <summary>Per-kind fingerprints the fake publishes (null: a single version for every kind, like an image digest).</summary>
+    public Dictionary<string, string>? Kinds { get; set; }
     /// <summary>Simulates the seconds a real job start takes, to expose dispatch races.</summary>
     public TimeSpan StartDelay { get; set; }
-    public Task<string> GetBuilderVersionAsync(CancellationToken ct = default) => Task.FromResult(Version);
+    public Task<BuilderVersion> GetBuilderVersionAsync(CancellationToken ct = default) => Task.FromResult(new BuilderVersion(Version, Kinds));
     public async Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
     {
         if (Fail) throw new InvalidOperationException("runner down");
@@ -671,5 +673,35 @@ public class DeckSyncServiceTests
         // A further builder change retries it once more.
         _runner.Version = "builder-v3";
         Assert.Equal(2, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
+    }
+
+    [Fact]
+    public async Task Per_kind_fingerprints_rebuild_only_the_kinds_whose_builder_files_changed()
+    {
+        _runner.Kinds = new() { ["slidev"] = "aaa1", ["presenterm"] = "bbb1" };
+        await _sync.SyncAsync(_source); // slides-agents (Slidev) and slides-intro (presenterm)
+        foreach (var slug in new[] { "slides-agents", "slides-intro" })
+        {
+            var req = _runner.Started.Single(s => s.Deck.Slug == slug);
+            Assert.True(await _buildService.CompleteAsync(slug, req.Build.Id, req.CallbackToken, new BuildReport(true, true, false, false, null, null)));
+        }
+        Assert.Equal("slidev=aaa1", (await _builds.GetAsync("slides-agents", _runner.Started.Single(s => s.Deck.Slug == "slides-agents").Build.Id))!.BuilderVersion);
+        Assert.Equal("presenterm=bbb1", (await _builds.GetAsync("slides-intro", _runner.Started.Single(s => s.Deck.Slug == "slides-intro").Build.Id))!.BuilderVersion);
+
+        // The image digest changes (a new deploy) but no kind's files did: nothing is rebuilt.
+        _runner.Version = "image@sha256:new";
+        Assert.Equal(0, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
+
+        // Only the Slidev files changed: only the Slidev deck is rebuilt.
+        _runner.Kinds["slidev"] = "aaa2";
+        Assert.Equal(1, await _buildService.RebuildOutdatedAsync(await _decks.ListAsync(), id => _sources.GetAsync(id)));
+        Assert.Equal("slides-agents", _runner.Started.Last().Deck.Slug);
+        Assert.Equal("slidev=aaa2", (await _builds.ListActiveAsync()).Single().BuilderVersion);
+
+        // A builder that stops publishing fingerprints falls back to the overall identity for every kind.
+        Assert.Equal("image@sha256:new", BuilderVersion.Single("image@sha256:new").For(DeckKind.Pdf));
+        Assert.Equal(new Dictionary<string, string> { ["slidev"] = "1d6a78853df43725", ["pdf"] = "1dbcee649aa3d483" }, BuilderVersion.ParseKinds(" slidev=1d6a78853df43725, pdf=1dbcee649aa3d483 ,bad,=x,y="));
+        Assert.Null(BuilderVersion.ParseKinds(""));
+        Assert.Null(BuilderVersion.ParseKinds("slidev=not hex!"));
     }
 }

@@ -138,8 +138,12 @@ public interface IBuildRunner
     /// <summary>Starts the build somewhere isolated and returns a runner execution id.</summary>
     Task<string> StartAsync(BuildRequest request, CancellationToken ct = default);
 
-    /// <summary>Stable identity of the current builder (image reference/digest or script hash). Changes trigger rebuilds.</summary>
-    Task<string> GetBuilderVersionAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Identity of the current builder: overall (image reference/digest or script hash) and, when the builder publishes
+    /// them, per deck kind (fingerprints of the files that build that kind). A deck is rebuilt when the version for its
+    /// kind changes, so a change to the Slidev addon does not rebuild PowerPoint decks.
+    /// </summary>
+    Task<BuilderVersion> GetBuilderVersionAsync(CancellationToken ct = default);
 }
 
 public interface IRepositoryClient

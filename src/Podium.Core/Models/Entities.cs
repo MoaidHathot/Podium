@@ -172,6 +172,48 @@ public sealed record Grant
 /// <summary>A deck-health finding reported by the builder. Paths are repository-relative so they map onto check-run annotations.</summary>
 public sealed record BuildAnnotation(string Path, int Line, AnnotationLevel Level, string Message);
 
+/// <summary>
+/// Identity of the builder: <see cref="Overall"/> (the image reference or script hash) and, when the builder
+/// publishes them, per-kind fingerprints of the files that build each deck kind (see builder/fingerprint.mjs).
+/// </summary>
+public sealed record BuilderVersion(string Overall, IReadOnlyDictionary<string, string>? Kinds = null)
+{
+    public static BuilderVersion Single(string overall) => new(overall);
+
+    /// <summary>The version a deck of this kind is built by: "kind=fingerprint" when fingerprints exist, else the overall identity.</summary>
+    public string For(DeckKind kind)
+    {
+        var key = KindKey(kind);
+        return key is not null && Kinds is not null && Kinds.TryGetValue(key, out var fingerprint) && !string.IsNullOrWhiteSpace(fingerprint) ? $"{key}={fingerprint}" : Overall;
+    }
+
+    public static string? KindKey(DeckKind kind) => kind switch
+    {
+        DeckKind.Slidev => "slidev",
+        DeckKind.Presenterm => "presenterm",
+        DeckKind.Static => "static",
+        DeckKind.PowerPoint => "powerpoint",
+        DeckKind.Pdf => "pdf",
+        _ => null,
+    };
+
+    /// <summary>Parses the compact form the deployment puts on the builder job: "slidev=1d6a...,presenterm=46e9...".</summary>
+    public static IReadOnlyDictionary<string, string>? ParseKinds(string? compact)
+    {
+        if (string.IsNullOrWhiteSpace(compact)) return null;
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var part in compact.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var eq = part.IndexOf('=');
+            if (eq <= 0 || eq == part.Length - 1) continue;
+            var key = part[..eq].Trim().ToLowerInvariant();
+            var value = part[(eq + 1)..].Trim();
+            if (key.Length is > 0 and <= 20 && value.Length is > 0 and <= 64 && value.All(char.IsAsciiLetterOrDigit)) map[key] = value;
+        }
+        return map.Count > 0 ? map : null;
+    }
+}
+
 /// <summary>Signed, revocable share link.</summary>
 public sealed record ShareLink
 {

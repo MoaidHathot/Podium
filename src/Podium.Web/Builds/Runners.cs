@@ -46,20 +46,29 @@ public static class BuilderEnvironment
 /// <summary>Starts an execution of the pre-provisioned Container Apps Job, overriding only env vars and resources.</summary>
 public sealed class ContainerAppsJobRunner(ArmClient arm, IOptions<BuilderOptions> options, ILogger<ContainerAppsJobRunner> log) : IBuildRunner
 {
-    private (string Value, DateTimeOffset At)? _versionCache;
+    private (BuilderVersion Value, DateTimeOffset At)? _versionCache;
 
-    public async Task<string> GetBuilderVersionAsync(CancellationToken ct = default)
+    /// <summary>
+    /// The job template's image plus the per-kind fingerprints the deployment put on it (PODIUM_BUILDER_FINGERPRINTS,
+    /// computed by builder/fingerprint.mjs); without the variable the image reference is the version for every kind.
+    /// </summary>
+    public async Task<BuilderVersion> GetBuilderVersionAsync(CancellationToken ct = default)
     {
         if (_versionCache is { } c && DateTimeOffset.UtcNow - c.At < TimeSpan.FromMinutes(2)) return c.Value;
         var o = options.Value;
-        if (!string.IsNullOrWhiteSpace(o.Image)) return o.Image;
         if (string.IsNullOrWhiteSpace(o.JobResourceId)) throw new InvalidOperationException("Builder:JobResourceId is not configured.");
         var job = arm.GetContainerAppJobResource(new ResourceIdentifier(o.JobResourceId));
         var data = await job.GetAsync(ct);
-        var image = data.Value.Data.Template.Containers.FirstOrDefault()?.Image ?? "unknown";
-        _versionCache = (image, DateTimeOffset.UtcNow);
-        return image;
+        var container = data.Value.Data.Template.Containers.FirstOrDefault();
+        var image = !string.IsNullOrWhiteSpace(o.Image) ? o.Image : container?.Image ?? "unknown";
+        var kinds = BuilderVersion.ParseKinds(container?.Env.FirstOrDefault(e => e.Name == FingerprintsVariable)?.Value);
+        var version = new BuilderVersion(image, kinds);
+        _versionCache = (version, DateTimeOffset.UtcNow);
+        return version;
     }
+
+    /// <summary>Set on the builder job by deploy.yml: "slidev=...,presenterm=...,static=...,powerpoint=...,pdf=...".</summary>
+    public const string FingerprintsVariable = "PODIUM_BUILDER_FINGERPRINTS";
 
     public async Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)
     {
@@ -110,16 +119,50 @@ public sealed class ContainerAppsJobRunner(ArmClient arm, IOptions<BuilderOption
 /// </summary>
 public sealed class LocalProcessRunner(IOptions<BuilderOptions> options, IHostEnvironment env, ILogger<LocalProcessRunner> log) : IBuildRunner
 {
-    /// <summary>Hash of the builder script and addon sources, so local edits trigger rebuilds just like a new image would.</summary>
-    public Task<string> GetBuilderVersionAsync(CancellationToken ct = default)
+    private (BuilderVersion Value, DateTimeOffset At)? _versionCache;
+
+    /// <summary>
+    /// Per-kind fingerprints from the builder's own fingerprint.mjs (the same numbers the deployment publishes on the
+    /// job), with a hash of the whole builder folder as the overall identity, so local edits trigger rebuilds of the
+    /// kinds they affect just like a deployment would. Cached briefly; a failing node falls back to the overall hash.
+    /// </summary>
+    public async Task<BuilderVersion> GetBuilderVersionAsync(CancellationToken ct = default)
     {
+        if (_versionCache is { } c && DateTimeOffset.UtcNow - c.At < TimeSpan.FromMinutes(1)) return c.Value;
         var script = Path.GetFullPath(options.Value.LocalScriptPath ?? throw new InvalidOperationException("Builder:LocalScriptPath is not configured."));
+        var builderDir = Path.GetDirectoryName(script)!;
         var files = new List<string> { script };
-        var addonDir = Path.Combine(Path.GetDirectoryName(script)!, "addon");
-        if (Directory.Exists(addonDir)) files.AddRange(Directory.EnumerateFiles(addonDir, "*", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal));
+        foreach (var sub in new[] { "addon", "kinds", "lib" })
+        {
+            var dir = Path.Combine(builderDir, sub);
+            if (Directory.Exists(dir)) files.AddRange(Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal));
+        }
         using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         foreach (var f in files) sha.AppendData(File.ReadAllBytes(f));
-        return Task.FromResult("local-" + Convert.ToHexString(sha.GetHashAndReset())[..16].ToLowerInvariant());
+        var overall = "local-" + Convert.ToHexString(sha.GetHashAndReset())[..16].ToLowerInvariant();
+
+        IReadOnlyDictionary<string, string>? kinds = null;
+        var fingerprint = Path.Combine(builderDir, "fingerprint.mjs");
+        if (File.Exists(fingerprint))
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(options.Value.NodeExecutable) { ArgumentList = { fingerprint, "--env" }, WorkingDirectory = builderDir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+                using var p = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start node.");
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(20));
+                var output = await p.StandardOutput.ReadToEndAsync(timeout.Token);
+                await p.WaitForExitAsync(timeout.Token);
+                if (p.ExitCode == 0) kinds = BuilderVersion.ParseKinds(output.Trim());
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                log.LogWarning(ex, "Builder fingerprints unavailable; using the overall hash");
+            }
+        }
+        var version = new BuilderVersion(overall, kinds);
+        _versionCache = (version, DateTimeOffset.UtcNow);
+        return version;
     }
 
     public Task<string> StartAsync(BuildRequest request, CancellationToken ct = default)

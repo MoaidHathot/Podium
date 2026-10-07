@@ -44,10 +44,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Syntax-check builder scripts
         run: |
-          node --check build.mjs
-          node --check thumb.mjs
-          node --check notes.mjs
-          node --check sheet.mjs
+          for f in build.mjs thumb.mjs notes.mjs sheet.mjs fingerprint.mjs kinds/*.mjs lib/*.mjs; do node --check "$f"; done
           bash -n entrypoint.sh
       - name: Builder unit tests
         run: node --test tests/*.test.mjs

@@ -75,7 +75,7 @@ public sealed class BuildService(
             Status = BuildStatus.Queued,
             TriggeredBy = triggeredBy,
             Warnings = warnings,
-            BuilderVersion = await SafeBuilderVersionAsync(ct),
+            BuilderVersion = (await SafeBuilderVersionAsync(ct))?.For(deck.Kind),
         };
         await builds.UpsertAsync(build, ct);
         await decks.UpsertAsync(deck with { LatestBuildId = build.Id, LatestBuildStatus = BuildStatus.Queued, UpdatedAt = DateTimeOffset.UtcNow }, ct);
@@ -375,7 +375,7 @@ public sealed class BuildService(
         log.LogInformation("Purged artifacts and build history of {Deck}", deck.Slug);
     }
 
-    private async Task<string?> SafeBuilderVersionAsync(CancellationToken ct)
+    private async Task<BuilderVersion?> SafeBuilderVersionAsync(CancellationToken ct)
     {
         try { return await runner.GetBuilderVersionAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -403,7 +403,7 @@ public sealed class BuildService(
             var referenceId = deck.LatestBuildId ?? deck.CurrentBuildId;
             if (referenceId is null) continue;
             var reference = await builds.GetAsync(deck.Slug, referenceId, ct);
-            if (reference is null || string.Equals(reference.BuilderVersion, current, StringComparison.Ordinal)) continue;
+            if (reference is null || string.Equals(reference.BuilderVersion, current.For(deck.Kind), StringComparison.Ordinal)) continue;
             var source = await getSource(deck.SourceId);
             if (source is null) continue;
             var sha = deck.LastCommitSha ?? source.LastSeenSha;
@@ -411,7 +411,7 @@ public sealed class BuildService(
             await QueueAsync(deck, source, sha, "builder-upgrade", [], ct);
             queued++;
         }
-        if (queued > 0) log.LogInformation("Queued {Count} rebuild(s) after builder change to {Version}", queued, current);
+        if (queued > 0) log.LogInformation("Queued {Count} rebuild(s) after builder change to {Version}", queued, current.Kinds is null ? current.Overall : string.Join(",", current.Kinds.Select(kv => $"{kv.Key}={kv.Value}")));
         return queued;
     }
 
