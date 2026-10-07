@@ -34,7 +34,7 @@ public sealed class SharedModel(IDeckStore decks, IGrantStore grants, CallerReso
                 if (g is not null) list.Add((d, g));
             }
         }
-        Decks = list.OrderByDescending(x => x.Item1.LastCommitAt ?? x.Item1.UpdatedAt).ToList();
+        Decks = list.OrderByDescending(x => x.Item1.SavedAt).ToList();
         return Page();
     }
 }

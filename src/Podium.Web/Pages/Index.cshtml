@@ -120,22 +120,43 @@ else
         </div>
         <label class="control">Group by
             <select id="group" class="input">
-                <option value="repo">Repository</option>
-                @if (Model.HasTalks) { <option value="talk">Talk</option> }
-                <option value="kind">Type</option>
-                <option value="vis">Visibility</option>
-                <option value="year">Year</option>
+                <optgroup label="Where">
+                    <option value="repo">Repository</option>
+                    <option value="section">Folder</option>
+                </optgroup>
+                @if (Model.HasTalks)
+                {
+                    <optgroup label="Talks">
+                        <option value="talk">Talk</option>
+                        <option value="talkstatus">Talk status</option>
+                        <option value="yeargiven">Year given</option>
+                    </optgroup>
+                }
+                <optgroup label="When">
+                    <option value="year">Year saved</option>
+                    <option value="yearcreated">Year created</option>
+                </optgroup>
+                <optgroup label="What">
+                    <option value="kind">Type</option>
+                    <option value="vis">Visibility</option>
+                </optgroup>
                 <option value="none">Nothing</option>
             </select>
         </label>
         <label class="control">Sort
             <select id="sort" class="input">
-                <option value="updated">Recently updated</option>
+                <option value="saved">Last saved</option>
+                <option value="created">Created</option>
+                <option value="committed">Last committed</option>
+                @if (Model.HasTalks) { <option value="given">Last given</option> }
                 <option value="viewed">Recently presented</option>
                 <option value="title">Title A–Z</option>
                 <option value="status">Needs attention</option>
             </select>
         </label>
+        <button type="button" class="btn btn-ghost btn-sm" id="sort-dir" aria-pressed="false" title="Newest first; click for oldest first">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"/></svg><span class="sr-only">Sort direction</span>
+        </button>
         <div class="seg density" role="radiogroup" aria-label="Density">
             <input type="radio" name="density" id="density-grid" value="grid" checked /><label for="density-grid" title="Grid with thumbnails">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg><span class="sr-only">Grid</span></label>
@@ -271,28 +292,53 @@ else
   const cards = [...document.querySelectorAll('#pool > .card')];
 
   const KEY = 'podium.library.v1';
-  const state = Object.assign({ group: 'repo', sort: 'updated', density: 'grid', collapsed: {}, kind: null, vis: null, status: null, tag: null }, load());
+  const state = Object.assign({ group: 'repo', sort: 'saved', dir: 'desc', density: 'grid', collapsed: {}, kind: null, vis: null, status: null, tag: null }, load());
   function load() { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } }
-  function save() { localStorage.setItem(KEY, JSON.stringify({ group: state.group, sort: state.sort, density: state.density, collapsed: state.collapsed })); }
+  function save() { localStorage.setItem(KEY, JSON.stringify({ group: state.group, sort: state.sort, dir: state.dir, density: state.density, collapsed: state.collapsed })); }
 
-  // A remembered grouping whose option is gone (e.g. "Talk" after the last abstract.md was removed) falls back to repository.
+  // A remembered choice whose option is gone (e.g. "Talk" after the last abstract.md was removed, or the former
+  // "updated" sort) falls back to the default.
   if (![...groupSel.options].some((o) => o.value === state.group)) state.group = 'repo';
+  if (![...sortSel.options].some((o) => o.value === state.sort)) state.sort = 'saved';
   groupSel.value = state.group; sortSel.value = state.sort;
   densityInputs.forEach((i) => { i.checked = i.value === state.density; });
+  const dirBtn = document.getElementById('sort-dir');
+  function paintDir() {
+    const desc = state.dir !== 'asc';
+    dirBtn.setAttribute('aria-pressed', String(!desc));
+    dirBtn.title = desc ? 'Newest first; click for oldest first' : 'Oldest first; click for newest first';
+    dirBtn.classList.toggle('flipped', !desc);
+    if (state.sort === 'title') dirBtn.title = desc ? 'A to Z; click for Z to A' : 'Z to A; click for A to Z';
+  }
 
   const labels = {
     repo: (c) => c.dataset.repo,
+    section: (c) => `${c.dataset.repo} / ${c.dataset.section}`,
     talk: (c) => c.dataset.talk || 'Not part of a talk',
+    talkstatus: (c) => c.dataset.talkStatus,
+    yeargiven: (c) => c.dataset.yearGiven || 'Not given yet',
     kind: (c) => c.dataset.kindLabel,
     vis: (c) => c.dataset.visLabel,
     year: (c) => c.dataset.year,
+    yearcreated: (c) => c.dataset.yearCreated,
   };
+  const byDate = (key) => (a, b) => (b.dataset[key] || '').localeCompare(a.dataset[key] || '');
   const sorters = {
-    updated: (a, b) => (b.dataset.updated || '').localeCompare(a.dataset.updated || ''),
-    viewed: (a, b) => (b.dataset.viewed || '').localeCompare(a.dataset.viewed || '') || sorters.updated(a, b),
+    saved: byDate('saved'),
+    created: (a, b) => byDate('created')(a, b) || byDate('saved')(a, b),
+    committed: (a, b) => byDate('committed')(a, b) || byDate('saved')(a, b),
+    given: (a, b) => byDate('given')(a, b) || byDate('saved')(a, b),
+    viewed: (a, b) => byDate('viewed')(a, b) || byDate('saved')(a, b),
     title: (a, b) => a.dataset.title.localeCompare(b.dataset.title),
-    status: (a, b) => rank(b) - rank(a) || sorters.updated(a, b),
+    status: (a, b) => rank(b) - rank(a) || byDate('saved')(a, b),
   };
+  // Newest first by default; the direction button flips the primary key (never the attention ranking).
+  function sorter() {
+    const base = sorters[state.sort] || sorters.saved;
+    if (state.dir !== 'asc') return base;
+    if (state.sort === 'status') return (a, b) => rank(b) - rank(a) || -byDate('saved')(a, b);
+    return (a, b) => -base(a, b);
+  }
   const rank = (c) => c.dataset.status === 'failed' ? 2 : c.dataset.status === 'building' ? 1 : 0;
 
   function matches(c) {
@@ -358,16 +404,21 @@ else
     document.body.dataset.group = state.group;
     document.body.dataset.density = state.density;
 
-    const visible = cards.filter(matches).sort(sorters[state.sort] || sorters.updated);
+    const visible = cards.filter(matches).sort(sorter());
     const groups = new Map();
     for (const c of visible) {
       const key = state.group === 'none' ? 'All decks' : (labels[state.group](c) || 'Other');
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(c);
     }
-    // Groups ordered by their most recent deck (already sorted), except Year which is descending by label.
+    // Groups follow their first deck (already sorted), except the year groupings, which run by label in the
+    // sort direction with the "not yet" bucket last.
     const order = [...groups.keys()];
-    if (state.group === 'year') order.sort((a, b) => b.localeCompare(a));
+    if (['year', 'yearcreated', 'yeargiven'].includes(state.group)) {
+      const isYear = (k) => /^\d{4}$/.test(k);
+      order.sort((a, b) => (isYear(b) - isYear(a)) || (state.dir === 'asc' ? a.localeCompare(b) : b.localeCompare(a)));
+    }
+    paintDir();
 
     groupsRoot.replaceChildren();
     for (const key of order) {
@@ -393,6 +444,7 @@ else
   search.addEventListener('input', render);
   groupSel.addEventListener('change', () => { state.group = groupSel.value; save(); render(); });
   sortSel.addEventListener('change', () => { state.sort = sortSel.value; save(); render(); });
+  dirBtn.addEventListener('click', () => { state.dir = state.dir === 'asc' ? 'desc' : 'asc'; save(); render(); });
   densityInputs.forEach((i) => i.addEventListener('change', () => { if (i.checked) { state.density = i.value; save(); render(); } }));
   chips.forEach((chip) => chip.addEventListener('click', () => {
     const f = chip.dataset.filter, v = chip.dataset.value;

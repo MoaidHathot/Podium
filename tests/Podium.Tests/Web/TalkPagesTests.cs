@@ -356,5 +356,41 @@ public sealed class TalkPagesTests(PodiumWebFactory app)
     [InlineData("", null)]
     public void Repo_paths_are_normalised_and_never_traverse(string input, string? expected) => Assert.Equal(expected, Podium.Core.Discovery.TalkFiles.RepoPath(input));
 
+    [Fact]
+    public async Task Library_cards_carry_the_dates_and_facets_the_sorting_and_grouping_run_on()
+    {
+        var (pub, _, pubDeck, privDeck) = await SeedAsync("f");
+        var decks = app.Services.GetRequiredService<IDeckStore>();
+        var authored = new DateTimeOffset(2019, 10, 30, 7, 51, 0, TimeSpan.Zero);
+        await decks.UpsertAsync((await decks.GetAsync(pubDeck.Slug))! with { AuthoredAt = authored, DocumentCreatedAt = new DateTimeOffset(2017, 1, 29, 10, 0, 0, TimeSpan.Zero), LastCommitAt = new DateTimeOffset(2026, 10, 6, 0, 0, 0, TimeSpan.Zero), Path = "talks/" + pubDeck.Slug });
+        await decks.UpsertAsync((await decks.GetAsync(privDeck.Slug))! with { LastCommitAt = new DateTimeOffset(2026, 10, 6, 0, 0, 0, TimeSpan.Zero) });
+
+        var owner = await app.OwnerClientAsync();
+        var html = await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync();
+        var card = html[html.IndexOf($"data-slug=\"{pubDeck.Slug}\"", StringComparison.Ordinal)..];
+        card = card[..card.IndexOf("</article>", StringComparison.Ordinal)];
+        Assert.Contains("data-saved=\"2019-10-30T07:51:00.0000000Z\"", card);      // the document's own date, not the import commit
+        Assert.Contains("data-created=\"2017-01-29T10:00:00.0000000Z\"", card);
+        Assert.Contains("data-committed=\"2026-10-06T00:00:00.0000000Z\"", card);
+        Assert.Contains("data-year=\"2019\"", card);
+        Assert.Contains("data-year-created=\"2017\"", card);
+        Assert.Contains("data-given=\"2025-01-01\"", card);                           // the NDC delivery named this deck
+        Assert.Contains("data-year-given=\"2025\"", card);
+        Assert.Contains("data-section=\"talks\"", card);
+        Assert.Contains("data-talk-status=\"Available talk\"", card);
+        Assert.Contains(">saved <time", card);
+
+        var other = html[html.IndexOf($"data-slug=\"{privDeck.Slug}\"", StringComparison.Ordinal)..];
+        other = other[..other.IndexOf("</article>", StringComparison.Ordinal)];
+        Assert.Contains(">updated <time", other);                                     // no document date: the commit stands in
+        Assert.Contains("data-given=\"\"", other);
+
+        Assert.Contains("<option value=\"section\">Folder</option>", html);
+        Assert.Contains("<option value=\"yeargiven\">Year given</option>", html);
+        Assert.Contains("<option value=\"saved\">Last saved</option>", html);
+        Assert.Contains("<option value=\"committed\">Last committed</option>", html);
+        Assert.Contains("id=\"sort-dir\"", html);
+    }
+
     private sealed record TalkHitDto(string Id, string Title, string Status, int Decks, int Events, string Snippet, int Score);
 }

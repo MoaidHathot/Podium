@@ -35,7 +35,11 @@ public sealed record BuildReport(
     bool Success, bool HasSite, bool HasPdf, bool HasPptx, string? Error, IReadOnlyList<string>? Warnings,
     bool HasThumbnail = false, bool HasPublicSite = false,
     bool HasNotes = false, bool HasText = false, bool HasSlideSheet = false, int SlideCount = 0,
-    IReadOnlyList<BuildAnnotation>? Annotations = null);
+    IReadOnlyList<BuildAnnotation>? Annotations = null,
+    /// <summary>When the author last saved the document, from the file's own metadata (PowerPoint/PDF).</summary>
+    DateTimeOffset? AuthoredAt = null,
+    /// <summary>When the document was created, from the file's own metadata.</summary>
+    DateTimeOffset? DocumentCreatedAt = null);
 
 public sealed class BuildService(
     IBuildStore builds,
@@ -209,6 +213,8 @@ public sealed class BuildService(
             HasText = report.HasText,
             HasSlideSheet = report.HasSlideSheet,
             SlideCount = Math.Clamp(report.SlideCount, 0, 10000),
+            AuthoredAt = Plausible(report.AuthoredAt),
+            DocumentCreatedAt = Plausible(report.DocumentCreatedAt),
             Error = report.Success && report.HasSite ? null : (report.Error ?? "Builder reported failure"),
             Warnings = warnings,
             // Annotations come from deck-controlled output: cap count and sizes so a hostile deck cannot bloat records.
@@ -237,6 +243,8 @@ public sealed class BuildService(
                 CurrentHasText = serveIt ? build.HasText : deck.CurrentHasText,
                 CurrentHasSlideSheet = serveIt ? build.HasSlideSheet : deck.CurrentHasSlideSheet,
                 CurrentSlideCount = serveIt ? build.SlideCount : deck.CurrentSlideCount,
+                AuthoredAt = serveIt ? build.AuthoredAt : deck.AuthoredAt,
+                DocumentCreatedAt = serveIt ? build.DocumentCreatedAt : deck.DocumentCreatedAt,
                 UpdatedAt = DateTimeOffset.UtcNow,
             };
             await decks.UpsertAsync(deck, ct);
@@ -416,6 +424,8 @@ public sealed class BuildService(
     }
 
     private static string Truncate(string? s, int max) => string.IsNullOrEmpty(s) ? "" : s.Length <= max ? s : s[..max];
+    /// <summary>Document dates come from deck-controlled metadata: keep only values between 1990 and tomorrow.</summary>
+    private static DateTimeOffset? Plausible(DateTimeOffset? at) => at is { } d && d.Year >= 1990 && d <= DateTimeOffset.UtcNow.AddDays(1) ? d : null;
 
     private static long _lastIdTicks;
 

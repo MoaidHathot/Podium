@@ -96,6 +96,14 @@ public sealed record Deck
     public bool CurrentHasText { get; init; }
     public bool CurrentHasSlideSheet { get; init; }
     public int CurrentSlideCount { get; init; }
+    /// <summary>
+    /// When the author last saved the slides, as far as the served build knows: the document's own metadata for
+    /// PowerPoint/PDF decks (null for source decks, whose last commit is the equivalent). The library sorts by
+    /// <see cref="SavedAt"/>, so an archive committed years after it was written keeps its real chronology.
+    /// </summary>
+    public DateTimeOffset? AuthoredAt { get; init; }
+    /// <summary>When the document was created, from its own metadata (PowerPoint/PDF).</summary>
+    public DateTimeOffset? DocumentCreatedAt { get; init; }
     public string? LatestBuildId { get; init; }
     public BuildStatus? LatestBuildStatus { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -104,6 +112,8 @@ public sealed record Deck
     public bool Archived { get; init; }
 
     public string EntryPath => string.IsNullOrEmpty(Path) ? Entry : $"{Path}/{Entry}";
+    /// <summary>The best date for "when were these slides made": the document's last save, else the last commit that touched the deck.</summary>
+    public DateTimeOffset SavedAt => AuthoredAt ?? LastCommitAt ?? UpdatedAt;
 }
 
 public sealed record Build
@@ -129,6 +139,10 @@ public sealed record Build
     public bool HasSlideSheet { get; init; }
     /// <summary>Number of slides (pages) in the deck, when the builder could determine it.</summary>
     public int SlideCount { get; init; }
+    /// <summary>When the author last saved the document, read from the file's own metadata (PowerPoint, PDF); null for source decks.</summary>
+    public DateTimeOffset? AuthoredAt { get; init; }
+    /// <summary>When the document was created, read from the file's own metadata.</summary>
+    public DateTimeOffset? DocumentCreatedAt { get; init; }
     /// <summary>Features the deck uses that are not supported remotely (reported by the builder).</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
     /// <summary>Deck-health findings (missing images, oversized assets...) with file positions; mirrored to GitHub check-run annotations.</summary>

@@ -112,7 +112,7 @@
                                 <span class="badge badge-kind-@d.Kind.ToString().ToLowerInvariant()">@(d.Kind switch { DeckKind.PowerPoint => "PowerPoint", DeckKind.Pdf => "PDF", DeckKind.Static => "HTML", _ => d.Kind.ToString() })</span>
                                 @if (Model.IsOwner) { <span class="badge badge-vis-@d.Visibility.ToString().ToLowerInvariant()">@d.Visibility</span> }
                             </div>
-                            <div class="faint mono" style="font-size:.8rem">@d.EntryPath@(d.CurrentSlideCount > 0 ? $" · {d.CurrentSlideCount} slides" : "")@(d.LastCommitAt is { } lc ? $" · updated {lc:yyyy-MM-dd}" : "")</div>
+                            <div class="faint mono" style="font-size:.8rem">@d.EntryPath@(d.CurrentSlideCount > 0 ? $" · {d.CurrentSlideCount} slides" : "")@($" · {(d.AuthoredAt is not null ? "saved" : "updated")} {d.SavedAt:yyyy-MM-dd}")</div>
                             <div class="row" style="gap:.4rem; margin-top:.4rem; flex-wrap:wrap">
                                 @if (d.CurrentBuildId is not null) { <a class="btn btn-sm btn-primary" href="/d/@d.Slug/" target="_blank" rel="noopener">@(Model.IsOwner ? "Present" : "Open")</a> }
                                 @if (Model.IsOwner) { <a class="btn btn-sm" href="/decks/@d.Slug">Manage</a> }

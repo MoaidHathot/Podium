@@ -466,6 +466,29 @@ public class DeckSyncServiceTests
     }
 
     [Fact]
+    public async Task Document_dates_from_the_report_become_the_deck_s_saved_date_when_plausible()
+    {
+        await _sync.SyncAsync(_source);
+        var started = _runner.Started.Single(s => s.Deck.Slug == "slides-agents");
+        var authored = new DateTimeOffset(2019, 10, 30, 7, 51, 0, TimeSpan.Zero);
+        var report = new BuildReport(true, true, true, false, null, null, AuthoredAt: authored, DocumentCreatedAt: new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        Assert.True(await _buildService.CompleteAsync("slides-agents", started.Build.Id, started.CallbackToken, report));
+
+        var build = (await _builds.GetAsync("slides-agents", started.Build.Id))!;
+        Assert.Equal(authored, build.AuthoredAt);
+        Assert.Null(build.DocumentCreatedAt); // 1980: a template or an unset clock, not a creation date
+        var deck = (await _decks.GetAsync("slides-agents"))!;
+        Assert.Equal(authored, deck.AuthoredAt);
+        Assert.Equal(authored, deck.SavedAt); // the document's own date beats the commit that brought it into the repository
+        Assert.NotEqual(deck.LastCommitAt, deck.SavedAt);
+
+        // A report without dates (source decks) leaves the saved date at the last commit.
+        var plain = (await _decks.GetAsync("slides-agents-lightning")) ?? (await _decks.ListAsync()).First(d => d.Slug != "slides-agents");
+        Assert.Null(plain.AuthoredAt);
+        Assert.Equal(plain.LastCommitAt ?? plain.UpdatedAt, plain.SavedAt);
+    }
+
+    [Fact]
     public async Task Concurrency_cap_holds_builds_in_the_queue_and_dispatches_as_slots_free_up()
     {
         var opts = new BuildOptions { PublicBaseUrl = new Uri("https://x.test"), MaxConcurrentBuilds = 1 };

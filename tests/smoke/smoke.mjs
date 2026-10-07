@@ -49,6 +49,20 @@ try {
   check('library card carries the variant chip', (await op.locator('.card[data-slug="fixture-deck-workshop"] .badge-variant:has-text("workshop")').count()) === 1);
   await op.selectOption('#group', 'talk'); await op.waitForTimeout(200);
   check('library groups by talk', (await op.locator('#groups section.group[data-group-key="The fixture talk"] .card').count()) === 2);
+  // Sorting runs on the slides' own dates: the workshop deck was saved (document metadata) a year before the main
+  // deck even though both were committed together; direction flips the order; grouping by folder and year works.
+  await op.selectOption('#group', 'none'); await op.selectOption('#sort', 'saved'); await op.waitForTimeout(200);
+  const order = async () => (await op.locator('#groups .card').evaluateAll((cards) => cards.map((c) => c.dataset.slug))).join(',');
+  check('newest saved first', (await order()).startsWith('fixture-deck,fixture-deck-workshop'), await order());
+  check('card shows the document save date', /saved/.test(await op.locator('.card[data-slug="fixture-deck"] .updated').innerText()) && ((await op.locator('.card[data-slug="fixture-deck"] .updated time').getAttribute('datetime')) || '').startsWith('2025-05-10'), await op.locator('.card[data-slug="fixture-deck"] .updated').innerText());
+  await op.click('#sort-dir'); await op.waitForTimeout(200);
+  check('direction flips to oldest first', (await order()).startsWith('fixture-deck-workshop,fixture-deck'), await order());
+  check('direction is remembered as pressed', (await op.getAttribute('#sort-dir', 'aria-pressed')) === 'true');
+  await op.click('#sort-dir');
+  await op.selectOption('#group', 'section'); await op.waitForTimeout(200);
+  check('library groups by folder', (await op.locator('#groups section.group[data-group-key="fixture/slides / fixture"] .card').count()) === 2);
+  await op.selectOption('#group', 'year'); await op.waitForTimeout(200);
+  check('library groups by year saved', (await op.locator('#groups section.group[data-group-key="2025"] .card').count()) === 1 && (await op.locator('#groups section.group[data-group-key="2024"] .card').count()) === 1);
   await op.selectOption('#group', 'repo');
 
   // Talks: owner catalog, detail with CfP pack, compare view, and the public speaker page.

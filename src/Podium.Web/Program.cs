@@ -450,11 +450,13 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
         await SeedSiteAsync(slug, "[{\"index\":1,\"title\":\"One\",\"text\":\"fixture slide one\"},{\"index\":2,\"title\":\"Two\",\"text\":\"fixture slide two about the sync relay\"},{\"index\":3,\"title\":\"Three\",\"text\":\"fixture slide three\"}]");
         // A second deck in the same folder: the talk's workshop variant (slide two reworded, so the compare view has a difference to show).
         await SeedSiteAsync($"{slug}-workshop", "[{\"index\":1,\"title\":\"One\",\"text\":\"fixture slide one\"},{\"index\":2,\"title\":\"Two\",\"text\":\"fixture slide two about the sync hub\"},{\"index\":3,\"title\":\"Three\",\"text\":\"fixture slide three\"}]");
-        foreach (var (deckSlug, variant, entry) in new[] { (slug, (string?)null, "slides.pdf"), ($"{slug}-workshop", "workshop", "slides.workshop.pdf") })
+        foreach (var (deckSlug, variant, entry, saved) in new[] { (slug, (string?)null, "slides.pdf", new DateTimeOffset(2025, 5, 10, 9, 0, 0, TimeSpan.Zero)), ($"{slug}-workshop", "workshop", "slides.workshop.pdf", new DateTimeOffset(2024, 8, 20, 9, 0, 0, TimeSpan.Zero)) })
         {
             await decks.UpsertAsync(new Deck
             {
                 Slug = deckSlug, SourceId = "fixture/slides", Path = "fixture", Entry = entry, Kind = DeckKind.Pdf, Title = variant is null ? "Fixture deck" : "Fixture deck (workshop)", Tags = ["fixture"], Variant = variant, TalkId = talkId,
+                // Document dates as the builder reports them from the files themselves; both decks share the import commit date.
+                AuthoredAt = saved, DocumentCreatedAt = saved.AddMonths(-3), LastCommitAt = new DateTimeOffset(2026, 10, 6, 0, 0, 0, TimeSpan.Zero),
                 Visibility = Visibility.Public, CurrentBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestSuccessfulBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildId = Podium.Web.Storage.FixtureDeck.BuildId, LatestBuildStatus = BuildStatus.Succeeded,
                 CurrentHasNotes = true, CurrentHasText = true, CurrentHasSlideSheet = true, CurrentSlideCount = Podium.Web.Storage.FixtureDeck.Pages, LastCommitSha = new string('a', 40),
             }, ct);

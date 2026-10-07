@@ -17,7 +17,8 @@
 <article class="card @(d.Pinned ? "pinned" : "") @(d.Archived ? "archived" : "")"
          data-slug="@d.Slug" data-search="@Model.SearchText" data-kind="@kind" data-kind-label="@Model.KindLabel" data-vis="@vis" data-vis-label="@Model.VisibilityLabel" data-status="@status"
          data-repo="@Model.RepoLabel" data-tags="@string.Join(" ", d.Tags)" data-title="@d.Title.ToLowerInvariant()" data-updated="@Model.Updated.UtcDateTime.ToString("o")" data-viewed="@(Model.LastViewed?.UtcDateTime.ToString("o"))" data-year="@Model.Updated.Year"
-         data-talk="@(Model.Talk?.Title)" data-talk-id="@(Model.Talk?.Id)">
+         data-talk="@(Model.Talk?.Title)" data-talk-id="@(Model.Talk?.Id)" data-talk-status="@Model.TalkStatusLabel" data-section="@Model.Section"
+         data-saved="@Model.Saved.UtcDateTime.ToString("o")" data-created="@Model.Created.UtcDateTime.ToString("o")" data-committed="@Model.Committed.UtcDateTime.ToString("o")" data-given="@(Model.LastGiven?.Date?.ToString("yyyy-MM-dd"))" data-year-given="@(Model.LastGiven?.Date?.Year)" data-year-created="@Model.Created.Year">
     <a class="card-thumb kind-@kind" href="@(canPresent ? $"/d/{d.Slug}/" : $"/decks/{d.Slug}")" target="@(canPresent ? "_blank" : null)" rel="noopener" tabindex="-1" aria-hidden="true">
         @if (Model.HasThumbnail)
         {
@@ -60,9 +61,9 @@
             @if (d.LiveSessionId is not null) { <span class="badge badge-live" title="A live session is running">● Live</span> }
             @if (d.PinnedBuildId is not null) { <span class="badge badge-frozen" title="Frozen: the served version does not change until you unfreeze">❄ Frozen</span> }
             <span class="status" title="@Model.StatusLabel"><span class="dot @Model.StatusClass"></span> <span class="status-long" data-status-label>@Model.StatusLabel</span><span class="status-short" data-status-short>@Model.StatusShort</span></span>
-            @if (d.LastCommitAt is { } at)
+            @if (d.LastCommitAt is not null || Model.SavedFromDocument)
             {
-                <span class="faint updated"><span class="sep">· </span>updated <time datetime="@at.UtcDateTime.ToString("o")">@at.ToString("yyyy-MM-dd")</time></span>
+                <span class="faint updated" title="@(Model.SavedFromDocument ? "Last saved by the author, from the file's own metadata" : "Last change in the repository")"><span class="sep">· </span>@(Model.SavedFromDocument ? "saved" : "updated") <time datetime="@Model.Saved.UtcDateTime.ToString("o")">@Model.Saved.ToString("yyyy-MM-dd")</time></span>
             }
         </div>
         @if (d.Tags.Count > 0)

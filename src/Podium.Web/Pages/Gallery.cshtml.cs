@@ -33,7 +33,7 @@ public sealed class GalleryModel(IDeckStore decks, ITalkStore talks, ISourceStor
         if (Caller.IsOwner) return Redirect("/");
         var all = await decks.ListAsync(includeArchived: false, ct);
         var visible = all.Where(d => d.CurrentBuildId is not null && (d.Visibility == Visibility.Public || d.PdfVisibility == Visibility.Public || d.PptxVisibility == Visibility.Public))
-            .OrderByDescending(d => d.LastCommitAt ?? d.UpdatedAt)
+            .OrderByDescending(d => d.SavedAt)
             .ToList();
         Tags = visible.SelectMany(d => d.Tags).GroupBy(t => t, StringComparer.OrdinalIgnoreCase).OrderByDescending(g => g.Count()).ThenBy(g => g.Key).Select(g => g.Key).Take(30).ToList();
         if (!string.IsNullOrWhiteSpace(Tag))

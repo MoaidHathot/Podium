@@ -96,9 +96,13 @@ public sealed record TalkView(Talk Talk, IReadOnlyList<Deck> Decks, Source? Sour
     {
         get
         {
+            // The newest event or the newest deck save; the abstract's commit date only when the talk has neither (an
+            // archive import commits everything at once, which says nothing about when the talks happened).
             var sub = Submissions.Where(s => s.Date is not null).Select(s => s.Date!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)).DefaultIfEmpty(DateTime.MinValue).Max();
-            var commit = Talk.LastCommitAt?.UtcDateTime ?? DateTime.MinValue;
-            return new DateTimeOffset(sub > commit ? sub : commit, TimeSpan.Zero);
+            var deck = Decks.Select(d => (d.AuthoredAt ?? d.LastCommitAt)?.UtcDateTime ?? DateTime.MinValue).DefaultIfEmpty(DateTime.MinValue).Max();
+            var best = sub > deck ? sub : deck;
+            if (best == DateTime.MinValue) best = Talk.LastCommitAt?.UtcDateTime ?? Talk.UpdatedAt.UtcDateTime;
+            return new DateTimeOffset(best, TimeSpan.Zero);
         }
     }
     public Deck? MainDeck => Decks.FirstOrDefault(d => d.Path == Talk.Path && d.Variant is null) ?? Decks.FirstOrDefault();

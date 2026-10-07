@@ -51,7 +51,7 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
         Talk? TalkOf(Deck d) => d.TalkId is not null ? talkMap.GetValueOrDefault(d.TalkId) : null;
         Archived = everything.Where(d => d.Archived).OrderByDescending(d => d.UpdatedAt).Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), null) { Talk = TalkOf(d) }).ToList();
         var rows = all.Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), lastViewed.GetValueOrDefault(d.Slug) is { Ticks: > 0 } lv ? lv : null) { Talk = TalkOf(d) }).ToList();
-        Decks = rows.OrderByDescending(r => r.Deck.LastCommitAt ?? r.Deck.UpdatedAt).ToList();
+        Decks = rows.OrderByDescending(r => r.Saved).ToList();
         Pinned = Decks.Where(r => r.Deck.Pinned).ToList();
         // A dismissed deck stays hidden from the shelf until it is presented again (a view newer than the dismissal).
         RecentlyViewed = rows
@@ -70,6 +70,19 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
     /// <summary>The talk this deck is a variant of, when its folder has an abstract.md (or .podium.yml joins one).</summary>
     public Talk? Talk { get; init; }
     public string RepoLabel => Source?.FullName ?? Deck.SourceId;
+    /// <summary>When the slides were last saved by their author (document metadata), else last committed.</summary>
+    public DateTimeOffset Saved => Deck.SavedAt;
+    /// <summary>True when <see cref="Saved"/> comes from the document itself rather than from git.</summary>
+    public bool SavedFromDocument => Deck.AuthoredAt is not null;
+    /// <summary>When the document was created (metadata), else <see cref="Saved"/>.</summary>
+    public DateTimeOffset Created => Deck.DocumentCreatedAt ?? Saved;
+    /// <summary>When the deck last changed in the repository.</summary>
+    public DateTimeOffset Committed => Deck.LastCommitAt ?? Deck.UpdatedAt;
+    /// <summary>The most recent event this deck was given at (from the talk's submissions that name it), if any.</summary>
+    public Submission? LastGiven => Talk?.Submissions.Where(s => (s.DeckSlug == Deck.Slug || s.SessionDeckSlug == Deck.Slug) && s.Date is not null && s.Status is "delivered" or "accepted").OrderByDescending(s => s.Date).FirstOrDefault();
+    /// <summary>Top-level folder of the deck in its repository ("talks", "courses", "Microsoft"); "(root)" for repository-root decks.</summary>
+    public string Section => Deck.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "(root)";
+    public string TalkStatusLabel => Talk is null ? "No talk" : Talk.Status switch { "draft" => "Draft talk", "retired" => "Retired talk", _ => "Available talk" };
     /// <summary>Label of the variant inside its talk: the explicit label, else "main" for a source deck that is the talk's first deck and has siblings (file decks carry their own titles).</summary>
     public string? VariantLabel => Deck.Variant ?? (Talk is { DeckSlugs.Count: > 1 } && Talk.DeckSlugs[0] == Deck.Slug && !Podium.Core.Discovery.DeckDetector.IsFileBased(Deck.Kind) ? "main" : null);
     public string KindLabel => Deck.Kind switch
@@ -87,7 +100,7 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
     public string ThumbnailUrl => $"/d/{Deck.Slug}.jpg?v={Deck.CurrentBuildId}";
     public bool Servable => Deck.CurrentBuildId is not null;
     public bool IsSlidev => Deck.Kind == DeckKind.Slidev;
-    public DateTimeOffset Updated => Deck.LastCommitAt ?? Deck.UpdatedAt;
+    public DateTimeOffset Updated => Saved;
     public string VisibilityLabel => Deck.Visibility switch
     {
         Visibility.Public => "Public",
