@@ -34,6 +34,8 @@ export function isoDate(value) {
     const [, y, mo = '01', d = '01', h = '00', mi = '00', se = '00', sign, oh, om = '00'] = pdf;
     s = `${y}-${mo}-${d}T${h}:${mi}:${se}${sign ? `${sign}${oh}:${om}` : 'Z'}`;
   }
+  // pdfinfo -isodates writes hour-only offsets (2024-12-05T08:31:24-05), which Date.parse rejects.
+  s = s.replace(/([+-]\d{2})$/, '$1:00');
   const t = Date.parse(s);
   if (Number.isNaN(t)) return null;
   const date = new Date(t);

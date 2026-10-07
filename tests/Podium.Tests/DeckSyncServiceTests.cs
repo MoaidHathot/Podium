@@ -446,6 +446,34 @@ public class DeckSyncServiceTests
     }
 
     [Fact]
+    public async Task A_build_being_started_is_not_reaped_for_having_waited_in_the_queue_and_an_abandoned_claim_is_released()
+    {
+        var opts = new BuildOptions { PublicBaseUrl = new Uri("https://x.test"), StaleAfter = TimeSpan.FromMinutes(30) };
+        var svc = new BuildService(_builds, _decks, _artifacts, _repo, _runner, new FakeTokens(), Options.Create(opts), NullLogger<BuildService>.Instance);
+        var deck = new Deck { Slug = "waited", SourceId = _source.Id, Path = "waited", Entry = "slides.md", Kind = DeckKind.Slidev };
+        await _decks.UpsertAsync(deck);
+        // Queued 45 minutes ago (a long queue), claimed by a dispatcher a moment ago: the job is starting, leave it alone.
+        var fresh = new Build { Id = "b-fresh", DeckSlug = "waited", Sha = "abc", Status = BuildStatus.Queued, QueuedAt = DateTimeOffset.UtcNow.AddMinutes(-45), RunnerExecutionId = $"starting:{DateTimeOffset.UtcNow.UtcTicks}:claim" };
+        // Claimed 20 minutes ago and never started: the dispatcher died; the build must go back to the queue, not fail.
+        var abandoned = new Build { Id = "b-abandoned", DeckSlug = "waited", Sha = "abd", Status = BuildStatus.Queued, QueuedAt = DateTimeOffset.UtcNow.AddMinutes(-50), RunnerExecutionId = $"starting:{DateTimeOffset.UtcNow.AddMinutes(-20).UtcTicks}:claim" };
+        // Running for 40 minutes without a report: stale.
+        var running = new Build { Id = "b-running", DeckSlug = "waited", Sha = "abe", Status = BuildStatus.Running, QueuedAt = DateTimeOffset.UtcNow.AddMinutes(-41), StartedAt = DateTimeOffset.UtcNow.AddMinutes(-40), RunnerExecutionId = "exec-1" };
+        // Waiting for a slot since an hour: never stale.
+        var waiting = new Build { Id = "b-waiting", DeckSlug = "waited", Sha = "abf", Status = BuildStatus.Queued, QueuedAt = DateTimeOffset.UtcNow.AddMinutes(-60) };
+        foreach (var b in new[] { fresh, abandoned, running, waiting }) await _builds.UpsertAsync(b);
+
+        await svc.ReapStaleAsync();
+
+        Assert.Equal(BuildStatus.Queued, (await _builds.GetAsync("waited", "b-fresh"))!.Status);
+        Assert.StartsWith("starting:", (await _builds.GetAsync("waited", "b-fresh"))!.RunnerExecutionId);
+        var released = (await _builds.GetAsync("waited", "b-abandoned"))!;
+        Assert.Equal(BuildStatus.Queued, released.Status);
+        Assert.Null(released.RunnerExecutionId);
+        Assert.Equal(BuildStatus.Failed, (await _builds.GetAsync("waited", "b-running"))!.Status);
+        Assert.Equal(BuildStatus.Queued, (await _builds.GetAsync("waited", "b-waiting"))!.Status);
+    }
+
+    [Fact]
     public async Task Build_report_extras_are_recorded_and_annotations_are_capped_and_truncated()
     {
         await _sync.SyncAsync(_source);

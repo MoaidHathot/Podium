@@ -56,6 +56,7 @@ test('pdfinfo dates parse in iso and native forms, implausible values are droppe
   const iso = 'Title:           Deck\nCreationDate:    2024-02-13T09:00:00Z\nModDate:         2024-02-13T10:30:00+02:00\nPages:           12\n';
   assert.deepEqual(pdfInfoDates(iso), { created: '2024-02-13T09:00:00.000Z', modified: '2024-02-13T08:30:00.000Z' });
   assert.equal(isoDate("D:20191030095100+02'00'"), '2019-10-30T07:51:00.000Z');
+  assert.equal(isoDate('2024-12-05T08:31:24-05'), '2024-12-05T13:31:24.000Z'); // pdfinfo's hour-only offset
   assert.equal(isoDate('D:20191030'), '2019-10-30T00:00:00.000Z');
   assert.equal(isoDate('D:19800101000000Z'), null);           // before 1990: a template or a clock that was never set
   assert.equal(isoDate('2999-01-01T00:00:00Z'), null);         // in the future

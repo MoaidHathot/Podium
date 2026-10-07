@@ -129,6 +129,17 @@ public sealed class BuildService(
 
     private static readonly SemaphoreSlim _dispatchGate = new(1, 1);
     private const string ClaimPrefix = "starting:";
+    /// <summary>A claim older than this was left behind by a dispatcher that died mid-start; the build goes back to the queue.</summary>
+    private static readonly TimeSpan ClaimLifetime = TimeSpan.FromMinutes(10);
+
+    private static string NewClaim() => $"{ClaimPrefix}{DateTimeOffset.UtcNow.UtcTicks}:{Guid.NewGuid():N}";
+    private static DateTimeOffset? ClaimedAt(string? runnerExecutionId)
+    {
+        if (runnerExecutionId is null || !runnerExecutionId.StartsWith(ClaimPrefix, StringComparison.Ordinal)) return null;
+        var body = runnerExecutionId[ClaimPrefix.Length..];
+        var colon = body.IndexOf(':');
+        return colon > 0 && long.TryParse(body[..colon], out var ticks) ? new DateTimeOffset(ticks, TimeSpan.Zero) : DateTimeOffset.MinValue; // legacy claims carry no time
+    }
 
     private async Task<Build> StartAsync(Build build, Deck deck, Source source, CancellationToken ct)
     {
@@ -137,7 +148,7 @@ public sealed class BuildService(
         {
             // Claim first: starting a job takes seconds, and a dispatcher on another replica must not start the same
             // build meanwhile. The marker is replaced by the real execution id (or cleared on failure).
-            var claim = ClaimPrefix + Guid.NewGuid().ToString("N");
+            var claim = NewClaim();
             await builds.UpsertAsync(build with { RunnerExecutionId = claim }, ct);
 
             var timeout = source.Trusted ? options.Value.TrustedTimeout : options.Value.UntrustedTimeout;
@@ -404,17 +415,29 @@ public sealed class BuildService(
         return queued;
     }
 
-    /// <summary>Marks runs that never reported back as failed.</summary>
+    /// <summary>
+    /// Marks runs that never reported back as failed. Builds waiting for a slot are never stale, and a build that a
+    /// dispatcher has just claimed is judged by the claim's age, not by how long it waited in the queue (a long queue
+    /// used to get its builds reaped in the seconds between the claim and the job start). A claim that outlived its
+    /// dispatcher is released so the build is started again.
+    /// </summary>
     public async Task ReapStaleAsync(CancellationToken ct = default)
     {
-        var cutoff = DateTimeOffset.UtcNow - options.Value.StaleAfter;
+        var now = DateTimeOffset.UtcNow;
+        var cutoff = now - options.Value.StaleAfter;
         foreach (var b in await builds.ListActiveAsync(ct))
         {
-            // Builds waiting for a slot are not stale; they have not started. Only runs that never reported back are.
             if (b.Status == BuildStatus.Queued && b.RunnerExecutionId is null && b.StartedAt is null) continue;
+            if (b.Status == BuildStatus.Queued && ClaimedAt(b.RunnerExecutionId) is { } claimedAt)
+            {
+                if (now - claimedAt < ClaimLifetime) continue;
+                await builds.UpsertAsync(b with { RunnerExecutionId = null }, ct);
+                log.LogWarning("Released abandoned start claim on build {Build} for {Deck}; it will be dispatched again", b.Id, b.DeckSlug);
+                continue;
+            }
             var started = b.StartedAt ?? b.QueuedAt;
             if (started > cutoff) continue;
-            var failed = b with { Status = BuildStatus.Failed, FinishedAt = DateTimeOffset.UtcNow, Error = "Timed out waiting for the builder to report" };
+            var failed = b with { Status = BuildStatus.Failed, FinishedAt = now, Error = "Timed out waiting for the builder to report" };
             await builds.UpsertAsync(failed, ct);
             var deck = await decks.GetAsync(b.DeckSlug, ct);
             if (deck is not null && deck.LatestBuildId == b.Id)
