@@ -278,6 +278,57 @@ public class DeckSyncServiceTests
         Assert.Equal(["slides-keynote"], r.Queued);
     }
 
+    [Theory]
+    [InlineData("sample-talk.pptx", "sample talk")]
+    [InlineData("my_deck_v2.pdf", "my deck v2")]
+    [InlineData("ADP Crash Course (English) 2022-12 - Module 01 - Intro to modern C#.pptx", "ADP Crash Course (English) 2022-12 - Module 01 - Intro to modern C#")]
+    [InlineData("What's New in C# 8.0 (.NET Conf Israel 2019, Tel Aviv).pptx", "What's New in C# 8.0 (.NET Conf Israel 2019, Tel Aviv)")]
+    [InlineData("ev2-release-demo.pdf", "ev2 release demo")]
+    [InlineData("slide-01.pptx", "slide 01")]
+    [InlineData("2024-01-31.pdf", "2024-01-31")]
+    [InlineData("no-extension", "no extension")]
+    public void File_titles_keep_spaced_separators_and_date_hyphens(string entry, string expected) => Assert.Equal(expected, DeckSyncService.HumanizeFile(entry));
+
+    [Fact]
+    public async Task Generated_file_titles_are_refreshed_to_the_readable_form_but_chosen_titles_stay()
+    {
+        _repo.Tree.AddRange(["Decks/C# Zero to Hero 2022-06 - Module 02 - C# Basics.pptx", "Decks/sample-talk.pptx"]);
+        await _sync.SyncAsync(_source);
+        // Simulate titles written by the previous rule, and one the owner typed in the UI.
+        var module = (await _decks.ListAsync()).Single(d => d.Entry.StartsWith("C# Zero", StringComparison.Ordinal));
+        var sample = (await _decks.ListAsync()).Single(d => d.Entry == "sample-talk.pptx");
+        Assert.Equal("C# Zero to Hero 2022-06 - Module 02 - C# Basics", module.Title);
+        await _decks.UpsertAsync(module with { Title = "C# Zero to Hero 2022 06   Module 02   C# Basics" });
+        await _decks.UpsertAsync(sample with { Title = "My keynote" });
+
+        _repo.Sha = "abcabca0000000000000000000000000000000010";
+        await _sync.SyncAsync(await _sources.GetAsync(_source.Id) ?? _source);
+        Assert.Equal("C# Zero to Hero 2022-06 - Module 02 - C# Basics", (await _decks.GetAsync(module.Slug))!.Title);
+        Assert.Equal("My keynote", (await _decks.GetAsync(sample.Slug))!.Title);
+    }
+
+    [Fact]
+    public async Task Editing_talk_files_next_to_a_deck_does_not_rebuild_it()
+    {
+        _repo.Tree.AddRange(["talks/agents/slides.md", "talks/agents/abstract.md", "talks/agents/submissions/2025-01-01-ndc.md", "talks/agents/README.md", "talks/agents/notes.md"]);
+        _repo.Files["talks/agents/slides.md"] = "---\ntitle: Agents\n---\n";
+        _repo.Files["talks/agents/abstract.md"] = "---\ntitle: Agents\n---\nAbstract.";
+        await _sync.SyncAsync(_source);
+        var deck = (await _decks.ListAsync()).Single(d => d.Path == "talks/agents");
+        var req = _runner.Started.Single(s => s.Deck.Slug == deck.Slug);
+        Assert.True(await _buildService.CompleteAsync(deck.Slug, req.Build.Id, req.CallbackToken, new BuildReport(true, true, false, false, null, null)));
+
+        _repo.Sha = "abcabca0000000000000000000000000000000011";
+        _repo.Changed.AddRange(["talks/agents/abstract.md", "talks/agents/submissions/2025-01-01-ndc.md", "talks/agents/README.md", "talks/agents/notes.md"]);
+        var r = await _sync.SyncAsync(await _sources.GetAsync(_source.Id) ?? _source);
+        Assert.Empty(r.Queued);
+
+        // The slides themselves, or a .podium.yml, still do.
+        _repo.Sha = "abcabca0000000000000000000000000000000012";
+        _repo.Changed.Clear(); _repo.Changed.Add("talks/agents/.podium.yml"); _repo.Tree.Add("talks/agents/.podium.yml"); _repo.Files["talks/agents/.podium.yml"] = "tags: [x]\n";
+        Assert.Equal([deck.Slug], (await _sync.SyncAsync(await _sources.GetAsync(_source.Id) ?? _source)).Queued);
+    }
+
     [Fact]
     public async Task Failed_build_is_not_retried_on_unchanged_resync_but_is_on_force()
     {

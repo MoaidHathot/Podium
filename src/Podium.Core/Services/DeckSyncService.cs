@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Podium.Core.Abstractions;
 using Podium.Core.Discovery;
@@ -9,7 +10,7 @@ namespace Podium.Core.Services;
 /// Reconciles a source's repository tree with the deck index and queues builds for changed decks. Also indexes the
 /// talks described next to the decks (abstract.md + submissions/) and the speaker file at the repository root.
 /// </summary>
-public sealed class DeckSyncService(
+public sealed partial class DeckSyncService(
     ISourceStore sources,
     IDeckStore decks,
     IRepositoryClient repos,
@@ -99,7 +100,7 @@ public sealed class DeckSyncService(
             var fileBased = DeckDetector.IsFileBased(c.Kind);
 
             var touched = prev is null || forceRebuild || effectiveChanged is null
-                || effectiveChanged.Any(p => fileBased ? PathIsFile(p, c.EntryPath) : PathTouchesDeck(p, c.Path));
+                || effectiveChanged.Any(p => fileBased ? PathIsFile(p, c.EntryPath) : PathTouchesDeckContent(p, c.Path));
             var metadata = touched ? await ReadMetadataAsync(source, sha, c, ct) : null;
 
             var slug = slugs[c];
@@ -117,6 +118,9 @@ public sealed class DeckSyncService(
             // A member deck without tags of its own carries its talk's tags, so the library filters find every variant.
             var talkTags = homeTalk is { Tags.Count: > 0 } ? homeTalk.Tags : null;
             var variantTitle = c.Variant is not null && mainTitles.TryGetValue(c.Path, out var mt) ? $"{mt} ({c.Variant})" : null;
+            // A file deck whose title is the one an earlier Podium generated from its file name (every hyphen a space)
+            // gets the current, readable rendering; titles chosen in the UI or in .podium.yml are never touched.
+            var prevTitle = fileBased && prev?.Title is { } pt && pt == LegacyHumanizeFile(c.Entry) ? null : prev?.Title;
 
             var deck = (prev ?? new Deck
             {
@@ -134,7 +138,7 @@ public sealed class DeckSyncService(
                 Variant = c.Variant,
                 TalkId = talkId,
                 Archived = false,
-                Title = titleConfig ?? metadata?.Title ?? prev?.Title ?? variantTitle ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
+                Title = titleConfig ?? metadata?.Title ?? prevTitle ?? variantTitle ?? (fileBased ? HumanizeFile(c.Entry) : Humanize(c.Path, source.Repo)),
                 Author = metadata?.Author ?? prev?.Author,
                 Description = metadata?.Description ?? prev?.Description,
                 Tags = folderConfig?.Tags ?? metadata?.Tags ?? (prev?.Tags is { Count: > 0 } ownTags ? ownTags : null) ?? talkTags ?? prev?.Tags ?? [],
@@ -365,19 +369,50 @@ public sealed class DeckSyncService(
         return dot > 0 && string.Equals(changed, entryPath[..dot] + ".pdf", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string HumanizeFile(string entry)
+    /// <summary>
+    /// A readable title from a file name: underscores and word-joining hyphens become spaces, spaced separators
+    /// (" - ") and hyphens between digits (2022-02) stay. "ADP Crash Course 2022-12 - Module 01 - Intro to C#.pptx"
+    /// reads as written; "sample-talk.pptx" becomes "sample talk".
+    /// </summary>
+    public static string HumanizeFile(string entry)
+    {
+        var dot = entry.LastIndexOf('.');
+        var stem = dot > 0 ? entry[..dot] : entry;
+        var text = WordHyphen().Replace(stem.Replace('_', ' '), " ");
+        return Spaces().Replace(text, " ").Trim();
+    }
+
+    /// <summary>The rule before the one above (every hyphen a space); titles equal to it were generated, not chosen.</summary>
+    private static string LegacyHumanizeFile(string entry)
     {
         var dot = entry.LastIndexOf('.');
         var stem = dot > 0 ? entry[..dot] : entry;
         return stem.Replace('-', ' ').Replace('_', ' ');
     }
 
+    /// <summary>Any file under the folder (configuration, talk files, decks alike).</summary>
     private static bool PathTouchesDeck(string changed, string deckPath)
     {
         changed = changed.Replace('\\', '/');
         if (string.IsNullOrEmpty(deckPath)) return !changed.Contains('/');
         return changed.StartsWith(deckPath + "/", StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// A change that affects what the deck builds: anything under the folder except the talk's own files (abstract.md,
+    /// submissions/, speaker/notes/script and README markdown), which describe the deck without being part of it.
+    /// </summary>
+    private static bool PathTouchesDeckContent(string changed, string deckPath)
+    {
+        changed = changed.Replace('\\', '/');
+        if (!PathTouchesDeck(changed, deckPath)) return false;
+        var rel = string.IsNullOrEmpty(deckPath) ? changed : changed[(deckPath.Length + 1)..];
+        if (rel.StartsWith("submissions/", StringComparison.OrdinalIgnoreCase)) return false;
+        return rel.Contains('/') || !DeckDetector.IsReservedMarkdown(rel);
+    }
+
+    [GeneratedRegex(@"(?<![\s\d])-(?=\S)|(?<=\S)-(?![\s\d])")] private static partial Regex WordHyphen();
+    [GeneratedRegex(@"\s{2,}")] private static partial Regex Spaces();
 
     private static string UniqueSlug(string baseSlug, IReadOnlySet<string> taken)
     {

@@ -149,6 +149,8 @@ public static partial class DeckDetector
     }
 
     private static bool IsSlideMarkdown(string name) => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !ReservedMarkdown.Contains(name) && !name.StartsWith('.');
+    /// <summary>Markdown files that describe a deck or the speaker (README, abstract, speaker, bio, notes, script...) rather than being slides.</summary>
+    public static bool IsReservedMarkdown(string fileName) => ReservedMarkdown.Contains(fileName);
 
     private static List<string> Clean(IEnumerable<string> paths) => paths
         .Select(p => p.Replace('\\', '/').TrimStart('/'))
