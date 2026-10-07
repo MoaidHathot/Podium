@@ -205,6 +205,20 @@ checkout (`--cone <deck folder>` for Slidev/presenterm/static decks, `--no-cone 
 decks), so an archive of a hundred presentations costs each build one file. The one-shot credential header is passed
 to the checkout too (git fetches the sparse blobs lazily) and `.git` is deleted before any deck code runs.
 
+## Document dates and image repair
+
+PowerPoint and PDF builds report the file's own dates (`docProps/core.xml` read with `builder/lib/zip.mjs`;
+`pdfinfo -isodates`) as `authoredAt` (last saved) and `documentCreatedAt`; the server keeps values between 1990 and
+tomorrow on the build and copies them to the served deck (`Deck.AuthoredAt`, `DocumentCreatedAt`; `SavedAt` falls
+back to the last commit). Everything that orders decks (library, gallery, shared-with-me, talk pages) uses `SavedAt`.
+A builder upgrade rebuilds every deck, which is how existing decks acquire their dates.
+
+Before a presenterm export the builder walks the entry file's `![](...)` references (`builder/lib/images.mjs`): a
+reference that only differs in case from the file on disk is copied under the referenced name inside the build
+workspace (notice annotation at the line; the repository is never modified), a reference with no file gets a
+1280x720 placeholder rendered with the bundled Chromium (warning annotation). References that leave the deck folder
+are reported and left alone. Slidev decks keep their existing post-build asset lint.
+
 ## Backups and export
 
 A scheduled Container Apps Job (`podium-backup`, daily at 03:15 UTC) runs the web image in `export` mode with the web
