@@ -244,8 +244,11 @@ const ctx = {
 // ---------------------------------------------------------------------------------------------------------------
 // Thumbnails
 // ---------------------------------------------------------------------------------------------------------------
+// Two sizes: thumbnail.jpg (1280x720) for the deck page and link previews, thumbnail-sm.jpg (640x360) for cards -
+// a library shows a hundred of those at 320 CSS px, and a phone decoding a hundred 1280x720 JPEGs for 96px slots stalls.
 async function makeThumbnail(outDir, result) {
   const target = join(outDir, 'thumbnail.jpg');
+  const small = join(outDir, 'thumbnail-sm.jpg');
   try {
     if (kind === 'powerpoint' || kind === 'pdf') {
       if (!existsSync(join(outDir, 'deck.pdf'))) return; // nothing worth previewing (download-only fallback page)
@@ -255,11 +258,14 @@ async function makeThumbnail(outDir, result) {
       const r = await run(pdftoppm, ['-jpeg', '-jpegopt', 'quality=80', '-f', '1', '-l', '1', '-scale-to-x', '1280', '-scale-to-y', '-1', join(outDir, 'deck.pdf'), prefix], { allowFail: true, timeoutMs: 60000 });
       const produced = readdirSync(workRoot).find((f) => f.startsWith('thumb') && f.endsWith('.jpg'));
       if (r.code === 0 && produced) { copyFileSync(join(workRoot, produced), target); result.hasThumbnail = true; }
+      const s = await run(pdftoppm, ['-jpeg', '-jpegopt', 'quality=72', '-f', '1', '-l', '1', '-scale-to-x', '640', '-scale-to-y', '-1', join(outDir, 'deck.pdf'), join(workRoot, 'small')], { allowFail: true, echo: false, timeoutMs: 60000 });
+      const producedSmall = readdirSync(workRoot).find((f) => f.startsWith('small') && f.endsWith('.jpg'));
+      if (s.code === 0 && producedSmall) copyFileSync(join(workRoot, producedSmall), small);
       return;
     }
     // Chromium must not run as root (and must not run with the orchestrator's privileges at all): delegate to a
     // child script that executes as the deck user.
-    const r = await run(process.execPath, [join(here, 'thumb.mjs'), join(outDir, 'site'), basePath, kind, target], { allowFail: true, timeoutMs: Math.min(remainingMs(), 90000), envExtra: { NODE_PATH: join(here, 'node_modules') } });
+    const r = await run(process.execPath, [join(here, 'thumb.mjs'), join(outDir, 'site'), basePath, kind, target, small], { allowFail: true, timeoutMs: Math.min(remainingMs(), 90000), envExtra: { NODE_PATH: join(here, 'node_modules') } });
     result.hasThumbnail = r.code === 0 && existsSync(target);
   } catch (e) {
     log(`Thumbnail skipped: ${e.message}`);

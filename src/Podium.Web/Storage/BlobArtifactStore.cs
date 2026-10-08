@@ -36,6 +36,7 @@ public sealed class BlobArtifactStore(BlobServiceClient service, ILogger<BlobArt
             ArtifactKind.Pptx => "deck.pptx",
             ArtifactKind.Log => "build.log",
             ArtifactKind.Thumbnail => "thumbnail.jpg",
+            ArtifactKind.ThumbnailSmall => "thumbnail-sm.jpg",
             ArtifactKind.Notes => "notes.json",
             ArtifactKind.Text => "text.json",
             ArtifactKind.SlideSheet => "slides.jpg",

@@ -67,6 +67,8 @@ public enum ArtifactKind
     SlideSheetMeta = 8,
     /// <summary>manifest.json: files of the site variants, for offline precaching; follows the site's visibility.</summary>
     Manifest = 9,
+    /// <summary>thumbnail-sm.jpg: the first-slide preview at card size (640x360); a library shows a hundred of these. Access is that of <see cref="Thumbnail"/>.</summary>
+    ThumbnailSmall = 10,
 }
 
 /// <summary>Severity of a deck-health finding reported by the builder.</summary>

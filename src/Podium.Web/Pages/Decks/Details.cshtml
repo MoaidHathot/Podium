@@ -126,7 +126,7 @@
                 @foreach (var s in Model.Siblings)
                 {
                     <a class="variant-thumb" href="/decks/@s.Slug" title="@s.Title@(s.Variant is not null ? $" ({s.Variant})" : "")">
-                        @if (s.CurrentHasThumbnail && s.CurrentBuildId is not null) { <img src="/d/@(s.Slug).jpg?v=@s.CurrentBuildId" alt="" loading="lazy" width="120" height="68" /> }
+                        @if (s.CurrentHasThumbnail && s.CurrentBuildId is not null) { <img src="/d/@(s.Slug).jpg?v=@s.CurrentBuildId&size=sm" alt="" loading="lazy" decoding="async" width="120" height="68" /> }
                     </a>
                 }
                 <div style="flex:1; min-width:12rem; font-size:.9rem">

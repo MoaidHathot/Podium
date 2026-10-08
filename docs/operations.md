@@ -249,6 +249,17 @@ is pinned to a commit SHA (Dependabot bumps the pins).
 - Builds run `Builder:MaxConcurrentBuilds` (3) at a time; the rest wait and start as slots free up. Raise it for large
   installations; each build is one job execution (2 vCPU / 4 GiB).
 
+## Page weight on phones
+
+The ingress does not compress, so the app does (Brotli/Gzip for HTML, CSS, JS, JSON, SVG, Markdown): a library of a
+hundred decks is ~600 KB of HTML and 37 KB on the wire. The deck page (`/decks/<slug>`) opts out of HTTPS compression
+because it prints share-link ids and the join code (BREACH needs a compressed body with a secret and attacker-chosen
+text; every other page echoes no free text, and the antiforgery token and CSP nonce are fresh per response). Cards
+load the 640x360 thumbnail (`/d/<slug>.jpg?size=sm`; builds from before it existed answer with the full 1280x720 one)
+and off-screen cards are not laid out or painted (`content-visibility: auto`). `POST /dev-seed?bulk=110` (memory
+storage) fabricates a library of that size; the smoke test measures a density switch on a 4x-throttled phone against
+it (`tests/smoke/smoke.mjs`).
+
 ## Builder image updates and per-kind rebuilds
 
 The builder image is identified by the git tree hash of `builder/`. A deploy whose `builder/` is unchanged reuses the

@@ -792,6 +792,50 @@ public sealed class ServingTests(PodiumWebFactory app)
     }
 
     [Fact]
+    public async Task Card_thumbnails_come_in_a_small_size_with_the_full_one_as_fallback()
+    {
+        var deck = await app.SeedDeckAsync("thumb-sizes-deck", Visibility.Public);
+        var c = app.Client();
+        // Built before small thumbnails existed: "size=sm" still answers, with the full image.
+        var fallback = await c.GetAsync($"/d/{deck.Slug}.jpg?v={deck.CurrentBuildId}&size=sm");
+        Assert.Equal(HttpStatusCode.OK, fallback.StatusCode);
+        Assert.Equal(4, (await fallback.Content.ReadAsByteArrayAsync()).Length);
+        app.Artifacts.PutArtifact(deck.Slug, deck.CurrentBuildId!, ArtifactKind.ThumbnailSmall, "image/jpeg", [0xFF, 0xD8, 0x00, 0x00, 0x00, 0xFF, 0xD9]);
+        var small = await c.GetAsync($"/d/{deck.Slug}.jpg?v={deck.CurrentBuildId}&size=sm");
+        Assert.Equal(7, (await small.Content.ReadAsByteArrayAsync()).Length);
+        Assert.Equal(4, (await (await c.GetAsync($"/d/{deck.Slug}.jpg?v={deck.CurrentBuildId}")).Content.ReadAsByteArrayAsync()).Length); // the full one is untouched
+        // The library and gallery ask for the small one; link previews keep the full one.
+        var owner = await app.OwnerClientAsync();
+        var library = await (await owner.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync();
+        Assert.Contains($"/d/{deck.Slug}.jpg?v={deck.CurrentBuildId}&amp;size=sm", library);
+        var served = await (await c.SendAsync(PodiumWebFactory.Navigation($"/d/{deck.Slug}/"))).Content.ReadAsStringAsync();
+        Assert.Contains($"og:image\" content=\"{PodiumWebFactory.PublicOrigin}/d/{deck.Slug}.jpg?v={deck.CurrentBuildId}\"", served);
+    }
+
+    [Fact]
+    public async Task Responses_compress_over_https_except_the_deck_page_that_prints_share_links()
+    {
+        var deck = await app.SeedDeckAsync("compress-deck", Visibility.Public);
+        var owner = await app.OwnerClientAsync();
+        HttpRequestMessage Https(string url) { var r = PodiumWebFactory.Navigation(url); r.Headers.AcceptEncoding.ParseAdd("br, gzip"); r.Headers.Add("X-Forwarded-Proto", "https"); return r; }
+        var library = await owner.SendAsync(Https("/"));
+        Assert.Equal(HttpStatusCode.OK, library.StatusCode);
+        Assert.Contains(library.Content.Headers.ContentEncoding, e => e is "br" or "gzip");
+        Assert.Contains("Accept-Encoding", library.Headers.Vary);
+        var css = await owner.SendAsync(Https("/css/podium.css"));
+        Assert.Contains(css.Content.Headers.ContentEncoding, e => e is "br" or "gzip");
+        var api = await owner.SendAsync(Https("/api/decks"));
+        Assert.Contains(api.Content.Headers.ContentEncoding, e => e is "br" or "gzip");
+        // The deck page carries share-link ids and the join code: a compression oracle must find nothing to measure.
+        var page = await owner.SendAsync(Https($"/decks/{deck.Slug}"));
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+        Assert.Empty(page.Content.Headers.ContentEncoding);
+        // Images are never recompressed.
+        var jpg = await owner.SendAsync(Https($"/d/{deck.Slug}.jpg"));
+        Assert.Empty(jpg.Content.Headers.ContentEncoding);
+    }
+
+    [Fact]
     public async Task Public_deck_serves_anonymously_with_open_graph_tags_and_thumbnail()
     {
         var deck = await app.SeedDeckAsync("public-deck", Visibility.Public);

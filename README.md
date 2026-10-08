@@ -65,7 +65,7 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 | PDF | any standalone `.pdf` | rendered page by page for Podium's viewer (keys, swipe, deep links, remote, follow-along); the file itself stays downloadable |
 | Static HTML | committed `.html` with no source deck | copied as-is |
 
-Every build also captures a first-slide thumbnail for the library. `node_modules`, `dist`, `.slidev`, `bin`, `obj` are ignored. Legacy GitPitch decks are skipped. `README.md`, `abstract.md`, `speaker.md`, `notes.md` and `script.md` are never decks. The builder fetches only what a deck needs (a blob-less partial clone plus a sparse checkout of the deck folder, or of the single file for PowerPoint/PDF decks), so large archives of presentations cost each build one download.
+Every build also captures a first-slide thumbnail for the library (a 1280x720 one for the deck page and link previews, a 640x360 one for cards; `/d/<slug>.jpg?size=sm`). `node_modules`, `dist`, `.slidev`, `bin`, `obj` are ignored. Legacy GitPitch decks are skipped. `README.md`, `abstract.md`, `speaker.md`, `notes.md` and `script.md` are never decks. The builder fetches only what a deck needs (a blob-less partial clone plus a sparse checkout of the deck folder, or of the single file for PowerPoint/PDF decks), so large archives of presentations cost each build one download.
 
 **Variants.** Several decks in one folder are variants of the same talk: `slides.<variant>.md` next to `slides.md` (Slidev), additional presenterm markdown files (the newest dated file is the main deck, `entry:` in `.podium.yml` overrides), and every PowerPoint/PDF file. Variant URLs are `/d/<folder-slug>-<variant>/`.
 

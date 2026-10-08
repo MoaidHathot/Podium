@@ -26,12 +26,15 @@ public static class DeckServingEndpoints
             => ServeArtifact(slug, ArtifactKind.Pdf, http, access, artifacts, callers, views, cache, viewTokens, ct)).RequireRateLimiting("deck-entry");
         app.MapGet("/d/{slug}.pptx", (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, IViewHistoryStore views, IMemoryCache cache, ViewTokenService viewTokens, CancellationToken ct)
             => ServeArtifact(slug, ArtifactKind.Pptx, http, access, artifacts, callers, views, cache, viewTokens, ct)).RequireRateLimiting("deck-entry");
-        app.MapGet("/d/{slug}.jpg", async (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct) =>
+        app.MapGet("/d/{slug}.jpg", async (string slug, HttpContext http, DeckAccessService access, IArtifactStore artifacts, CallerResolver callers, CancellationToken ct, string? size = null) =>
         {
             var caller = callers.Resolve(http.User);
             var result = await access.EvaluateAsync(http, slug, ArtifactKind.Thumbnail, caller, ct);
             if (result.Deck is null || result.Decision != AccessDecision.Allow || result.Deck.CurrentBuildId is null) return Results.NotFound();
-            var file = await artifacts.OpenArtifactAsync(slug, result.Deck.CurrentBuildId, ArtifactKind.Thumbnail, ct);
+            // "size=sm" is the card-sized image (640x360, a quarter of the bytes and a fifth of the decode work of the
+            // full one); builds made before it existed fall back to the full thumbnail.
+            var file = size == "sm" ? await artifacts.OpenArtifactAsync(slug, result.Deck.CurrentBuildId, ArtifactKind.ThumbnailSmall, ct) : null;
+            file ??= await artifacts.OpenArtifactAsync(slug, result.Deck.CurrentBuildId, ArtifactKind.Thumbnail, ct);
             if (file is null) return Results.NotFound();
             // The UI appends ?v=<buildId>, so long-lived caching is safe.
             http.Response.Headers[HeaderNames.CacheControl] = "private, max-age=86400";

@@ -60,7 +60,7 @@ else
         <article class="card">
             @if (canSite && d.CurrentHasThumbnail)
             {
-                <a class="card-thumb" href="/d/@d.Slug/" tabindex="-1"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId" alt="" loading="lazy" /></a>
+                <a class="card-thumb" href="/d/@d.Slug/" tabindex="-1"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId&size=sm" alt="" loading="lazy" decoding="async" width="320" height="180" /></a>
             }
             <div class="card-body">
                 <div class="card-title">@d.Title</div>

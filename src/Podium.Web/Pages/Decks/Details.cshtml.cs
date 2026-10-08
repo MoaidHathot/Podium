@@ -34,6 +34,10 @@ public sealed class DetailsModel(IDeckStore decks, ISourceStore sources, IBuildS
     {
         var deck = await decks.GetAsync(slug, ct);
         if (deck is null) return NotFound();
+        // This page prints durable secrets (share-link ids, join code); it stays out of HTTPS response compression so a
+        // compression oracle (BREACH) has nothing to measure here. Everything else on the site compresses.
+        if (HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpsCompressionFeature>() is { } compression)
+            compression.Mode = Microsoft.AspNetCore.Http.Features.HttpsCompressionMode.DoNotCompress;
         Deck = deck;
         Source = await sources.GetAsync(deck.SourceId, ct);
         Builds = await builds.ListForDeckAsync(slug, 15, ct);

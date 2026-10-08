@@ -144,7 +144,7 @@ else
                  data-decks="@v.Decks.Count" data-events="@v.Submissions.Count" data-kind="@(t.Durations.Any(d => d >= 120) || v.Submissions.Any(s => s.Format is "course" or "workshop") ? "Courses and workshops" : "Talks")">
             @if (v.Thumbnail is { } th)
             {
-                <a class="talk-thumb" href="/talks/@t.Id" tabindex="-1" aria-hidden="true"><img src="/d/@(th.Slug).jpg?v=@th.CurrentBuildId" alt="" loading="lazy" decoding="async" width="320" height="180" /></a>
+                <a class="talk-thumb" href="/talks/@t.Id" tabindex="-1" aria-hidden="true"><img src="/d/@(th.Slug).jpg?v=@th.CurrentBuildId&size=sm" alt="" loading="lazy" decoding="async" width="320" height="180" /></a>
             }
             else
             {

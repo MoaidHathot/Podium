@@ -330,6 +330,21 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
     o.KnownProxies.Clear();
 });
 
+// ----- Response compression -----
+// The ingress does not compress, and a library of a hundred decks is 600 KB of HTML (37 KB gzipped); Slidev bundles
+// and the API's deck list are large too. BREACH needs a stable secret and attacker-chosen text in the same compressed
+// body: the per-response antiforgery token and CSP nonce are freshly randomised each time, pages echo no free text,
+// and the one page that carries durable secrets (share-link ids on the deck page) opts out of compression itself.
+builder.Services.AddResponseCompression(o =>
+{
+    o.EnableForHttps = true;
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+    o.MimeTypes = [.. Microsoft.AspNetCore.ResponseCompression.ResponseCompressionDefaults.MimeTypes, "image/svg+xml", "application/manifest+json", "text/markdown"];
+});
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
+
 var app = builder.Build();
 
 // `Podium.Web export`: one-shot backup of the tables into the "backups" blob container, then exit (scheduled job).
@@ -364,6 +379,8 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Error");
     app.UseHsts();
 }
+// Before anything that writes a body (static files, deck assets, pages, API).
+app.UseResponseCompression();
 
 app.Use(async (ctx, next) =>
 {
@@ -451,10 +468,12 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
     });
 
     // Development/CI only: seeds a fixture deck (memory storage) whose tiny site speaks the Podium sync protocol, so
-    // browser smoke tests can exercise library, details, remote and the relay without a real build.
-    app.MapPost("/dev-seed", async (ISourceStore sources, IDeckStore decks, IBuildStore builds, IArtifactStore artifacts, DeckAccessService access, DeckSearchIndex search, ITalkStore talks, CancellationToken ct) =>
+    // browser smoke tests can exercise library, details, remote and the relay without a real build. "?bulk=N" adds
+    // N fabricated decks spread over talks, so the library is tested at the size of a real one.
+    app.MapPost("/dev-seed", async (ISourceStore sources, IDeckStore decks, IBuildStore builds, IArtifactStore artifacts, DeckAccessService access, DeckSearchIndex search, ITalkStore talks, CancellationToken ct, int bulk = 0) =>
     {
         if (artifacts is not LocalArtifactStore local) return Results.BadRequest("dev-seed needs memory storage");
+        if (bulk is < 0 or > 1000) return Results.BadRequest("bulk must be 0..1000");
         const string slug = "fixture-deck";
         const string talkId = "fixture-slides-fixture";
         await sources.UpsertAsync(new Source { Id = "fixture/slides", Owner = "fixture", Repo = "slides", Trusted = true, LastSeenSha = new string('a', 40) }, ct);
@@ -504,7 +523,8 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
             ],
         }, ct);
         await talks.UpsertSpeakerAsync(new Speaker { SourceId = "fixture/slides", Name = "Fixture Speaker", Tagline = "Tests things for a living", Bio = "Fixture Speaker writes **smoke tests** and talks about them.", Parts = [new TalkPart("Short bio", "Fixture Speaker tests things.")], Links = [new("github", "https://github.com/fixture")] }, ct);
-        return Results.Ok(new { slug, talk = talkId });
+        if (bulk > 0) await Podium.Web.Storage.BulkSeed.SeedAsync(bulk, local, decks, builds, talks, access, ct);
+        return Results.Ok(new { slug, talk = talkId, bulk });
     });
 }
 

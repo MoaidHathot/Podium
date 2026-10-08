@@ -338,6 +338,27 @@ try {
   await vp.goto(`${base}/gallery`, { waitUntil: 'networkidle' });
   check('phone gallery keeps its header buttons on one line', await vp.evaluate(() => { const b = [...document.querySelectorAll('.row-between .row > .btn')]; return b.length >= 2 && Math.abs(b[0].getBoundingClientRect().y - b[1].getBoundingClientRect().y) < 4 && b[0].getBoundingClientRect().width < 200; }));
 
+  // ---- A library the size of a real one (110 more decks over ~35 talks) on a throttled phone. ----
+  const bulk = await op.request.post(`${base}/dev-seed?bulk=110`, { headers: { 'x-podium-request': '1' } });
+  check('bulk fixture seeded', bulk.ok(), String(bulk.status()));
+  await op.setViewportSize({ width: 390, height: 844 });
+  const cdp = await owner.newCDPSession(op);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  const thumbs = [];
+  op.on('request', (r) => { if (/\.jpg\?/.test(r.url())) thumbs.push(r.url()); });
+  const doc = await op.goto(`${base}/`, { waitUntil: 'load' });
+  check('library HTML is compressed', /br|gzip/.test(doc.headers()['content-encoding'] || ''), doc.headers()['content-encoding'] || 'none');
+  check('library renders every deck', (await op.locator('.card[data-slug^="load-deck-"]').count()) >= 110);
+  check('cards ask for the small thumbnail', thumbs.length > 0 && thumbs.every((u) => /size=sm/.test(u)), `${thumbs.length} requests`);
+  check('off-screen cards are skipped until scrolled to (content-visibility)', await op.evaluate(() => getComputedStyle(document.querySelector('.card[data-slug="load-deck-050"]')).contentVisibility === 'auto'));
+  const switchMs = async (sel) => op.evaluate(async (s) => { const t = performance.now(); document.querySelector(s).click(); await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); return performance.now() - t; }, sel);
+  const toList = await switchMs('label[for="density-list"]');
+  const toGrid = await switchMs('label[for="density-grid"]');
+  check('density switch repaints within budget on a 4x-throttled phone', toList < 2000 && toGrid < 2000, `list ${Math.round(toList)} ms, grid ${Math.round(toGrid)} ms`);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  check('touch devices get no sticky hover look on the nav', await op.evaluate(() => [...document.styleSheets].flatMap((s) => { try { return [...s.cssRules]; } catch { return []; } }).some((r) => r.media && /hover: hover/.test(r.media.mediaText) && /\.topnav a:hover/.test(r.cssText))));
+  await op.setViewportSize({ width: 1400, height: 1000 });
+
   check('no page errors / CSP violations', errors.length === 0, errors.join(' | '));
 } finally { await browser.close(); }
 

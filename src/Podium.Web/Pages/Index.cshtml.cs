@@ -126,7 +126,8 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
     };
     public string KindCss => Deck.Kind.ToString().ToLowerInvariant();
     public bool HasThumbnail => Deck.CurrentHasThumbnail && Deck.CurrentBuildId is not null;
-    public string ThumbnailUrl => $"/d/{Deck.Slug}.jpg?v={Deck.CurrentBuildId}";
+    /// <summary>Card-sized preview (the full-size one is for the deck page and link previews).</summary>
+    public string ThumbnailUrl => $"/d/{Deck.Slug}.jpg?v={Deck.CurrentBuildId}&size=sm";
     public bool Servable => Deck.CurrentBuildId is not null;
     public bool IsSlidev => Deck.Kind == DeckKind.Slidev;
     /// <summary>Kinds the phone remote can drive: everything Podium renders itself (Slidev addon, presenterm adapter, pages viewer).</summary>

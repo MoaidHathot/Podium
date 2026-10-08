@@ -102,7 +102,7 @@
                 {
                     var isHome = d.Path == t.Path;
                     <li class="variant">
-                        @if (d.CurrentHasThumbnail && d.CurrentBuildId is not null) { <a class="variant-thumb" href="/d/@d.Slug/" target="_blank" rel="noopener" tabindex="-1"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId" alt="" loading="lazy" width="160" height="90" /></a> }
+                        @if (d.CurrentHasThumbnail && d.CurrentBuildId is not null) { <a class="variant-thumb" href="/d/@d.Slug/" target="_blank" rel="noopener" tabindex="-1"><img src="/d/@(d.Slug).jpg?v=@d.CurrentBuildId&size=sm" alt="" loading="lazy" decoding="async" width="160" height="90" /></a> }
                         else { <span class="variant-thumb variant-thumb-empty"></span> }
                         <div class="variant-text">
                             <div class="row" style="gap:.4rem; flex-wrap:wrap; align-items:center">
