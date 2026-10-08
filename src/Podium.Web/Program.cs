@@ -163,6 +163,8 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
         o.Cookie.HttpOnly = true;
         o.Cookie.SameSite = SameSiteMode.Lax;
         o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        // Tickets live 14 days, renewed on use; sign-ins ask for a persistent cookie (see /login/github) so the cookie
+        // carries that expiry too - a session cookie dies with the browser process, which phones kill all the time.
         o.ExpireTimeSpan = TimeSpan.FromDays(14);
         o.SlidingExpiration = true;
         o.LoginPath = "/login";
@@ -173,7 +175,9 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
         o.Events.OnRedirectToLogin = ctx =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api")) { ctx.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; }
-            if (galleryEnabled && ctx.Request.Path == "/") { ctx.Response.Redirect("/gallery" + ctx.Request.QueryString); return Task.CompletedTask; }
+            // Strangers at the root see the portfolio; a browser that signed in before (the owner's phone opening the
+            // installed app after the cookie expired) goes back through sign-in instead of landing on the gallery.
+            if (galleryEnabled && ctx.Request.Path == "/" && !Podium.Web.Security.KnownDevice.IsKnown(ctx.HttpContext)) { ctx.Response.Redirect("/gallery" + ctx.Request.QueryString); return Task.CompletedTask; }
             ctx.Response.Redirect(ctx.RedirectUri);
             return Task.CompletedTask;
         };
@@ -189,6 +193,9 @@ var auth = builder.Services.AddAuthentication(CookieAuthenticationDefaults.Authe
         // tickets are rejected on their next request (30 s cache). Tickets without a sid predate device tracking.
         o.Events.OnSigningIn = async ctx =>
         {
+            // Remember that this browser signed in (no identity in it): /login then goes straight to GitHub next time
+            // instead of showing a page whose only button leads there anyway.
+            Podium.Web.Security.KnownDevice.Remember(ctx.HttpContext);
             var identity = (ClaimsIdentity)ctx.Principal!.Identity!;
             if (identity.HasClaim(c => c.Type == Podium.Web.Security.DeviceService.SidClaim)) return;
             var caller = ctx.HttpContext.RequestServices.GetRequiredService<CallerResolver>().Resolve(ctx.Principal);
@@ -246,6 +253,21 @@ if (gh.OAuthConfigured)
         o.SaveTokens = false;
         o.Scope.Clear(); // GitHub App user tokens carry the App's permissions; we only need the public profile.
         o.CorrelationCookie.SameSite = SameSiteMode.Lax;
+        // A failed or declined round-trip lands on the login page with an explanation and no automatic retry (the
+        // page only continues to GitHub by itself when the browser is known and nothing went wrong).
+        o.Events.OnRemoteFailure = ctx =>
+        {
+            ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>().LogWarning(ctx.Failure, "GitHub sign-in failed");
+            ctx.Response.Redirect($"/login?error=failed&returnUrl={Uri.EscapeDataString(SafeReturnUrl(ctx.Properties?.RedirectUri))}");
+            ctx.HandleResponse();
+            return Task.CompletedTask;
+        };
+        o.Events.OnAccessDenied = ctx =>
+        {
+            ctx.Response.Redirect($"/login?error=denied&returnUrl={Uri.EscapeDataString(SafeReturnUrl(ctx.Properties?.RedirectUri))}");
+            ctx.HandleResponse();
+            return Task.CompletedTask;
+        };
         o.ClaimActions.MapJsonKey(PodiumClaims.GitHubId, "id");
         o.ClaimActions.MapJsonKey(PodiumClaims.Login, "login");
         o.ClaimActions.MapJsonKey(PodiumClaims.Avatar, "avatar_url");
@@ -371,13 +393,16 @@ app.MapGet("/login/github", (string? returnUrl) =>
 {
     if (!gh.OAuthConfigured) return Results.Problem("GitHub OAuth is not configured.", statusCode: 503);
     var target = SafeReturnUrl(returnUrl);
-    return Results.Challenge(new AuthenticationProperties { RedirectUri = target }, [GitHubAuthenticationDefaults.AuthenticationScheme]);
+    // IsPersistent: the cookie gets the ticket's expiry instead of dying with the browser session.
+    return Results.Challenge(new AuthenticationProperties { RedirectUri = target, IsPersistent = true }, [GitHubAuthenticationDefaults.AuthenticationScheme]);
 }).RequireRateLimiting("auth");
 app.MapPost("/logout", async (HttpContext http, Microsoft.AspNetCore.Antiforgery.IAntiforgery antiforgery) =>
 {
     if (!await antiforgery.IsRequestValidAsync(http)) return Results.BadRequest();
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-    return Results.Redirect("/login");
+    // An explicit sign-out means "stay signed out here": the login page must not continue to GitHub on its own.
+    Podium.Web.Security.KnownDevice.Forget(http);
+    return Results.Redirect("/login?prompt=1");
 });
 // Owner only (policy on the group): invalidates every session cookie, including this one.
 app.MapPost("/api/security/sign-out-everywhere", async (HttpContext http, SecurityStamp stamp, AuditService audit, CancellationToken ct) =>
@@ -415,13 +440,13 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
         var id = opts.Value.OwnerGitHubId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         // Same claim set as the real GitHub login, avatar included, so the layout and CSP are exercised identically.
         var identity = new ClaimsIdentity([new Claim(PodiumClaims.GitHubId, id), new Claim(ClaimTypes.NameIdentifier, id), new Claim(ClaimTypes.Name, "dev-owner"), new Claim(PodiumClaims.Login, "dev-owner"), new Claim(PodiumClaims.Avatar, $"https://avatars.githubusercontent.com/u/{id}?v=4")], CookieAuthenticationDefaults.AuthenticationScheme);
-        await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+        await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity), new AuthenticationProperties { IsPersistent = true });
         return Results.Redirect(SafeReturnUrl(returnUrl));
     });
     app.MapGet("/dev-login-guest", async (HttpContext http, string? returnUrl, long id = 424242) =>
     {
         var identity = new ClaimsIdentity([new Claim(PodiumClaims.GitHubId, id.ToString(System.Globalization.CultureInfo.InvariantCulture)), new Claim(ClaimTypes.Name, "dev-guest"), new Claim(PodiumClaims.Login, "dev-guest")], CookieAuthenticationDefaults.AuthenticationScheme);
-        await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+        await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity), new AuthenticationProperties { IsPersistent = true });
         return Results.Redirect(SafeReturnUrl(returnUrl));
     });
 

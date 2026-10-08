@@ -495,6 +495,89 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
     private static string DeviceServiceSummary(string ua) => typeof(Podium.Web.Security.DeviceService).GetMethod("Summarize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, [ua]) as string ?? "";
 
     [Fact]
+    public async Task Sign_in_cookie_outlives_the_browser_session_and_a_known_browser_is_remembered_until_it_signs_out()
+    {
+        var c = app.Client();
+        var login = await c.GetAsync("/dev-login?returnUrl=/");
+        Assert.Equal(HttpStatusCode.Redirect, login.StatusCode);
+        var cookies = login.Headers.GetValues("Set-Cookie").ToList();
+        // A session cookie dies when a phone kills the browser; the sign-in cookie carries the ticket's expiry instead.
+        var session = Assert.Single(cookies, h => h.StartsWith("podium_session=", StringComparison.Ordinal));
+        Assert.Contains("expires=", session, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("httponly", session, StringComparison.OrdinalIgnoreCase);
+        var expires = DateTimeOffset.Parse(System.Text.RegularExpressions.Regex.Match(session, "expires=([^;]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.InRange(expires, DateTimeOffset.UtcNow.AddDays(13), DateTimeOffset.UtcNow.AddDays(15));
+        // ...and the browser is marked as one that signed in (no identity inside, a year long).
+        var known = Assert.Single(cookies, h => h.StartsWith("podium_known=1", StringComparison.Ordinal));
+        Assert.Contains("httponly", known, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=lax", known, StringComparison.OrdinalIgnoreCase);
+
+        // The owner opening /login is simply sent on.
+        c.DefaultRequestHeaders.Add("X-Podium-Request", "1");
+        var asOwner = await c.SendAsync(PodiumWebFactory.Navigation("/login?returnUrl=%2Fsources"));
+        Assert.Equal(HttpStatusCode.Redirect, asOwner.StatusCode);
+        Assert.Equal("/sources", PathOf(asOwner.Headers.Location!));
+
+        // Signing out clears the hint, and the login page says so instead of continuing on its own.
+        var page = await (await c.SendAsync(PodiumWebFactory.Navigation("/"))).Content.ReadAsStringAsync();
+        var token = System.Text.RegularExpressions.Regex.Match(page, "name=\"__RequestVerificationToken\" type=\"hidden\" value=\"([^\"]+)\"").Groups[1].Value;
+        var logout = await c.PostAsync("/logout", new FormUrlEncodedContent([new("__RequestVerificationToken", token)]));
+        Assert.Equal(HttpStatusCode.Redirect, logout.StatusCode);
+        Assert.Equal("/login?prompt=1", PathOf(logout.Headers.Location!));
+        Assert.Contains(logout.Headers.GetValues("Set-Cookie"), h => h.StartsWith("podium_known=;", StringComparison.Ordinal) || h.StartsWith("podium_known=; ", StringComparison.Ordinal));
+        var after = await c.SendAsync(PodiumWebFactory.Navigation("/login?prompt=1"));
+        Assert.Equal(HttpStatusCode.OK, after.StatusCode);
+        var html = await after.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("You signed out of Podium on this device", html); // hint is gone: the plain page
+        Assert.Contains("Sign in with GitHub to continue", html);
+    }
+
+    [Fact]
+    public async Task Login_page_sends_a_known_browser_straight_to_github_unless_something_went_wrong()
+    {
+        // OAuth configured (fake client), so the page has somewhere to continue to.
+        await using var oauth = new OAuthWebFactory();
+        var c = oauth.Client();
+        var fresh = await c.SendAsync(PodiumWebFactory.Navigation("/login?returnUrl=%2Fdecks%2Fx"));
+        Assert.Equal(HttpStatusCode.OK, fresh.StatusCode); // never seen this browser: show the page
+        var html = await fresh.Content.ReadAsStringAsync();
+        Assert.Contains("id=\"login-github\"", html);
+        Assert.Contains("href=\"/login/github?returnUrl=%2Fdecks%2Fx\"", html);
+
+        // The challenge itself goes to GitHub with the callback and asks for nothing but identity.
+        var challenge = await c.GetAsync("/login/github?returnUrl=%2Fdecks%2Fx");
+        Assert.Equal(HttpStatusCode.Redirect, challenge.StatusCode);
+        Assert.StartsWith("https://github.com/login/oauth/authorize", challenge.Headers.Location!.ToString());
+        Assert.Contains("redirect_uri=http%3A%2F%2Fpodium.test%2Fsignin-github", challenge.Headers.Location!.ToString());
+        Assert.Contains(challenge.Headers.GetValues("Set-Cookie"), h => h.Contains(".Correlation.", StringComparison.Ordinal));
+
+        // A browser that signed in before skips the page...
+        c.DefaultRequestHeaders.Add("Cookie", "podium_known=1");
+        var known = await c.SendAsync(PodiumWebFactory.Navigation("/login?returnUrl=%2Fdecks%2Fx"));
+        Assert.Equal(HttpStatusCode.Redirect, known.StatusCode);
+        Assert.Equal("/login/github?returnUrl=%2Fdecks%2Fx", PathOf(known.Headers.Location!));
+        // ...except after a failed or declined round-trip, or when asked to show the page.
+        foreach (var q in new[] { "error=failed", "error=denied", "prompt=1" })
+        {
+            var shown = await c.SendAsync(PodiumWebFactory.Navigation($"/login?{q}&returnUrl=%2Fdecks%2Fx"));
+            Assert.Equal(HttpStatusCode.OK, shown.StatusCode);
+            var text = await shown.Content.ReadAsStringAsync();
+            Assert.Contains("Continue with GitHub", text);
+            if (q.StartsWith("error", StringComparison.Ordinal)) Assert.Contains("role=\"alert\"", text);
+        }
+        // A rejected return URL never leaks into the redirect.
+        var evil = await c.SendAsync(PodiumWebFactory.Navigation("/login?returnUrl=//evil.test"));
+        Assert.Equal("/login/github?returnUrl=%2F", PathOf(evil.Headers.Location!));
+
+        // The root: strangers see the gallery, a browser that signed in before goes back through sign-in.
+        var stranger = oauth.Client();
+        Assert.Equal("/gallery", PathOf((await stranger.SendAsync(PodiumWebFactory.Navigation("/"))).Headers.Location!));
+        var root = await c.SendAsync(PodiumWebFactory.Navigation("/"));
+        Assert.Equal(HttpStatusCode.Redirect, root.StatusCode);
+        Assert.StartsWith("/login?returnUrl=%2F", PathOf(root.Headers.Location!));
+    }
+
+    [Fact]
     public async Task Viewer_locks_keep_non_presenters_out_of_the_presenter_view_and_the_overview_while_live()
     {
         var deck = await app.SeedDeckAsync("locked-deck", Visibility.Public);
@@ -664,9 +747,11 @@ public sealed class AuthAndApiTests(PodiumWebFactory app)
         var owner = await app.OwnerClientAsync();
         await owner.PostAsync($"/api/decks/{deck.Slug}/links", JsonContent.Create(new { artifact = "Site", label = "l", expiresInDays = 7 }));
         var parser = new Acornima.Parser(new Acornima.ParserOptions { Tolerant = false });
-        foreach (var path in new[] { "/", "/sources", $"/decks/{deck.Slug}", "/login" })
+        // The login page is shown to browsers that are not signed in (the owner is sent on from it).
+        var anon = app.Client();
+        foreach (var path in new[] { "/", "/sources", $"/decks/{deck.Slug}", "/talks", "/login?prompt=1" })
         {
-            var r = await owner.SendAsync(PodiumWebFactory.Navigation(path));
+            var r = await (path.StartsWith("/login", StringComparison.Ordinal) ? anon : owner).SendAsync(PodiumWebFactory.Navigation(path));
             Assert.Equal(HttpStatusCode.OK, r.StatusCode);
             var html = await r.Content.ReadAsStringAsync();
             var scripts = System.Text.RegularExpressions.Regex.Matches(html, "<script(?![^>]*\\ssrc=)[^>]*>(.*?)</script>", System.Text.RegularExpressions.RegexOptions.Singleline);

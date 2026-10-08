@@ -16,7 +16,7 @@ namespace Podium.Tests.Web;
 /// Boots the real pipeline (auth, rate limiting, external-host isolation, serving, API) on in-memory stores with
 /// a fake artifact store. No Azure, no GitHub, no builder: everything a request touches is seeded by the test.
 /// </summary>
-public sealed class PodiumWebFactory : WebApplicationFactory<Program>
+public class PodiumWebFactory : WebApplicationFactory<Program>
 {
     public const long OwnerId = 1001;
     public const string PublicOrigin = "http://podium.test";
@@ -126,6 +126,17 @@ public sealed class PodiumWebFactory : WebApplicationFactory<Program>
     }
 
     private static int _buildSeq;
+}
+
+/// <summary>The same pipeline with GitHub OAuth configured (fake client id/secret), for the sign-in flow's own tests.</summary>
+public sealed class OAuthWebFactory : PodiumWebFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.UseSetting("GitHub:ClientId", "Iv1.test-client");
+        builder.UseSetting("GitHub:ClientSecret", "test-secret");
+    }
 }
 
 /// <summary>Repository client with a dictionary of files; nothing reaches GitHub from the web tests.</summary>

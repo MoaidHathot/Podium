@@ -106,6 +106,7 @@ p { margin: 0 0 .75rem; }
 .btn-danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); background: transparent; }
 .btn-danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }
 .btn-sm { padding: .3rem .6rem; font-size: .85rem; }
+.btn-lg { padding: .75rem 1.3rem; font-size: 1.05rem; gap: .6rem; }
 .btn-icon { padding: .45rem; }
 .btn-frozen { color: var(--info); border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 10%, transparent); }
 
