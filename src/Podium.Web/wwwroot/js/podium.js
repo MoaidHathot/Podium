@@ -73,6 +73,8 @@
   document.addEventListener('DOMContentLoaded', () => {
     refreshTimes();
     setInterval(refreshTimes, 60_000);
+    // Narrow screens get the short placeholder an input declares (the long one explains what the search covers).
+    if (matchMedia('(max-width: 640px)').matches) for (const el of document.querySelectorAll('[data-placeholder-short]')) el.placeholder = el.dataset.placeholderShort;
   });
 
   window.Podium = { api, toast, relative, refreshTimes, copy };

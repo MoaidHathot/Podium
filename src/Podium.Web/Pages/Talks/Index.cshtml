@@ -58,7 +58,7 @@ else
     <div class="row-between" style="margin-bottom:1rem; flex-wrap:wrap; gap:.6rem">
         <div>
             <h1>Talks</h1>
-            <p class="muted" style="margin:0">@Model.Talks.Count talk@(Model.Talks.Count == 1 ? "" : "s") · abstracts, variants and where they were given. Each talk is an <code>abstract.md</code> next to its deck; events are files under <code>submissions/</code>.</p>
+            <p class="muted" style="margin:0">@Model.Talks.Count talk@(Model.Talks.Count == 1 ? "" : "s") · abstracts, variants and where they were given.<span class="desktop-only"> Each talk is an <code>abstract.md</code> next to its deck; events are files under <code>submissions/</code>.</span></p>
         </div>
         <div class="row" style="gap:.5rem; flex-wrap:wrap">
             @if (Model.Sources.Any(s => s.Trusted)) { <button class="btn btn-primary" id="new-talk">New talk</button> }

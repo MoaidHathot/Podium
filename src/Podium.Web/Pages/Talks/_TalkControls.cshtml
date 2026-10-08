@@ -1,16 +1,16 @@
 @model bool
 @* Sort / group / direction controls of the talks catalog. The model says whether the viewer is the owner (status grouping). *@
-<label class="control">Group by
-    <select id="talk-group" class="input">
-        <option value="none">Nothing</option>
+<label class="control"><span class="control-label">Group by</span>
+    <select id="talk-group" class="input" aria-label="Group by">
+        <option value="none">No grouping</option>
         @if (Model) { <option value="status">Status</option> }
         <option value="kind">Talks / courses</option>
         <option value="level">Level</option>
         <option value="yeargiven">Year given</option>
     </select>
 </label>
-<label class="control">Sort
-    <select id="talk-sort" class="input">
+<label class="control"><span class="control-label">Sort</span>
+    <select id="talk-sort" class="input" aria-label="Sort by">
         <option value="active">Recently active</option>
         <option value="given">Last given</option>
         <option value="next">Next event</option>

@@ -119,6 +119,11 @@ p { margin: 0 0 .75rem; }
 label { font-size: .9rem; color: var(--text-muted); }
 .field { display: flex; flex-direction: column; gap: .3rem; }
 .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+/* A label that holds a checkbox (or a small field) and its text flows like a sentence: the text wraps beside the box
+   instead of the box ending up alone on a line when the label is narrow. */
+label.row { display: block; }
+label.row > input[type="checkbox"], label.row > input[type="radio"] { vertical-align: -.15em; margin: 0 .35rem 0 0; }
+label.row > .input { vertical-align: baseline; margin: 0 .25rem; }
 .row-between { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
 
 /* Search */
@@ -230,6 +235,7 @@ body[data-group="repo"] .card .repo { display: none; }
     display: grid; grid-template-columns: 6rem 4.6rem minmax(0, 1fr); grid-template-areas: 'kind vis status' 'updated updated updated';
     column-gap: .4rem; row-gap: .2rem; align-items: center;
   }
+  body[data-density="list"] .cards-grid .card-meta .meta-state { display: contents; }
   body[data-density="list"] .cards-grid .card-meta .kind { grid-area: kind; justify-self: start; }
   body[data-density="list"] .cards-grid .card-meta .vis { grid-area: vis; justify-self: start; }
   body[data-density="list"] .cards-grid .card-meta .status { grid-area: status; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -245,6 +251,8 @@ body[data-group="repo"] .card .repo { display: none; }
   body[data-density="list"] .cards-grid .act-pdf       { grid-column: 6; }
   body[data-density="list"] .cards-grid .act-pptx      { grid-column: 7; }
   body[data-density="list"] .cards-grid .act-manage    { grid-column: 8; margin-right: .6rem; }
+  /* The remote has no column in the aligned list (it is a phone action; the deck page carries the QR). */
+  body[data-density="list"] .cards-grid .act-remote    { display: none; }
   body[data-density="list"] .cards-grid .act-pdf, body[data-density="list"] .cards-grid .act-pptx, body[data-density="list"] .cards-grid .act-manage { justify-self: start; }
   /* The dismiss button keeps overlaying the thumbnail's corner (top-right of the 120px thumb). */
   body[data-density="list"] .cards-grid .card-dismiss  { top: .35rem; right: auto; left: calc(120px - 1.7rem - .35rem); width: 1.5rem; height: 1.5rem; }
@@ -308,6 +316,8 @@ body[data-density="list"] .card-variants { display: none; }
 .card-sub { color: var(--text-muted); font-size: .85rem; display: flex; gap: .35rem; align-items: center; min-width: 0; }
 .card-sub .path { font-family: var(--mono); font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; font-size: .82rem; color: var(--text-muted); }
+/* Build status and the saved date are one unit: they move to the next line together instead of leaving "·" at a line start. */
+.card-meta .meta-state { display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap; min-width: 0; }
 .card-tags { display: flex; gap: .3rem; flex-wrap: wrap; }
 .tag { font: inherit; font-size: .75rem; padding: .05rem .45rem; border-radius: 999px; border: 1px solid transparent; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); cursor: pointer; }
 .tag:hover { border-color: var(--accent); }
@@ -341,6 +351,9 @@ body[data-density="list"] .cards-grid .card-tags { display: none; }
 .table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .table th, .table td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .table th { color: var(--text-muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+/* The grants and share-link tables fill from the form beneath them: an empty one shows no lonely header row
+   (on a phone the headers would seem to belong to the wrapped form). */
+.table-wrap > #grants:not(:has(tbody tr)), .table-wrap > #links:not(:has(tbody tr)) { display: none; }
 .table tr:last-child td { border-bottom: 0; }
 
 /* Panels */
@@ -536,12 +549,65 @@ kbd { font: inherit; font-size: .78rem; padding: .05rem .4rem; border: 1px solid
   .topnav { order: 10; flex-basis: 100%; overflow-x: auto; gap: .15rem; scrollbar-width: none; }
   .topnav::-webkit-scrollbar { display: none; }
   .topnav a { padding: .3rem .6rem; white-space: nowrap; }
+  /* Controls: the search shares its line with the view switch (a list header's usual place for it), then Group and
+     Sort each take half of the next line with the direction button; the captions "Group by" / "Sort" are read by
+     screen readers but not shown - the selects show their value. */
   .toolbar { position: static; gap: .5rem; }
-  .toolbar .search-wrap { flex-basis: 100%; max-width: none; min-width: 0; }
-  .toolbar .control .input { max-width: 10rem; }
+  .toolbar .search-wrap { order: 0; flex: 1 1 60%; max-width: none; min-width: 0; }
+  /* No keyboard shortcut hint where there is no keyboard. */
+  .search-wrap kbd { display: none; }
+  .search-wrap .input { padding-right: .8rem; }
+  .toolbar .density { order: 1; margin-left: 0; flex: none; }
+  .toolbar .density label { padding: .45rem .5rem; }
+  .toolbar .control { order: 2; flex: 1 1 40%; min-width: 0; gap: 0; }
+  .toolbar .control .control-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .toolbar .control .input { max-width: none; width: 100%; min-width: 0; padding: .45rem 1.6rem .45rem .6rem; font-size: .9rem; text-overflow: ellipsis; }
+  .toolbar #sort-dir, .toolbar #talk-dir { order: 3; margin-left: -.25rem; padding: .35rem .35rem; flex: none; }
+  .toolbar > .row { order: 4; flex-basis: 100%; }
+  /* Filters: a single line that scrolls sideways (fades at the edge), so decks start higher on the screen. */
+  .chips#filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: .15rem; margin-bottom: 0;
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent); }
+  .chips#filters::-webkit-scrollbar { display: none; }
+  .chips#filters > * { flex: none; }
+  .chips#filters .chips-sep { height: 1rem; }
+  .section { margin-top: 1.1rem; }
   .cards-grid, .grid { grid-template-columns: 1fr; }
+  /* One lead action per card on a phone: the remote. Open stays a plain button. */
   .card-actions .act-remote { order: -1; background: var(--accent); border-color: var(--accent); color: #0b0d12; font-weight: 600; }
+  .card-actions:has(.act-remote) .act-primary { background: var(--bg-elev-2); border-color: var(--border-strong); color: var(--text); }
   .card-actions .act-presenter { display: none; }
+  /* List: one compact row per deck (thumbnail, title and one line of facts, the two actions that matter on a
+     phone), instead of the same tall cards as the grid. */
+  body[data-density="list"] .cards-grid { gap: .45rem; }
+  body[data-density="list"] .cards-grid .card { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; grid-template-areas: "thumb text actions" "thumb meta actions"; align-items: center; min-height: 68px; }
+  body[data-density="list"] .cards-grid .card-body { display: contents; }
+  body[data-density="list"] .cards-grid .card-thumb { grid-area: thumb; aspect-ratio: 16 / 9; align-self: center; border-bottom: 0; border-right: 1px solid var(--border); border-radius: 0; }
+  body[data-density="list"] .cards-grid .thumb-placeholder { font-size: .8rem; }
+  body[data-density="list"] .cards-grid .thumb-badge, body[data-density="list"] .cards-grid .card-tags, body[data-density="list"] .cards-grid .card-sub,
+  body[data-density="list"] .cards-grid .card-variants, body[data-density="list"] .cards-grid .talk-short { display: none; }
+  body[data-density="list"] .cards-grid .card-text { grid-area: text; min-width: 0; padding: .45rem .5rem 0 .65rem; }
+  body[data-density="list"] .cards-grid .card-title { font-size: .95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body[data-density="list"] .cards-grid .card-meta { grid-area: meta; min-width: 0; padding: .15rem .5rem .45rem .65rem; gap: .3rem; font-size: .76rem; flex-wrap: nowrap; overflow: hidden; }
+  body[data-density="list"] .cards-grid .card-meta .badge { padding: 0 .4rem; font-size: .68rem; }
+  body[data-density="list"] .cards-grid .card-meta .status-long, body[data-density="list"] .cards-grid .card-meta .sep,
+  body[data-density="list"] .cards-grid .card-meta .updated-word, body[data-density="list"] .cards-grid .card-meta .badge-variant { display: none; }
+  body[data-density="list"] .cards-grid .card-meta .status { white-space: nowrap; flex: none; }
+  /* A green dot says "built" well enough; the word only appears when something needs attention. */
+  body[data-density="list"] .cards-grid .card-meta .status-short { display: inline; }
+  body[data-density="list"] .cards-grid .card[data-status="ok"] .card-meta .status-short { display: none; }
+  body[data-density="list"] .cards-grid .card-meta .updated { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body[data-density="list"] .cards-grid .card-actions { grid-area: actions; flex-direction: column; align-items: stretch; gap: .3rem; padding: .4rem .5rem .4rem 0; }
+  body[data-density="list"] .cards-grid .card-actions .btn { padding: .28rem .55rem; font-size: .8rem; text-align: center; }
+  body[data-density="list"] .cards-grid .card-actions .act-pdf, body[data-density="list"] .cards-grid .card-actions .act-pptx,
+  body[data-density="list"] .cards-grid .card-actions .act-manage, body[data-density="list"] .cards-grid .card-actions .spacer { display: none; }
+  body[data-density="list"] .cards-grid .card .select-box { top: auto; bottom: .35rem; left: .35rem; width: 1.3rem; height: 1.3rem; }
+  body[data-density="list"] .cards-grid .card-dismiss { top: .3rem; left: .3rem; right: auto; width: 1.4rem; height: 1.4rem; }
+  /* Talks density: a flatter card whose variant chips scroll sideways. */
+  .talk-pool-card .card-thumb { aspect-ratio: 21 / 9; }
+  .talk-pool-card .card-variants { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: .1rem; }
+  .talk-pool-card .card-variants::-webkit-scrollbar { display: none; }
+  .talk-pool-card .card-variants > * { flex: none; }
+  .desktop-only { display: none !important; }
   .row-between > .btn, .row-between > .row { width: 100%; }
   .row-between.tight > .btn, .row-between.tight > .row { width: auto; }
   .row > .input { flex: 1 1 10rem; max-width: none !important; }
@@ -554,6 +620,11 @@ kbd { font: inherit; font-size: .78rem; padding: .05rem .4rem; border: 1px solid
   .bulkbar { bottom: .4rem; }
   .hero h1 { font-size: 1.5rem; }
   dialog.dialog { padding: 1rem; }
+}
+@media (min-width: 641px) {
+  .phone-only { display: none !important; }
+  /* On a desktop the remote link is for Slidev decks (the deck page carries the QR for everything else). */
+  .card:not([data-kind="slidev"]) .act-remote { display: none; }
 }
 @media (display-mode: standalone) {
   body { padding-top: env(safe-area-inset-top); }

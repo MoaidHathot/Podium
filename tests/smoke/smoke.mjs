@@ -34,13 +34,36 @@ try {
   check('profile picture loads under the CSP', await op.evaluate(() => { const i = document.querySelector('img.avatar'); return !!i && i.complete && i.naturalWidth > 0; }));
   // Phone viewport: nothing may push the page wider than the screen.
   await op.setViewportSize({ width: 390, height: 844 });
-  for (const path of ['/', '/decks/fixture-deck', '/sources', '/activity']) {
+  for (const path of ['/', '/decks/fixture-deck', '/sources', '/activity', '/talks', '/talks/fixture-slides-fixture']) {
     await op.goto(`${base}${path}`, { waitUntil: 'networkidle' });
     const o = await op.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     check(`no horizontal overflow on a phone: ${path}`, o <= 0, `${o}px`);
   }
+  // A phone gets a phone layout, not the desktop one squeezed: the list density is a compact row per deck (clearly
+  // shorter than the grid), the remote is the lead action on every card, desktop-only chrome is gone, the filter
+  // chips sit on one scrolling line, and the toolbar puts search + view switch on the first line.
+  await op.goto(`${base}/`, { waitUntil: 'networkidle' });
+  const sameLine = async (a, b) => op.evaluate(([a, b]) => { const c = (s) => { const r = document.querySelector(s).getBoundingClientRect(); return r.y + r.height / 2; }; return Math.abs(c(a) - c(b)) < 8; }, [a, b]);
+  check('phone toolbar: search and view switch share the first line', await sameLine('.toolbar .search-wrap', '.toolbar .density'));
+  check('phone toolbar: Group/Sort selects sit below the search', await op.evaluate(() => document.querySelector('#group').getBoundingClientRect().y > document.querySelector('#search').getBoundingClientRect().bottom));
+  check('phone toolbar: no keyboard hint or desktop-only buttons', !(await op.locator('.search-wrap kbd').isVisible()) && !(await op.locator('a[href="/sources"].desktop-only').isVisible()));
+  check('phone filters stay on a single line', await op.evaluate(() => { const mids = [...document.querySelectorAll('#filters > *')].map((c) => c.getBoundingClientRect()).filter((r) => r.height > 0).map((r) => r.y + r.height / 2); return mids.length > 6 && Math.max(...mids) - Math.min(...mids) < 8; }));
+  check('phone card leads with the remote (a PDF deck too)', await op.locator('.card[data-slug="fixture-deck"] .act-remote').isVisible() && await op.evaluate(() => { const c = document.querySelector('.card[data-slug="fixture-deck"] .card-actions'); return c.querySelector('.act-remote').getBoundingClientRect().x < c.querySelector('.act-primary').getBoundingClientRect().x; }));
+  check('phone card keeps status and date together', await sameLine('.card[data-slug="fixture-deck-workshop"] .card-meta .status', '.card[data-slug="fixture-deck-workshop"] .card-meta .updated'));
+  const gridHeight = await op.evaluate(() => document.querySelector('.card[data-slug="fixture-deck"]').getBoundingClientRect().height);
+  await op.click('label[for="density-list"]'); await op.waitForTimeout(300);
+  const listHeight = await op.evaluate(() => document.querySelector('.card[data-slug="fixture-deck"]').getBoundingClientRect().height);
+  check('phone list density is a compact row', listHeight < 120 && listHeight < gridHeight / 3, `list ${Math.round(listHeight)}px vs grid ${Math.round(gridHeight)}px`);
+  check('phone list row: thumbnail, title and the two actions that matter', await op.evaluate(() => { const c = document.querySelector('.card[data-slug="fixture-deck"]'); const vis = (s) => { const e = c.querySelector(s); return !!e && e.getClientRects().length > 0; }; return vis('.card-thumb') && vis('.card-title') && vis('.act-remote') && vis('.act-primary') && !vis('.act-manage') && !vis('.card-sub'); }));
+  await op.click('label[for="density-grid"]'); await op.waitForTimeout(200);
+  await op.goto(`${base}/decks/fixture-deck`, { waitUntil: 'networkidle' });
+  check('phone deck page offers the remote as a button instead of a QR', await op.locator('#open-remote').isVisible() && !(await op.locator('#phone-remote .qr').isVisible()));
+  check('phone deck page keeps the planned minutes and their unit on one line', await sameLine('#session-minutes', '#session-freeze'));
+  await op.goto(`${base}/talks`, { waitUntil: 'networkidle' });
+  check('phone talks catalog: controls shown by value, captions for screen readers', await op.locator('#talk-group').isVisible() && (await op.evaluate(() => [...document.querySelectorAll('.toolbar .control-label')].every((l) => l.getBoundingClientRect().width <= 1))) && (await op.locator('#talk-group option[value="none"]').innerText()) === 'No grouping');
   await op.setViewportSize({ width: 1400, height: 1000 });
   await op.goto(`${base}/`, { waitUntil: 'networkidle' });
+  check('desktop card hides the remote for a PDF deck (the deck page carries the QR)', !(await op.locator('.card[data-slug="fixture-deck"] .act-remote').isVisible()) && (await op.locator('.search-wrap kbd').isVisible()));
   await op.fill('#search', 'slide two'); await op.waitForTimeout(600);
   check('full-text search hits slide 2', (await op.locator('#slide-hits-list li a[href$="/fixture-deck/2"]').count()) > 0);
   await op.fill('#search', 'sync relay'); await op.waitForTimeout(600);
@@ -305,6 +328,15 @@ try {
   const gallery = await vp.goto(`${base}/`, { waitUntil: 'networkidle' });
   check('anonymous root -> gallery', new URL(vp.url()).pathname === '/gallery', vp.url());
   check('gallery lists public fixture', (await vp.locator('.card').count()) >= 1);
+  // The public gallery and login page on a phone: no overflow, the header actions side by side rather than stacked.
+  await vp.setViewportSize({ width: 390, height: 844 });
+  for (const path of ['/gallery', '/login?prompt=1']) {
+    await vp.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+    const o = await vp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    check(`no horizontal overflow on a phone: ${path}`, o <= 0, `${o}px`);
+  }
+  await vp.goto(`${base}/gallery`, { waitUntil: 'networkidle' });
+  check('phone gallery keeps its header buttons on one line', await vp.evaluate(() => { const b = [...document.querySelectorAll('.row-between .row > .btn')]; return b.length >= 2 && Math.abs(b[0].getBoundingClientRect().y - b[1].getBoundingClientRect().y) < 4 && b[0].getBoundingClientRect().width < 200; }));
 
   check('no page errors / CSP violations', errors.length === 0, errors.join(' | '));
 } finally { await browser.close(); }

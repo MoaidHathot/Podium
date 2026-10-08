@@ -235,10 +235,13 @@
                 @if (drivable)
                 {
                     <div class="row" style="margin:.8rem 0 0; gap:.9rem; align-items:flex-start; flex-wrap:wrap" id="phone-remote">
-                        <a href="/d/@d.Slug/qr.svg?remote=1" target="_blank" rel="noopener" title="Scan with your phone to open the remote"><img class="qr" src="/d/@d.Slug/qr.svg?remote=1" alt="QR code of the phone remote" width="96" height="96" /></a>
+                        <a class="desktop-only" href="/d/@d.Slug/qr.svg?remote=1" target="_blank" rel="noopener" title="Scan with your phone to open the remote"><img class="qr" src="/d/@d.Slug/qr.svg?remote=1" alt="QR code of the phone remote" width="96" height="96" /></a>
                         <div style="flex:1; min-width:14rem">
                             <strong style="color:var(--text)">Phone remote</strong>
-                            <p class="hint" style="margin:.2rem 0 .4rem">Scan the QR with your phone (you sign in with GitHub there once), or open <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a>. @(d.Kind == DeckKind.Slidev ? "Notes, " : "")go-to grid, laser pointer, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                            <p class="hint desktop-only" style="margin:.2rem 0 .4rem">Scan the QR with your phone (you sign in with GitHub there once), or open <a href="/d/@(d.Slug)/remote" target="_blank" rel="noopener">/d/@(d.Slug)/remote</a>. @(d.Kind == DeckKind.Slidev ? "Notes, " : "")go-to grid, laser pointer, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                            @* On a phone this is the phone: open the remote right here instead of showing a code to scan. *@
+                            <p class="hint phone-only" style="margin:.2rem 0 .5rem">@(d.Kind == DeckKind.Slidev ? "Notes, " : "")go-to grid, laser pointer, blackout, countdown, Go live; drives every open instance of the deck.</p>
+                            <a class="btn btn-primary phone-only" href="/d/@(d.Slug)/remote" id="open-remote">Open the remote</a>
                         </div>
                     </div>
                 }
@@ -314,7 +317,7 @@
 {
 <section class="panel" style="margin-top:1rem" id="slides">
     <h3>Slides</h3>
-    <p class="hint">Hover a slide for its number; click to open it; the link button copies a deep link to that slide.</p>
+    <p class="hint"><span class="desktop-only">Hover a slide for its number; click to open it; the link button copies a deep link to that slide.</span><span class="phone-only">Tap a slide to open it; the link button copies a deep link to that slide.</span></p>
     <div class="slide-strip" id="slide-strip" data-count="@d.CurrentSlideCount" data-sheet="/d/@(d.Slug)/slides.jpg?v=@d.CurrentBuildId" data-meta="/d/@(d.Slug)/slides.json?v=@d.CurrentBuildId" data-base="@Model.PublicOrigin/d/@(d.Slug)/"></div>
 </section>
 }

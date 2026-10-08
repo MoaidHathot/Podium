@@ -129,6 +129,8 @@ public sealed record DeckRow(Deck Deck, Source? Source, DateTimeOffset? LastView
     public string ThumbnailUrl => $"/d/{Deck.Slug}.jpg?v={Deck.CurrentBuildId}";
     public bool Servable => Deck.CurrentBuildId is not null;
     public bool IsSlidev => Deck.Kind == DeckKind.Slidev;
+    /// <summary>Kinds the phone remote can drive: everything Podium renders itself (Slidev addon, presenterm adapter, pages viewer).</summary>
+    public bool Drivable => Deck.Kind is DeckKind.Slidev or DeckKind.Presenterm or DeckKind.PowerPoint or DeckKind.Pdf;
     public DateTimeOffset Updated => Saved;
     public string VisibilityLabel => Deck.Visibility switch
     {

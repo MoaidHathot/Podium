@@ -20,15 +20,17 @@
         <h1>@Model.Title</h1>
         <p class="muted" style="margin:0">@description@(Model.Tag is not null ? $" tagged \"{Model.Tag}\"" : "")</p>
     </div>
-    @if (Model.HasPublicTalks) { <a class="btn" href="/talks">Talks</a> }
-    @if (Model.Caller.IsAuthenticated)
-    {
-        <a class="btn" href="/shared">Decks shared with me</a>
-    }
-    else
-    {
-        <a class="btn" href="/login" title="Sign in to see decks shared with you">Sign in</a>
-    }
+    <div class="row" style="gap:.5rem">
+        @if (Model.HasPublicTalks) { <a class="btn" href="/talks">Talks</a> }
+        @if (Model.Caller.IsAuthenticated)
+        {
+            <a class="btn" href="/shared">Decks shared with me</a>
+        }
+        else
+        {
+            <a class="btn" href="/login" title="Sign in to see decks shared with you">Sign in</a>
+        }
+    </div>
 </div>
 
 @if (Model.Tags.Count > 0)

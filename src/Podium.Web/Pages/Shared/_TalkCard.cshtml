@@ -32,8 +32,10 @@
             <span class="badge badge-status-@t.Status kind">@StatusLabel(t.Status)</span>
             @if (t.Level is not null) { <span class="badge vis">@char.ToUpperInvariant(t.Level[0])@t.Level[1..]</span> }
             @if (t.Public) { <span class="badge" title="Listed on your public talks page">Public</span> }
-            <span class="status" title="@(given is not null ? $"Last given at {given.Event}" : "Not given yet")"><span class="dot @(Model.StatusKey == "failed" ? "dot-bad" : Model.StatusKey == "building" ? "dot-busy" : "dot-ok")"></span> <span class="status-long">@(given is not null ? $"{given.Event} · {given.DateLabel(compact: true)}" : "Not given yet")</span><span class="status-short">@(given?.DateLabel(compact: true) ?? "—")</span></span>
-            <span class="faint updated" title="Newest variant saved"><span class="sep">· </span>saved <time datetime="@Model.Saved.UtcDateTime.ToString("o")">@Model.Saved.ToString("yyyy-MM-dd")</time></span>
+            <span class="meta-state">
+                <span class="status" title="@(given is not null ? $"Last given at {given.Event}" : "Not given yet")"><span class="dot @(Model.StatusKey == "failed" ? "dot-bad" : Model.StatusKey == "building" ? "dot-busy" : "dot-ok")"></span> <span class="status-long">@(given is not null ? $"{given.Event} · {given.DateLabel(compact: true)}" : "Not given yet")</span><span class="status-short">@(given?.DateLabel(compact: true) ?? "—")</span></span>
+                <span class="faint updated" title="Newest variant saved"><span class="sep">· </span>saved <time datetime="@Model.Saved.UtcDateTime.ToString("o")">@Model.Saved.ToString("yyyy-MM-dd")</time></span>
+            </span>
         </div>
         @if (Model.Tags.Count > 0)
         {

@@ -14,8 +14,8 @@
         {
             <button class="btn btn-primary" id="new-deck">New deck</button>
         }
-        <a class="btn" href="/sources">Manage sources</a>
-        <button class="btn btn-ghost" id="help-btn" title="Keyboard shortcuts (?)">?</button>
+        <a class="btn desktop-only" href="/sources">Manage sources</a>
+        <button class="btn btn-ghost desktop-only" id="help-btn" title="Keyboard shortcuts (?)">?</button>
     </div>
 </div>
 
@@ -115,11 +115,11 @@ else
     <div class="toolbar" role="toolbar" aria-label="Library controls">
         <div class="search-wrap">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <input id="search" class="input" type="search" placeholder="Search title, repo, path, tag…" autocomplete="off" aria-label="Search decks" />
+            <input id="search" class="input" type="search" placeholder="Search title, repo, path, tag…" data-placeholder-short="Search decks…" autocomplete="off" aria-label="Search decks" />
             <kbd>/</kbd>
         </div>
-        <label class="control">Group by
-            <select id="group" class="input">
+        <label class="control"><span class="control-label">Group by</span>
+            <select id="group" class="input" aria-label="Group by">
                 <optgroup label="Where">
                     <option value="repo">Repository</option>
                     <option value="section">Folder</option>
@@ -140,11 +140,11 @@ else
                     <option value="kind">Type</option>
                     <option value="vis">Visibility</option>
                 </optgroup>
-                <option value="none">Nothing</option>
+                <option value="none">No grouping</option>
             </select>
         </label>
-        <label class="control">Sort
-            <select id="sort" class="input">
+        <label class="control"><span class="control-label">Sort</span>
+            <select id="sort" class="input" aria-label="Sort by">
                 <option value="saved">Last saved</option>
                 <option value="created">Created</option>
                 <option value="committed">Last committed</option>

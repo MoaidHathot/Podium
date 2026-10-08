@@ -412,11 +412,12 @@ public sealed class TalkPagesTests(PodiumWebFactory app)
         Assert.Contains("data-year-given=\"2025\"", card);
         Assert.Contains("data-section=\"talks\"", card);
         Assert.Contains("data-talk-status=\"Available talk\"", card);
-        Assert.Contains(">saved <time", card);
+        Assert.Contains("<span class=\"updated-word\">saved </span><time", card);
+        Assert.Contains("class=\"meta-state\"", card);                                  // status + date wrap as one unit
 
         var other = html[html.IndexOf($"data-slug=\"{privDeck.Slug}\"", StringComparison.Ordinal)..];
         other = other[..other.IndexOf("</article>", StringComparison.Ordinal)];
-        Assert.Contains(">updated <time", other);                                     // no document date: the commit stands in
+        Assert.Contains("<span class=\"updated-word\">updated </span><time", other);    // no document date: the commit stands in
         Assert.Contains("data-given=\"\"", other);
 
         Assert.Contains("<option value=\"section\">Folder</option>", html);
