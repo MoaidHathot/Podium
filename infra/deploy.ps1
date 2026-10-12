@@ -22,8 +22,8 @@ param(
     # Images default to whatever is currently deployed (CI pins digests); the :latest tags are used only when the
     # resource does not exist yet, so re-running a phase never rolls production to a different image.
     [string] $WebImage,
-    # 0 = scale to zero when idle (default); 1 = always-warm replica (app phase).
-    [ValidateRange(0, 1)] [int] $MinReplicas = 0,
+    # 1 = always-warm replica (default; no cold start, idle-rate billing); 0 = scale to zero when idle (app phase).
+    [ValidateRange(0, 1)] [int] $MinReplicas = 1,
     [string] $BuilderImage
 )
 $ErrorActionPreference = 'Stop'

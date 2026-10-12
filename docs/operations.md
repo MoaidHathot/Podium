@@ -244,8 +244,20 @@ is pinned to a commit SHA (Dependabot bumps the pins).
 
 ## Scaling
 
-- `infra/deploy.ps1 -Phase app -MinReplicas 1` keeps one replica warm (no ~20 s cold start) for a few dollars a month;
-  `-MinReplicas 0` (default) scales to zero after `scaleToZeroAfterSeconds` (30 min) of no traffic.
+- One replica stays warm by default (`infra/deploy.ps1 -Phase app -MinReplicas 1`; also the Bicep default). On the
+  Consumption plan a replica that sits at the minimum count and serves no requests is billed at the idle rate
+  (0.000003 USD per vCPU-second and per GiB-second after the monthly free grant): about 10 USD a month at 0.5 vCPU /
+  1 GiB, a little more when the one-minute maintenance tick trips the active threshold (0.01 vCPU or 1 KB/s in).
+- `-MinReplicas 0` scales to zero after `scaleToZeroAfterSeconds` (30 min) of no traffic for a few dollars less.
+  Measured cold start on prod (system logs, three starts on 2026-10-12): 11-14 s from the KEDA trigger to "pulling
+  image" (sandbox allocation), 3-6 s image pull (76 MB chiseled image), ~3 s create/start, then 1-5 s until Kestrel
+  listens and 1-3 s for the first request (key ring, table bootstrap). Only the last two are the app's; the rest is
+  the platform.
+- Do not keep a replica alive with pings, a cron scaler or a very long cooldown: a replica above the minimum count,
+  or one that handles requests, is billed at the active rate (0.000024 USD per vCPU-second), eight times the idle rate.
+- A smaller always-warm replica (0.25 vCPU / 0.5 GiB) would cost about 4 USD a month but the working set peaks at
+  ~460 MB today (Azure Monitor `WorkingSetBytes`, 7-day maximum), so 0.5 GiB risks OOM kills; see the profiling notes
+  below before changing it.
 - Builds run `Builder:MaxConcurrentBuilds` (3) at a time; the rest wait and start as slots free up. Raise it for large
   installations; each build is one job execution (2 vCPU / 4 GiB).
 

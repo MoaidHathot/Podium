@@ -30,14 +30,14 @@ param webIdentityClientId string
 @description('Optional custom hostnames already verified in DNS; bound with managed certificates via deploy.ps1.')
 param customDomains array = []
 
-@description('Idle time (seconds) before the last replica is removed. Default 1800 (30 min) so a presentation session never pays a cold start; the platform default is 300.')
+@description('Idle time (seconds) before the last replica is removed when minReplicas is 0. Default 1800 (30 min) so a presentation session never pays a cold start; the platform default is 300.')
 @minValue(60)
 param scaleToZeroAfterSeconds int = 1800
 
-@description('Replicas kept running at all times. 0 (default) scales to zero when idle and costs almost nothing; 1 keeps the app warm (no cold start, a few dollars a month). The sync socket and presenter state are per replica, so maxReplicas stays 1.')
+@description('Replicas kept running at all times. 1 (default) keeps the app warm: a cold start on the Consumption plan is 20-28 s, 17+ of them Azure allocating the sandbox, and an idle replica is billed at the reduced idle rate (about 10 USD/month at 0.5 vCPU / 1 GiB after the free grant). 0 scales to zero when idle for a few dollars less. The sync socket and presenter state are per replica, so maxReplicas stays 1.')
 @minValue(0)
 @maxValue(1)
-param minReplicas int = 0
+param minReplicas int = 1
 
 @description('Show a gallery of Public decks to visitors at / (portfolio). Off keeps the root login-only.')
 param publicGallery bool = true

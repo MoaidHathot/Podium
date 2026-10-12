@@ -138,7 +138,7 @@ notes: free text
 
 `speaker.md` at the repository root holds `name`, `tagline`, `photo` (an https URL or a file in the repository, served by Podium so private repositories work), `links:` and the bio, with `## Short bio` as a part. Only `accepted` and `delivered` events of `public: true` talks appear on the public speaker page; everything else stays yours. `/talks?public=1` previews it.
 
-## Deploying (Azure, ~$1-5/month)
+## Deploying (Azure, ~$10-13/month always-warm, ~$1-5 scaled to zero)
 
 Prerequisites: `az` logged in, `gh` logged in, PowerShell 7.
 
@@ -151,9 +151,12 @@ Prerequisites: `az` logged in, `gh` logged in, PowerShell 7.
 ./infra/deploy.ps1 -Phase domain
 ```
 
-The web app scales to zero after 30 idle minutes (`scaleToZeroAfterSeconds` in `infra/app.bicep`; the platform default is 5).
-A cold start takes roughly 20-25 s, almost all of it Azure scheduling the replica; run `./infra/deploy.ps1 -Phase app -MinReplicas 1`
-if you would rather pay a few dollars a month for an always-warm instance.
+The web app keeps one replica warm (`-MinReplicas 1`, the default): an idle replica is billed at the Consumption plan's
+reduced idle rate, about $10 a month at 0.5 vCPU / 1 GiB after the free grant, and the app answers in well under a
+second at any hour. `-MinReplicas 0` scales to zero after 30 idle minutes (`scaleToZeroAfterSeconds` in `infra/app.bicep`)
+for a few dollars less; a cold start then takes 20-28 s, 17 or more of them Azure allocating the sandbox, which no code
+change removes. Keeping a replica alive with pings or a longer cooldown is the expensive way: it is billed at the active
+rate, eight times the idle rate per vCPU-second.
 
 Secret rotation, backups/export and troubleshooting queries are in [docs/operations.md](docs/operations.md).
 
