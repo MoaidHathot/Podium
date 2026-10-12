@@ -1,0 +1,88 @@
+name: Memory profile
+
+# On demand: runs the web image on a Linux runner under a cgroup memory and CPU limit (what Container Apps enforces),
+# drives it through tests/smoke/memprofile.mjs (library of 112 decks, deck pages, presenting to a room through the
+# relay with the phone remote, a live session with an audience, everyone leaving) and reports the peak RSS the
+# cgroup saw, the runtime's own heap figures and whether the kernel OOM-killed the container. Use it before changing
+# the replica size in infra/app.bicep.
+on:
+  workflow_dispatch:
+    inputs:
+      memory:
+        description: Container memory limit (docker --memory), e.g. 512m or 1g
+        default: 512m
+      cpus:
+        description: Container CPU limit (docker --cpus)
+        default: '0.5'
+      viewers:
+        description: Anonymous windows following the presenter
+        default: '40'
+      audience:
+        description: People joining the live session through the code
+        default: '40'
+      loops:
+        description: Drive loops (navigation, laser, blackout) to check for growth
+        default: '3'
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Web image (same Dockerfile as the deploy)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: podium-web:profile
+          cache-from: type=gha,scope=web
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: builder/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: builder
+      - run: npx playwright install --with-deps chromium
+        working-directory: builder
+      - name: Start the container under the limit
+        run: |
+          docker run -d --name web --memory "${{ inputs.memory }}" --memory-swap "${{ inputs.memory }}" --cpus "${{ inputs.cpus }}" -p 5199:8080 \
+            -e ASPNETCORE_ENVIRONMENT=Development -e Storage__ConnectionString=memory -e Builder__Mode=LocalProcess \
+            -e Builder__AutoRebuildOnUpgrade=false -e Podium__PublicBaseUrl=http://localhost:5199 -e Podium__ExternalBaseUrl=http://127.0.0.1:5199 \
+            -e Podium__PublicGallery=true -e Podium__OwnerGitHubId=1001 -e Podium__SigningKey=aW50ZWdyYXRpb24tdGVzdC1zaWduaW5nLWtleS0wMTIzNDU2Nzg5 \
+            -e Auth__AllowDevLogin=true -e GitHub__Token= -e Logging__LogLevel__Default=Warning \
+            podium-web:profile
+          for i in $(seq 1 40); do curl -fsS http://localhost:5199/healthz && break || sleep 1; done
+          echo "idle RSS: $(docker stats --no-stream --format '{{.MemUsage}}' web)"
+      - name: Profile
+        run: |
+          ( while docker ps -q --filter name=web | grep -q .; do docker stats --no-stream --format '{{.MemUsage}} {{.CPUPerc}}' web >> stats.log; sleep 1; done ) &
+          SAMPLER=$!
+          MEMPROFILE_OUT=memprofile.json node tests/smoke/memprofile.mjs http://localhost:5199 "${{ inputs.viewers }}" "${{ inputs.audience }}" "${{ inputs.loops }}"
+          kill $SAMPLER 2>/dev/null || true
+      - name: Result
+        if: always()
+        run: |
+          echo "## Memory profile (${{ inputs.memory }}, ${{ inputs.cpus }} vCPU, ${{ inputs.viewers }} viewers, ${{ inputs.audience }} in the room)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "peak cgroup usage: $(awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); v=v*1024} else {sub(/MiB/,"",v)} if (v+0>max) max=v+0} END {print max}' stats.log) MiB  (samples: $(wc -l < stats.log))" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "OOM killed: $(docker inspect --format '{{.State.OOMKilled}}' web)  exit code: $(docker inspect --format '{{.State.ExitCode}}' web)  running: $(docker inspect --format '{{.State.Running}}' web)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; node -e 'const j=require("./memprofile.json");for(const r of j.rows)console.log(`${r.scenario.padEnd(38)} ws ${String(r.ws).padStart(6)} MB  heap ${String(r.heapBefore).padStart(6)} -> ${String(r.heapAfter).padStart(6)} live  committed ${String(r.committed).padStart(6)}  gen2 ${r.gen2}`);console.log(`peak working set ${j.peakWorkingSetMb} MB, peak live heap ${j.peakLiveHeapMb} MB, GC hard limit ${j.heapHardLimitMb} MB`)' 2>/dev/null | tee -a "$GITHUB_STEP_SUMMARY" || echo "(no memprofile.json: the run failed before the end)" | tee -a "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "--- container log (warnings and up)"; docker logs web 2>&1 | grep -E 'warn:|fail:|crit:|OutOfMemory' | head -n 40 || true
+          test "$(docker inspect --format '{{.State.OOMKilled}}' web)" = "false"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: memprofile-${{ inputs.memory }}
+          path: |
+            memprofile.json
+            stats.log
+          if-no-files-found: ignore

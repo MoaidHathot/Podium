@@ -1,4 +1,5 @@
 using Azure.Monitor.OpenTelemetry.AspNetCore;
+using OpenTelemetry.Metrics;
 using System.Security.Claims;
 using AspNet.Security.OAuth.GitHub;
 using Azure.Data.Tables;
@@ -113,7 +114,10 @@ if (!string.IsNullOrWhiteSpace(config["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
     {
         o.SamplingRatio = 1.0f; // tiny traffic; keep everything
         // The connection string carries only an instrumentation key (not a secret); ingestion is keyed, not Entra-authenticated.
-    });
+    })
+    // The runtime's own meter: GC heap and committed size, working set, collections and pauses, thread pool. These
+    // are what the replica size is decided on (AppMetrics in the workspace); a few rows a minute.
+    .WithMetrics(m => m.AddMeter("System.Runtime"));
 }
 
 // ----- Builder runner -----
@@ -554,6 +558,29 @@ if (app.Environment.IsDevelopment() && config.GetValue<bool>("Auth:AllowDevLogin
         await talks.UpsertSpeakerAsync(new Speaker { SourceId = "fixture/slides", Name = "Fixture Speaker", Tagline = "Tests things for a living", Bio = "Fixture Speaker writes **smoke tests** and talks about them.", Parts = [new TalkPart("Short bio", "Fixture Speaker tests things.")], Links = [new("github", "https://github.com/fixture")] }, ct);
         if (bulk > 0) await Podium.Web.Storage.BulkSeed.SeedAsync(bulk, local, decks, builds, talks, access, ct);
         return Results.Ok(new { slug, talk = talkId, bulk });
+    });
+
+    // Development/CI only: process memory as the runtime sees it, for the memory profile in the smoke harness.
+    // "?collect=1" first forces a full compacting collection, so the figure is the live heap rather than garbage
+    // the GC has not bothered to reclaim yet.
+    app.MapGet("/dev-mem", (bool collect = false) =>
+    {
+        if (collect) { GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true); GC.WaitForPendingFinalizers(); GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true); }
+        var info = GC.GetGCMemoryInfo();
+        using var proc = System.Diagnostics.Process.GetCurrentProcess();
+        return Results.Ok(new
+        {
+            workingSetMb = Math.Round(proc.WorkingSet64 / 1048576.0, 1),
+            privateMb = Math.Round(proc.PrivateMemorySize64 / 1048576.0, 1),
+            heapMb = Math.Round(info.HeapSizeBytes / 1048576.0, 1),
+            committedMb = Math.Round(info.TotalCommittedBytes / 1048576.0, 1),
+            fragmentedMb = Math.Round(info.FragmentedBytes / 1048576.0, 1),
+            totalAllocatedMb = Math.Round(GC.GetTotalAllocatedBytes() / 1048576.0, 1),
+            gen0 = GC.CollectionCount(0), gen1 = GC.CollectionCount(1), gen2 = GC.CollectionCount(2),
+            heapHardLimitMb = info.TotalAvailableMemoryBytes > 0 ? Math.Round(info.TotalAvailableMemoryBytes / 1048576.0) : (double?)null,
+            serverGc = System.Runtime.GCSettings.IsServerGC,
+            threads = proc.Threads.Count,
+        });
     });
 }
 
