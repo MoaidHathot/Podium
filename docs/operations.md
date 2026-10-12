@@ -261,6 +261,19 @@ is pinned to a commit SHA (Dependabot bumps the pins).
 - Builds run `Builder:MaxConcurrentBuilds` (3) at a time; the rest wait and start as slots free up. Raise it for large
   installations; each build is one job execution (2 vCPU / 4 GiB).
 
+### What a start does
+
+Kestrel listens first; `StartupWarmup` then creates every table (`TableClients.KnownTables`, concurrently) and loads
+the data-protection key ring (blob + Key Vault unwrap) while the readiness probe already passes - 118 ms on prod for
+all of it. Data protection's own start-up filter, which did the key-ring load before the server listened, is removed
+in `Program.cs`. `MaintenanceService` starts its one-off work (search index, installation discovery, rules re-sync)
+two seconds after the first served request or after 20 s, so it never competes with the first page.
+
+ReadyToRun was measured and not adopted: `PublishReadyToRun` grows the publish output from 15.9 to 36.4 MB
+(linux-x64) for no measurable change in start-to-listen (median 1.19 s JIT vs 1.20 s R2R over five runs, memory
+storage, Production environment). The shared framework is already precompiled and the app's own start-up code is
+small; the larger image would only lengthen the pull.
+
 ## Page weight on phones
 
 The ingress does not compress, so the app does (Brotli/Gzip for HTML, CSS, JS, JSON, SVG, Markdown): a library of a
