@@ -10,12 +10,22 @@ namespace Podium.Web.Builds;
 /// Periodic maintenance: polls sources that cannot deliver webhooks, safety-net polls the rest, reaps stale builds,
 /// and refreshes App installations on startup.
 /// </summary>
-public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue queue, IOptions<PodiumOptions> options, IOptions<BuilderOptions> builderOptions, ILogger<MaintenanceService> log, Podium.Web.Sync.AudienceService audience) : BackgroundService
+public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue queue, IOptions<PodiumOptions> options, IOptions<BuilderOptions> builderOptions, ILogger<MaintenanceService> log, Podium.Web.Sync.AudienceService audience, FirstRequest firstRequest) : BackgroundService
 {
+    /// <summary>How long the one-off start-up work waits for a first request before starting anyway.</summary>
+    public static readonly TimeSpan StartupGrace = TimeSpan.FromSeconds(20);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Give the host a moment to finish starting before hitting external services.
-        try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); } catch (OperationCanceledException) { return; }
+        // The one-off work below reads every deck's text.json and talks to GitHub; on half a vCPU that competes with
+        // the first page a person opens after a start. Let that page render first: begin once the first request has
+        // been served (plus a breath), or after the grace period when nobody comes.
+        try
+        {
+            await Task.WhenAny(firstRequest.Seen, Task.Delay(StartupGrace, stoppingToken));
+            await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+        }
+        catch (OperationCanceledException) { return; }
 
         // One-off data migrations, guarded by markers in the settings table so they run exactly once per deployment.
         await RunSafely("migrations", async ct =>
@@ -37,7 +47,9 @@ public sealed class MaintenanceService(IServiceScopeFactory scopes, SyncQueue qu
         {
             using var scope = scopes.CreateScope();
             var index = scope.ServiceProvider.GetRequiredService<Podium.Core.Services.DeckSearchIndex>();
-            foreach (var d in await scope.ServiceProvider.GetRequiredService<IDeckStore>().ListAsync(includeArchived: false, ct)) await index.RefreshAsync(d, ct);
+            // A few downloads at a time: the work is a blob read and a JSON parse per deck, so this is bound by latency, not CPU.
+            var decks = await scope.ServiceProvider.GetRequiredService<IDeckStore>().ListAsync(includeArchived: false, ct);
+            await Parallel.ForEachAsync(decks, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, (d, token) => new ValueTask(index.RefreshAsync(d, token)));
             log.LogInformation("Search index ready: {Count} deck(s)", index.DeckCount);
         }, stoppingToken);
 

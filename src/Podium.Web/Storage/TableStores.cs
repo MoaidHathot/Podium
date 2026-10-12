@@ -28,33 +28,46 @@ internal static class TableJson
     public static string InvertedTicks(DateTimeOffset at) => (DateTimeOffset.MaxValue.UtcTicks - at.UtcTicks).ToString("D19", System.Globalization.CultureInfo.InvariantCulture);
 }
 
+/// <summary>
+/// One <see cref="TableClient"/> per table, created ("create if not exists") on first use. Each table bootstraps
+/// independently and concurrently: the first request after a start touches eight or nine tables, and a single lock
+/// would queue those round-trips behind each other. A failed creation is forgotten so the next caller retries it.
+/// <see cref="EnsureAllAsync"/> lets the start-up warm-up create every table before the first request arrives.
+/// </summary>
 public sealed class TableClients
 {
-    private readonly TableServiceClient _service;
-    private readonly string _prefix;
-    private readonly Dictionary<string, TableClient> _clients = new(StringComparer.Ordinal);
-    private readonly SemaphoreSlim _lock = new(1, 1);
+    /// <summary>Every table Podium uses (the backup and the warm-up iterate this list).</summary>
+    public static readonly string[] KnownTables = ["sources", "decks", "builds", "activebuilds", "grants", "sharelinks", "views", "deckviews", "recentdismissals", "sessions", "livesessions", "accessrequests", "audit", "settings", "devices", "talks"];
+
+    private readonly Func<string, Task<TableClient>> _create;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<TableClient>>> _clients = new(StringComparer.Ordinal);
 
     public TableClients(TableServiceClient service, string prefix)
+        : this(async name => { var c = service.GetTableClient(prefix + name); await c.CreateIfNotExistsAsync(); return c; }) { }
+
+    /// <summary>For tests: the function that creates (and ensures) a table's client.</summary>
+    internal TableClients(Func<string, Task<TableClient>> create) => _create = create;
+
+    public ValueTask<TableClient> GetAsync(string name, CancellationToken ct)
     {
-        _service = service;
-        _prefix = prefix;
+        var lazy = _clients.GetOrAdd(name, n => new Lazy<Task<TableClient>>(() => _create(n), LazyThreadSafetyMode.ExecutionAndPublication));
+        var task = lazy.Value;
+        return task.IsCompletedSuccessfully ? new ValueTask<TableClient>(task.Result) : new ValueTask<TableClient>(AwaitAsync(name, lazy, task, ct));
     }
 
-    public async ValueTask<TableClient> GetAsync(string name, CancellationToken ct)
+    private async Task<TableClient> AwaitAsync(string name, Lazy<Task<TableClient>> lazy, Task<TableClient> task, CancellationToken ct)
     {
-        if (_clients.TryGetValue(name, out var c)) return c;
-        await _lock.WaitAsync(ct);
-        try
+        try { return await task.WaitAsync(ct); }
+        catch when (task.IsFaulted)
         {
-            if (_clients.TryGetValue(name, out c)) return c;
-            c = _service.GetTableClient(_prefix + name);
-            await c.CreateIfNotExistsAsync(ct);
-            _clients[name] = c;
-            return c;
+            // Only the entry that failed is evicted (another caller may already have replaced it).
+            _clients.TryRemove(new KeyValuePair<string, Lazy<Task<TableClient>>>(name, lazy));
+            throw;
         }
-        finally { _lock.Release(); }
     }
+
+    /// <summary>Creates every known table, concurrently. Used by the start-up warm-up; a failure surfaces to the caller.</summary>
+    public Task EnsureAllAsync(CancellationToken ct) => Task.WhenAll(KnownTables.Select(n => GetAsync(n, ct).AsTask()));
 }
 
 public sealed class TableSourceStore(TableClients tables) : ISourceStore
@@ -64,12 +77,8 @@ public sealed class TableSourceStore(TableClients tables) : ISourceStore
     public async Task<Source?> GetAsync(string id, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>("source", TableJson.Key(id), cancellationToken: ct);
-            return TableJson.Deserialize<Source>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>("source", TableJson.Key(id), cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<Source>(e.Value!) : null;
     }
 
     public async Task<IReadOnlyList<Source>> ListAsync(CancellationToken ct = default)
@@ -105,12 +114,8 @@ public sealed class TableDeckStore(TableClients tables) : IDeckStore
     public async Task<Deck?> GetAsync(string slug, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>("deck", slug, cancellationToken: ct);
-            return TableJson.Deserialize<Deck>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>("deck", slug, cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<Deck>(e.Value!) : null;
     }
 
     public async Task<Deck?> GetByAliasAsync(string alias, CancellationToken ct = default)
@@ -175,12 +180,8 @@ public sealed class TableBuildStore(TableClients tables) : IBuildStore
     public async Task<Build?> GetAsync(string deckSlug, string buildId, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>(deckSlug, buildId, cancellationToken: ct);
-            return TableJson.Deserialize<Build>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>(deckSlug, buildId, cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<Build>(e.Value!) : null;
     }
 
     public async Task<IReadOnlyList<Build>> ListForDeckAsync(string deckSlug, int take = 20, CancellationToken ct = default)
@@ -280,12 +281,8 @@ public sealed class TableShareLinkStore(TableClients tables) : IShareLinkStore
     public async Task<ShareLink?> GetAsync(string id, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>("link", id, cancellationToken: ct);
-            return TableJson.Deserialize<ShareLink>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>("link", id, cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<ShareLink>(e.Value!) : null;
     }
 
     public async Task<IReadOnlyList<ShareLink>> ListForDeckAsync(string deckSlug, CancellationToken ct = default)
@@ -404,12 +401,8 @@ public sealed class TableSessionStore(TableClients tables) : ISessionStore
     public async Task<Session?> GetAsync(string deckSlug, string id, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>(deckSlug, id, cancellationToken: ct);
-            return TableJson.Deserialize<Session>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>(deckSlug, id, cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<Session>(e.Value!) : null;
     }
 
     public async Task<IReadOnlyList<Session>> ListForDeckAsync(string deckSlug, int take = 20, CancellationToken ct = default)
@@ -459,12 +452,8 @@ public sealed class TableAccessRequestStore(TableClients tables) : IAccessReques
     public async Task<AccessRequest?> GetAsync(string deckSlug, string principal, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>(deckSlug, TableJson.Key(principal), cancellationToken: ct);
-            return TableJson.Deserialize<AccessRequest>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>(deckSlug, TableJson.Key(principal), cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<AccessRequest>(e.Value!) : null;
     }
 
     public async Task<IReadOnlyList<AccessRequest>> ListForDeckAsync(string deckSlug, CancellationToken ct = default)
@@ -545,12 +534,8 @@ public sealed class TableSettingsStore(TableClients tables) : ISettingsStore
     public async Task<string?> GetAsync(string key, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>("setting", TableJson.Key(key), cancellationToken: ct);
-            return e.Value.GetString("Value");
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>("setting", TableJson.Key(key), cancellationToken: ct);
+        return e.HasValue ? e.Value!.GetString("Value") : null;
     }
 
     public async Task SetAsync(string key, string value, CancellationToken ct = default)
@@ -567,12 +552,8 @@ public sealed class TableDeviceStore(TableClients tables) : IDeviceStore
     public async Task<Device?> GetAsync(string principal, string sid, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>(TableJson.Key(principal), TableJson.Key(sid), cancellationToken: ct);
-            return TableJson.Deserialize<Device>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>(TableJson.Key(principal), TableJson.Key(sid), cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<Device>(e.Value!) : null;
     }
 
     public async Task<IReadOnlyList<Device>> ListAsync(string principal, CancellationToken ct = default)
@@ -664,12 +645,8 @@ public sealed class TableTalkStore(TableClients tables) : ITalkStore
     public async Task<Speaker?> GetSpeakerAsync(string sourceId, CancellationToken ct = default)
     {
         var t = await tables.GetAsync(Table, ct);
-        try
-        {
-            var e = await t.GetEntityAsync<TableEntity>(SpeakerPartition, TableJson.Key(sourceId), cancellationToken: ct);
-            return TableJson.Deserialize<Speaker>(e.Value);
-        }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+        var e = await t.GetEntityIfExistsAsync<TableEntity>(SpeakerPartition, TableJson.Key(sourceId), cancellationToken: ct);
+        return e.HasValue ? TableJson.Deserialize<Speaker>(e.Value!) : null;
     }
 
     public async Task<IReadOnlyList<Speaker>> ListSpeakersAsync(CancellationToken ct = default)

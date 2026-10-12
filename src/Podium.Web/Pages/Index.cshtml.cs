@@ -26,29 +26,36 @@ public sealed class IndexModel(IDeckStore decks, ISourceStore sources, IViewHist
     public async Task OnGetAsync(CancellationToken ct)
     {
         var caller = callers.Resolve(User);
-        Sources = await sources.ListAsync(ct);
+        // The reads are independent (and each table bootstraps itself on first use), so they go out together:
+        // the page waits for the slowest round-trip instead of the sum of seven.
+        var sourcesTask = sources.ListAsync(ct);
+        var talksTask = talks.ListAsync(includeArchived: false, ct);
+        var requestsTask = accessRequests.ListPendingAsync(ct);
+        var decksTask = decks.ListAsync(includeArchived: true, ct);
+        var liveTask = sessions.ListLiveAsync(ct);
+        var recentTask = caller.Principal is null ? Task.FromResult<IReadOnlyList<ViewEvent>>([]) : views.RecentForPrincipalAsync(caller.Principal, 200, ct);
+        var dismissedTask = caller.Principal is null ? Task.FromResult<IReadOnlyDictionary<string, DateTimeOffset>>(new Dictionary<string, DateTimeOffset>()) : views.GetRecentDismissalsAsync(caller.Principal, ct);
+        await Task.WhenAll(sourcesTask, talksTask, requestsTask, decksTask, liveTask, recentTask, dismissedTask);
+
+        Sources = sourcesTask.Result;
         HasSources = Sources.Count > 0;
         var sourceMap = Sources.ToDictionary(s => s.Id, StringComparer.Ordinal);
-        var talkMap = (await talks.ListAsync(includeArchived: false, ct)).ToDictionary(t => t.Id, StringComparer.Ordinal);
+        var talkMap = talksTask.Result.ToDictionary(t => t.Id, StringComparer.Ordinal);
         HasTalks = talkMap.Count > 0;
 
         var lastViewed = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
-        IReadOnlyDictionary<string, DateTimeOffset> dismissed = new Dictionary<string, DateTimeOffset>();
-        if (caller.Principal is not null)
+        foreach (var v in recentTask.Result)
         {
-            foreach (var v in await views.RecentForPrincipalAsync(caller.Principal, 200, ct))
-            {
-                if (v.Artifact != ArtifactKind.Site) continue;
-                if (!lastViewed.TryGetValue(v.DeckSlug, out var at) || v.At > at) lastViewed[v.DeckSlug] = v.At;
-            }
-            dismissed = await views.GetRecentDismissalsAsync(caller.Principal, ct);
+            if (v.Artifact != ArtifactKind.Site) continue;
+            if (!lastViewed.TryGetValue(v.DeckSlug, out var at) || v.At > at) lastViewed[v.DeckSlug] = v.At;
         }
+        var dismissed = dismissedTask.Result;
 
-        PendingRequests = await accessRequests.ListPendingAsync(ct);
-        var everything = await decks.ListAsync(includeArchived: true, ct);
+        PendingRequests = requestsTask.Result;
+        var everything = decksTask.Result;
         var all = everything.Where(d => !d.Archived).ToList();
         var bySlug = everything.ToDictionary(d => d.Slug, StringComparer.Ordinal);
-        LiveNow = (await sessions.ListLiveAsync(ct)).OrderByDescending(s => s.StartedAt)
+        LiveNow = liveTask.Result.OrderByDescending(s => s.StartedAt)
             .Where(s => bySlug.ContainsKey(s.DeckSlug)).Select(s => (s, bySlug[s.DeckSlug])).ToList();
         Talk? TalkOf(Deck d) => d.TalkId is not null ? talkMap.GetValueOrDefault(d.TalkId) : null;
         Archived = everything.Where(d => d.Archived).OrderByDescending(d => d.UpdatedAt).Select(d => new DeckRow(d, sourceMap.GetValueOrDefault(d.SourceId), null) { Talk = TalkOf(d) }).ToList();

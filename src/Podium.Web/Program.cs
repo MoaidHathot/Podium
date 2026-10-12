@@ -54,7 +54,14 @@ if (string.Equals(storage.ConnectionString, "memory", StringComparison.OrdinalIg
 }
 else
 {
-    var credential = new DefaultAzureCredential();
+    // In Azure the app runs as a user-assigned managed identity (AZURE_CLIENT_ID is set by Bicep): ask it directly
+    // instead of walking DefaultAzureCredential's chain, which probes environment and workload-identity credentials
+    // on every new scope and logs each attempt. Local runs keep the chain (az login, Visual Studio, ...).
+    var managedClientId = config["AZURE_CLIENT_ID"];
+    Azure.Core.TokenCredential credential = !builder.Environment.IsDevelopment() && !string.IsNullOrWhiteSpace(managedClientId)
+        ? new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(managedClientId))
+        : new DefaultAzureCredential();
+    builder.Services.AddSingleton(credential);
     if (!string.IsNullOrWhiteSpace(storage.ConnectionString))
     {
         builder.Services.AddSingleton(new TableServiceClient(storage.ConnectionString));
@@ -117,7 +124,7 @@ if (string.Equals(builderMode, "LocalProcess", StringComparison.OrdinalIgnoreCas
 }
 else
 {
-    builder.Services.AddSingleton(new ArmClient(new DefaultAzureCredential()));
+    builder.Services.AddSingleton(sp => new ArmClient(sp.GetService<Azure.Core.TokenCredential>() ?? new DefaultAzureCredential()));
     builder.Services.AddSingleton<IBuildRunner, ContainerAppsJobRunner>();
 }
 
@@ -143,7 +150,12 @@ builder.Services.AddSingleton<SyncQueue>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncQueue>());
 builder.Services.AddSingleton<InstallationDiscovery>();
 builder.Services.AddSingleton<GitHubWebhookHandler>();
+builder.Services.AddSingleton<FirstRequest>();
 builder.Services.AddHostedService<MaintenanceService>();
+builder.Services.AddSingleton<StartupWarmup>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<StartupWarmup>());
+// Hosted services start together rather than one after the other (none of them needs another to be running first).
+builder.Services.Configure<HostOptions>(o => o.ServicesStartConcurrently = true);
 builder.Services.AddSingleton<CallerResolver>();
 builder.Services.AddSingleton<SecurityStamp>();
 builder.Services.AddSingleton<AuditService>();
@@ -345,6 +357,14 @@ builder.Services.AddResponseCompression(o =>
 builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
 builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
 
+// ----- Start-up order -----
+// Data protection registers a start-up filter that preloads the key ring (a blob download and, in production, a Key
+// Vault unwrap) before Kestrel starts listening, so the readiness probe waits on it. Without the filter the server
+// listens first and StartupWarmup loads the ring right after, alongside the table bootstrap; a request that arrives
+// in between simply loads it on demand (the provider serialises that). Matched by name: the type is internal.
+foreach (var d in builder.Services.Where(d => d.ServiceType == typeof(IStartupFilter) && d.ImplementationType?.FullName == "Microsoft.AspNetCore.DataProtection.Internal.DataProtectionStartupFilter").ToList())
+    builder.Services.Remove(d);
+
 var app = builder.Build();
 
 // `Podium.Web export`: one-shot backup of the tables into the "backups" blob container, then exit (scheduled job).
@@ -393,6 +413,15 @@ app.Use(async (ctx, next) =>
         ctx.Response.Headers.ContentSecurityPolicy = Podium.Web.Security.Csp.HeaderValue(Podium.Web.Security.Csp.Nonce(ctx));
     await next();
 });
+// The first served request (probes excluded) releases MaintenanceService's start-up work; see FirstRequest.
+{
+    var first = app.Services.GetRequiredService<FirstRequest>();
+    app.Use(async (ctx, next) =>
+    {
+        try { await next(); }
+        finally { if (!first.HasBeenSeen && !ctx.Request.Path.StartsWithSegments("/healthz")) first.Mark(); }
+    });
+}
 
 app.UseStaticFiles(new StaticFileOptions
 {
