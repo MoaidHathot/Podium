@@ -52,15 +52,18 @@
         </div>
         <div class="card-meta">
             <span class="badge badge-kind-@kind kind">@Model.KindLabel</span>
-            @if (Model.VariantLabel is { } variant)
-            {
-                if (Model.Talk is { } talk) { <a class="badge badge-variant" href="/talks/@talk.Id" title="Variant of the talk “@talk.Title”">@variant</a> }
-                else { <span class="badge badge-variant" title="One of several decks in this folder">@variant</span> }
-            }
             <span class="badge badge-vis-@vis vis" title="@visTitle">@Model.VisibilityLabel</span>
-            @if (d.LiveSessionId is not null) { <span class="badge badge-live" title="A live session is running">● Live</span> }
-            @if (d.PinnedBuildId is not null) { <span class="badge badge-frozen" title="Frozen: the served version does not change until you unfreeze">❄ Frozen</span> }
-            @* Status and date wrap together (never a line starting with the separator); the desktop list flattens the group into its columns. *@
+            @* Optional badges in one wrapper: the aligned list gives them a slot of their own; the flowing card flattens it. *@
+            <span class="meta-flags">
+                @if (Model.VariantLabel is { } variant)
+                {
+                    if (Model.Talk is { } talk) { <a class="badge badge-variant" href="/talks/@talk.Id" title="Variant of the talk “@talk.Title”">@variant</a> }
+                    else { <span class="badge badge-variant" title="One of several decks in this folder">@variant</span> }
+                }
+                @if (d.LiveSessionId is not null) { <span class="badge badge-live" title="A live session is running">● Live</span> }
+                @if (d.PinnedBuildId is not null) { <span class="badge badge-frozen" title="Frozen: the served version does not change until you unfreeze">❄ Frozen</span> }
+            </span>
+            @* Status and date wrap together (never a line starting with the separator); the aligned list keeps them on one line under the badges. *@
             <span class="meta-state">
                 <span class="status" title="@Model.StatusLabel"><span class="dot @Model.StatusClass"></span> <span class="status-long" data-status-label>@Model.StatusLabel</span><span class="status-short" data-status-short>@Model.StatusShort</span></span>
                 @if (d.LastCommitAt is not null || Model.SavedFromDocument)
@@ -77,7 +80,10 @@
             <a class="btn btn-primary btn-sm act-primary" href="/d/@d.Slug/" target="_blank" rel="noopener" data-present aria-disabled="@(canPresent ? null : "true")">@(isDoc ? "Open" : "Present")</a>
             @if (Model.IsSlidev)
             {
-                <a class="btn btn-sm act-presenter" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" title="Presenter view (notes, timer, next slide)" aria-disabled="@(canPresent ? null : "true")">Presenter</a>
+                <a class="btn btn-sm act-presenter" href="/d/@d.Slug/presenter/" target="_blank" rel="noopener" title="Presenter view (notes, timer, next slide)" aria-label="Presenter view" aria-disabled="@(canPresent ? null : "true")">
+                    <svg class="act-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 4h18"/><path d="M4 4v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4"/><path d="m8 21 4-5 4 5"/></svg>
+                    <span class="act-label">Presenter</span>
+                </a>
             }
             @if (Model.Drivable)
             {
@@ -89,17 +95,20 @@
             {
                 <a class="btn btn-ghost btn-sm btn-icon act-pdf" href="/d/@(d.Slug).pdf" target="_blank" rel="noopener" title="Open PDF" aria-label="Open PDF">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h6"/></svg>
-                    <span>PDF</span>
+                    <span class="act-label">PDF</span>
                 </a>
             }
             @if (d.CurrentHasPptx)
             {
                 <a class="btn btn-ghost btn-sm btn-icon act-pptx" href="/d/@(d.Slug).pptx" title="Download PowerPoint" aria-label="Download PowerPoint">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-                    <span>PPTX</span>
+                    <span class="act-label">PPTX</span>
                 </a>
             }
-            <a class="btn btn-ghost btn-sm act-manage" href="/decks/@d.Slug" title="Sharing, builds, exports">Manage</a>
+            <a class="btn btn-ghost btn-sm act-manage" href="/decks/@d.Slug" title="Manage: sharing, builds, exports" aria-label="Manage @d.Title">
+                <svg class="act-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+                <span class="act-label">Manage</span>
+            </a>
         </div>
     </div>
     @if (Model.InRecentShelf)
