@@ -1,6 +1,6 @@
 # Podium builder image: Node 22 + Chromium (Playwright) + presenterm (+ weasyprint for PDF) + LibreOffice (pptx -> pdf) + poppler + git.
 # Runs one build per container execution and exits. See build.mjs for the contract.
-FROM mcr.microsoft.com/playwright:v1.63.0-noble
+FROM mcr.microsoft.com/playwright:v1.64.1-noble
 
 ARG PRESENTERM_VERSION=0.16.1
 
