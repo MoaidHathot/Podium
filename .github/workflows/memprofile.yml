@@ -42,7 +42,7 @@ jobs:
           load: true
           tags: podium-web:profile
           cache-from: type=gha,scope=web
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
@@ -78,7 +78,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"; node -e 'const j=require("./memprofile.json");for(const r of j.rows)console.log(`${r.scenario.padEnd(38)} ws ${String(r.ws).padStart(6)} MB  heap ${String(r.heapBefore).padStart(6)} -> ${String(r.heapAfter).padStart(6)} live  committed ${String(r.committed).padStart(6)}  gen2 ${r.gen2}`);console.log(`peak working set ${j.peakWorkingSetMb} MB, peak live heap ${j.peakLiveHeapMb} MB, GC hard limit ${j.heapHardLimitMb} MB`)' 2>/dev/null | tee -a "$GITHUB_STEP_SUMMARY" || echo "(no memprofile.json: the run failed before the end)" | tee -a "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "--- container log (warnings and up)"; docker logs web 2>&1 | grep -E 'warn:|fail:|crit:|OutOfMemory' | head -n 40 || true
           test "$(docker inspect --format '{{.State.OOMKilled}}' web)" = "false"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: memprofile-${{ inputs.memory }}
