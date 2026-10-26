@@ -269,15 +269,28 @@ What the web app needs was measured, not guessed (October 2026):
   and search switches, deck pages with every tab, share links opened anonymously, talks, compare, presenting to N
   anonymous windows through the relay with the phone remote (navigation, laser, blackout) in repeated loops, a live
   session with N people joining through the code, reacting, asking and voting in two polls, then everyone leaving.
-  After each step it reads `/dev-mem` (Development only, next to `/dev-seed`) before and after a forced full GC, so a
-  leak shows as a live heap that does not come back down. The **Memory profile** workflow (`memprofile.yml`, run it
+  Each participant has separate cookies/storage and a test forwarded IP. Missing connections, reactions, questions
+  or votes fail the run. It reads `/dev-mem` (Development only, next to `/dev-seed`) with natural GC during the workload;
+  baseline/final forced collections compare retained heaps. The optional `collect` input enables per-step forced GC
+  for diagnostic comparisons. The **Memory profile** workflow (`memprofile.yml`, run it
   from the Actions tab) runs the real image under `docker --memory/--cpus`, which is what Container Apps enforces,
-  and reports the cgroup's peak, the runtime's figures and whether the kernel OOM-killed the container.
+  and reads the kernel's cgroup v2 `memory.peak` and `memory.events`, alongside the process metrics and OOM status.
 - The initial Linux runs (0.5 vCPU, limits of `512m` and `1g`) had process RSS of 139-189 MiB and a post-forced-GC
   heap of 8-14 MiB, with no OOM. The reported **98 MiB** was Docker stats' cache-subtracted usage, not the cgroup's
   full peak. These runs also shared cookies between audience tabs and suppressed some interaction failures;
   they do not establish the memory cost of 40 independent participants. Forced GC is useful for retained-heap
   comparisons, but understates the natural operating high-water mark.
+- **Corrected run, 2026-10-26 ([Actions 40403275097](https://github.com/MoaidHathot/Podium/actions/runs/40403275097)):**
+  0.25 vCPU / 512 MiB, 112 library decks, 40 independent viewers followed by 40 independent room participants,
+  a phone-sized remote, three navigation/laser/blackout loops, private share links and all management tabs.
+  Assertions confirmed 120 reactions, 40 questions and 40 votes in each of two polls. Natural GC ran between
+  baseline and final checks. Sampled process working set peaked at **204.1 MiB**, GC committed at **32.9 MiB**,
+  and the last-collection heap at **17.9 MiB**; the final forced collection measured **11.8 MiB**, against an
+  **8.4 MiB** seeded baseline. Kernel cgroup `memory.peak` was **113.6 MiB**, with zero limit hits and zero OOM events.
+  RSS and cgroup charging differ, including how shared/file-backed pages are accounted for; neither number should
+  be substituted for the other. The workflow passed with no page errors. This exercises the PDF/pages-viewer
+  presentation runtime against local artifacts/memory storage; mixed deck metadata in the library does not make
+  it a test of every Slidev/presenterm runtime or Azure's storage/telemetry overhead.
 - **Production follow-up, 2026-10-12 through 2026-10-26:** about 20,100 one-minute snapshots, deduplicated by
   instance/time/metric/dimension. The heap metric has five generation dimensions; sum those before calculating
   heap percentiles. The earlier "13 MB live heap" report was a single-generation value, not the total. The metric
@@ -357,7 +370,8 @@ sync queues a rebuild when the sidecar changes.
 
 Reproduced on the Dapr / Hasoub Garage 2022 deck: its embedded flat-grey bitmap patches are RGB `63/63/63`.
 PowerPoint renders the themed slide background to the same colour, while LibreOffice 24.2 exported it as
-`69/69/69`, making the patches visible as rectangles. The title also wrapped after font substitution. Native
+`69/69/69`, making the patches visible as rectangles. The title's `Calibri Light` was replaced by `Noto Sans`,
+making it wrap onto two lines. Native
 PowerPoint PDF plus Poppler restored matching `63/63/63` samples and the one-line title; the output has 70 visible
 slides, excluding the original hidden slide. Native PDF sidecars were generated for the five Dapr variants.
 
