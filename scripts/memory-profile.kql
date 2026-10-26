@@ -1,0 +1,14 @@
+// Per-instance snapshots: normalize aggregated values and deduplicate exporter retries first.
+// Heap size is reported once per generation (gen0/gen1/gen2/loh/poh), not once per process.
+let snapshots = AppMetrics
+| where TimeGenerated > ago(14d)
+| where Name in ('dotnet.process.memory.working_set',
+    'dotnet.gc.last_collection.memory.committed_size', 'dotnet.gc.last_collection.heap.size')
+| extend Value = Sum / todouble(ItemCount), Generation = tostring(Properties['gc.heap.generation'])
+| summarize Value = max(Value) by TimeGenerated, AppRoleInstance, Name, Generation;
+snapshots
+| summarize Value = sum(Value) by TimeGenerated, AppRoleInstance, Name
+| summarize Samples = count(), FirstSample = min(TimeGenerated), LastSample = max(TimeGenerated),
+    P50MiB = percentile(Value, 50) / 1048576, P99MiB = percentile(Value, 99) / 1048576,
+    PeakMiB = max(Value) / 1048576 by Name
+| order by Name asc

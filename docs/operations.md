@@ -255,10 +255,9 @@ is pinned to a commit SHA (Dependabot bumps the pins).
   the platform.
 - Do not keep a replica alive with pings, a cron scaler or a very long cooldown: a replica above the minimum count,
   or one that handles requests, is billed at the active rate (0.000024 USD per vCPU-second), eight times the idle rate.
-- A smaller always-warm replica (0.25 vCPU / 0.5 GiB) would cost about 4 USD a month. The measurements below say
-  the image fits with room to spare under memory storage; what they do not cover is the Azure SDK, OpenTelemetry
-  and build-callback part of production, so the decision is taken on the runtime metrics the app now exports (see
-  "Memory" below) rather than on the 7-day working-set peak alone.
+- A smaller always-warm replica (0.25 vCPU / 0.5 GiB) would cost about 4 USD a month before active usage and other
+  services. Size it using both the process metrics and Container Apps' `WorkingSetBytes`; process RSS alone does
+  not describe all memory charged to the replica. See the measurements and workload limits below.
 - Builds run `Builder:MaxConcurrentBuilds` (3) at a time; the rest wait and start as slots free up. Raise it for large
   installations; each build is one job execution (2 vCPU / 4 GiB).
 
@@ -274,29 +273,53 @@ What the web app needs was measured, not guessed (October 2026):
   leak shows as a live heap that does not come back down. The **Memory profile** workflow (`memprofile.yml`, run it
   from the Actions tab) runs the real image under `docker --memory/--cpus`, which is what Container Apps enforces,
   and reports the cgroup's peak, the runtime's figures and whether the kernel OOM-killed the container.
-- Results, real image on Linux, 0.5 vCPU, 40 viewers + 40 in the room, three drive loops, at both `512m` and `1g`:
-  cgroup peak **98 MiB** (idle 43 MiB), process RSS 139-189 MB, live managed heap 8-14 MB, GC committed 16-23 MB,
-  no growth across loops, back to 10.7 MB after everyone left, no OOM, no page errors. Locally under a 384 MB GC
-  hard limit (what a 512 MiB container gets) the same scenario peaked at a 153 MB working set. One relay connection
-  with its audience state costs about 40 KB of heap.
-- Production, first readings after the `System.Runtime` meter went live: live heap 13 MB, GC committed 48 MB,
-  working set 220 MB. The 170 MB in between is runtime, native and SDK memory; the 462 MB peak of 2026-10-07 was a
-  rebuild-all hour (106 build callbacks) under a 768 MB hard limit, which is the GC taking the headroom it was given
-  rather than live data.
-- Verdict: 0.5 GiB is very likely fine - the runtime caps its budgets at 75 % of the container and the measured
-  footprint is a third of that - but it is a one-way bet without production numbers for the Azure/OpenTelemetry part.
-  Keep 1 GiB until AppMetrics has a week that includes a rebuild-all, then move to 0.25 vCPU / 0.5 GiB if
-  `dotnet.gc.last_collection.memory.committed_size` stays under 150 MB and `dotnet.process.memory.working_set`
-  under 350 MB at the 99th percentile:
+- The initial Linux runs (0.5 vCPU, limits of `512m` and `1g`) had process RSS of 139-189 MiB and a post-forced-GC
+  heap of 8-14 MiB, with no OOM. The reported **98 MiB** was Docker stats' cache-subtracted usage, not the cgroup's
+  full peak. These runs also shared cookies between audience tabs and suppressed some interaction failures;
+  they do not establish the memory cost of 40 independent participants. Forced GC is useful for retained-heap
+  comparisons, but understates the natural operating high-water mark.
+- **Production follow-up, 2026-10-12 through 2026-10-26:** about 20,100 one-minute snapshots, deduplicated by
+  instance/time/metric/dimension. The heap metric has five generation dimensions; sum those before calculating
+  heap percentiles. The earlier "13 MB live heap" report was a single-generation value, not the total. The metric
+  describes the last collection and includes fragmentation; it is not an instantaneous live-object measurement.
+
+  | Metric | Median | 99th percentile | Maximum |
+  |---|---:|---:|---:|
+  | Process working set | 273.1 MiB | 300.5 MiB | 318.5 MiB |
+  | GC committed memory | 81.7 MiB | 89.2 MiB | 93.8 MiB |
+  | GC heap, all five generations | 52.1 MiB | 67.7 MiB | 76.6 MiB |
+  | Container Apps working set (5-minute maxima) | — | 376.7 MiB | 389.6 MiB |
+
+  Container CPU averaged 6.6 millicores; the 99th percentile of five-minute maxima was 16.5 millicores and the
+  largest reported maximum was 124.4 millicores. These aggregate samples do not capture every short spike.
+  No OOM or scale-to-zero events were recorded in this window. Day-to-day memory stayed bounded rather than
+  growing continually. Actual presentation traffic was light: five remote-page requests, one Slidev presenter
+  request, 227 deck/asset/download requests and 882 session-API requests, with no recorded join-code traffic or
+  full rebuild in the window. The older 462 MiB rebuild-period peak predates the GC telemetry, so attributing it
+  specifically to spare GC headroom was not supported by measurements.
+- **Sizing conclusion:** the previous process-RSS/GC thresholds (350/150 MiB at p99) pass. A monitored 512 MiB
+  trial is plausible for the observed workload, but the replica-level maximum leaves only about 122 MiB spare
+  and the heavy presentation/rebuild combination has not been measured in production. Keep 0.5 vCPU / 1 GiB
+  while checking that combination; the two-week figures alone do not justify a guarantee against OOM.
+
+  Re-run the dimension-aware query (also in `scripts/memory-profile.kql`):
 
   ```kusto
-  AppMetrics
-  | where TimeGenerated > ago(7d) and Name in ('dotnet.process.memory.working_set', 'dotnet.gc.last_collection.memory.committed_size', 'dotnet.gc.last_collection.heap.size')
-  | summarize p50 = percentile(Sum, 50) / 1048576, p99 = percentile(Sum, 99) / 1048576, max = max(Sum) / 1048576 by Name
+  let snapshots = AppMetrics
+  | where TimeGenerated > ago(14d)
+  | where Name in ('dotnet.process.memory.working_set',
+      'dotnet.gc.last_collection.memory.committed_size', 'dotnet.gc.last_collection.heap.size')
+  | extend Value = Sum / todouble(ItemCount), Generation = tostring(Properties['gc.heap.generation'])
+  | summarize Value = max(Value) by TimeGenerated, AppRoleInstance, Name, Generation;
+  snapshots
+  | summarize Value = sum(Value) by TimeGenerated, AppRoleInstance, Name
+  | summarize Samples = count(), P50MiB = percentile(Value, 50) / 1048576,
+      P99MiB = percentile(Value, 99) / 1048576, PeakMiB = max(Value) / 1048576 by Name
   ```
 
-  The CPU side matters too: 0.25 vCPU halves what Brotli, the page render and a rebuild-all's callbacks get (the
-  7-day hourly CPU maximum was 271 millicores). Expect slower pages during a rebuild, not failures.
+  If the local `az monitor log-analytics query` extension fails to import `pkg_resources`, the same KQL can be sent
+  through `az rest --method post --resource https://api.loganalytics.io` to
+  `https://api.loganalytics.azure.com/v1/workspaces/<workspace-id>/query`, with a JSON body containing `query`.
 
 ### What a start does
 
