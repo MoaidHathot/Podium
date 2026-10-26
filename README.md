@@ -67,6 +67,18 @@ Storage: Blob (artifacts, one container per build) + Table (index). Managed iden
 
 Every build also captures a first-slide thumbnail for the library (a 1280x720 one for the deck page and link previews, a 640x360 one for cards; `/d/<slug>.jpg?size=sm`). `node_modules`, `dist`, `.slidev`, `bin`, `obj` are ignored. Legacy GitPitch decks are skipped. `README.md`, `abstract.md`, `speaker.md`, `notes.md` and `script.md` are never decks. The builder fetches only what a deck needs (a blob-less partial clone plus a sparse checkout of the deck folder, or of the single file for PowerPoint/PDF decks), so large archives of presentations cost each build one download.
 
+For PowerPoint decks where LibreOffice changes theme colours, font metrics or artwork, export a PDF with PowerPoint
+and commit it beside the `.pptx` with exactly the same base name. Podium uses that PDF for the viewer, thumbnails and
+slide sheet, while retaining the original PowerPoint download. On Windows with PowerPoint installed:
+
+```pwsh
+./scripts/export-powerpoint-pdf.ps1 -Path '../Slides/talks/example/My talk.pptx'
+```
+
+The script opens a scratch copy read-only and exports visible slides at print quality. Refresh the PDF with `-Force`
+after editing the PowerPoint. A sidecar PDF is part of the PowerPoint deck, so adding or updating it rebuilds that
+deck rather than creating a second library entry.
+
 **Variants.** Several decks in one folder are variants of the same talk: `slides.<variant>.md` next to `slides.md` (Slidev), additional presenterm markdown files (the newest dated file is the main deck, `entry:` in `.podium.yml` overrides), and every PowerPoint/PDF file. Variant URLs are `/d/<folder-slug>-<variant>/`.
 
 ### Adding a deck

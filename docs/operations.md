@@ -345,6 +345,22 @@ and off-screen cards are not laid out or painted (`content-visibility: auto`). `
 storage) fabricates a library of that size; the smoke test measures a density switch on a 4x-throttled phone against
 it (`tests/smoke/smoke.mjs`).
 
+## PowerPoint rendering fidelity
+
+Podium prefers a same-named PDF beside a `.pptx`. Use PowerPoint's native export for presentations whose theme
+colours, fonts or artwork differ in LibreOffice. `scripts/export-powerpoint-pdf.ps1` creates those sidecars on
+Windows with PowerPoint installed, using read-only scratch copies, print quality and visible slides only. It
+preserves accessibility tags and uses PowerPoint's font-embedding/bitmap fallback. Refresh the sidecar whenever
+the PPTX changes (`-Force` replaces an existing PDF). The original PPTX remains the downloadable source; the PDF
+feeds the viewer pages, thumbnails, slide sheet and extracted text. The detector treats the pair as one deck and
+sync queues a rebuild when the sidecar changes.
+
+Reproduced on the Dapr / Hasoub Garage 2022 deck: its embedded flat-grey bitmap patches are RGB `63/63/63`.
+PowerPoint renders the themed slide background to the same colour, while LibreOffice 24.2 exported it as
+`69/69/69`, making the patches visible as rectangles. The title also wrapped after font substitution. Native
+PowerPoint PDF plus Poppler restored matching `63/63/63` samples and the one-line title; the output has 70 visible
+slides, excluding the original hidden slide. Native PDF sidecars were generated for the five Dapr variants.
+
 ## Builder image updates and per-kind rebuilds
 
 The builder image is identified by the git tree hash of `builder/`. A deploy whose `builder/` is unchanged reuses the
